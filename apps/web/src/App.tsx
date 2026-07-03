@@ -1,11 +1,13 @@
-import { NavLink, Route, Routes, Navigate } from "react-router-dom";
+import { NavLink, Route, Routes, Navigate, useLocation } from "react-router-dom";
 import { useState } from "react";
+import Landing from "./pages/Landing.js";
 import Onboarding from "./pages/Onboarding.js";
 import Dashboard from "./pages/Dashboard.js";
 import CampaignDetail from "./pages/CampaignDetail.js";
 import Billing from "./pages/Billing.js";
 
 export default function App() {
+  const location = useLocation();
   const [businessId, setBusinessId] = useState<string | null>(localStorage.getItem("businessId"));
 
   function handleOnboarded(id: string) {
@@ -13,10 +15,16 @@ export default function App() {
     setBusinessId(id);
   }
 
+  if (location.pathname === "/" && !businessId) {
+    return <Landing />;
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand">AdGo</div>
+        <NavLink to="/" className="brand">
+          AdGo
+        </NavLink>
         {businessId && (
           <nav className="nav">
             <NavLink to="/dashboard" className={({ isActive }) => (isActive ? "active" : "")}>
@@ -31,8 +39,9 @@ export default function App() {
 
       <main className="content">
         <Routes>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route
-            path="/"
+            path="/get-started"
             element={businessId ? <Navigate to="/dashboard" replace /> : <Onboarding onOnboarded={handleOnboarded} />}
           />
           <Route
