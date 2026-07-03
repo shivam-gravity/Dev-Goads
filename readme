@@ -48,6 +48,25 @@ deterministic mock data so the full flow works with zero configuration:
 - `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID` — enables live Meta Marketing API calls
 - `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_ACCESS_TOKEN` — enables live Google Ads API calls
 
+## Data model (Postgres / Prisma)
+
+`apps/api/prisma/schema.prisma` defines the target production schema: Organization/User
+(tenancy), Business + ScrapedPage (onboarding), OAuthConnection (encrypted-at-rest tokens),
+Strategy + Creative (AI output, held in DRAFT/IN_REVIEW until approved), Campaign +
+CampaignCreative (per-network launch state), Metric (daily performance, designed to become
+a TimescaleDB hypertable at volume), OptimizationAction (audit log of every automated
+pause/budget change), Notification, and Subscription/UsageRecord/Invoice (Stripe-backed
+usage billing). A generated initial migration lives at
+`apps/api/prisma/migrations/20260703000000_init/migration.sql`.
+
+This schema is **not yet wired into the running app** — the working prototype still uses
+the simpler SQLite/JSON-blob store in `apps/api/src/db/`. Migrating the modules under
+`apps/api/src/modules/` to read/write through Prisma against Postgres is the next step
+before any of the OAuth, scraping, or Stripe work lands.
+
+To point it at a real database: set `DATABASE_URL` in `apps/api/.env`, then run
+`npm run db:migrate --workspace apps/api`.
+
 ## Notes
 
 This is an original scaffold built around the product category adsgo.ai operates in
