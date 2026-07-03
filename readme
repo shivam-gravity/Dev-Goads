@@ -1,0 +1,55 @@
+# AdGo — AI Ad Automation Platform
+
+An AI-driven ad automation platform: a business describes itself, Claude generates an ad
+strategy (audiences, budget split, creatives), a campaign orchestrator launches it across
+Meta and Google, a performance pipeline ingests results, a bandit-based optimization engine
+reallocates budget toward winners, and a billing engine invoices usage-based fees.
+
+## Architecture
+
+```
+apps/web        Frontend — onboarding + dashboard (React/Vite)
+apps/api        Backend — single Express service composed of modular units:
+  gateway/        Auth (JWT) + rate limiting + routing
+  modules/strategy/      Claude-based strategy generation (falls back to a
+                         deterministic mock if ANTHROPIC_API_KEY is unset)
+  modules/orchestrator/  Builds campaigns from a strategy, launches/pauses
+                         variants via ad network adapters
+  modules/adapters/      Meta + Google Ads clients (mock data unless live
+                         credentials are configured — see below)
+  modules/pipeline/      Ingests raw ad-network insights, normalizes into
+                         CTR / conversion rate / CPA per variant
+  modules/optimization/  Epsilon-greedy bandit: exploits the best-scoring
+                         variant, explores others, pauses high-CPA variants
+  modules/billing/       Usage-based invoicing: flat fee + % of ad spend
+```
+
+Data is persisted to a local SQLite file at `apps/api/data/adgo.sqlite` (created on first run).
+
+## Setup
+
+```bash
+npm install
+cp apps/api/.env.example apps/api/.env   # fill in keys you have; all are optional
+npm run dev:api    # http://localhost:4000
+npm run dev:web    # http://localhost:5173 (or next free port)
+```
+
+Open the web app, complete onboarding, generate a strategy, and launch a campaign. Use
+"Pull latest metrics" and "Run optimization pass" on a campaign's detail page to exercise
+the performance/optimization feedback loop, and generate an invoice from the Billing page.
+
+### Environment variables (`apps/api/.env`)
+
+All external integrations are optional in development — every adapter falls back to
+deterministic mock data so the full flow works with zero configuration:
+
+- `ANTHROPIC_API_KEY` — enables real Claude-generated strategies (Claude Sonnet 5)
+- `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID` — enables live Meta Marketing API calls
+- `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_ACCESS_TOKEN` — enables live Google Ads API calls
+
+## Notes
+
+This is an original scaffold built around the product category adsgo.ai operates in
+(AI-generated ad strategy + cross-network automation), not a copy of its code, text, or
+design assets.
