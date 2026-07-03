@@ -5,6 +5,7 @@ import Onboarding from "./pages/Onboarding.js";
 import Dashboard from "./pages/Dashboard.js";
 import CampaignDetail from "./pages/CampaignDetail.js";
 import Billing from "./pages/Billing.js";
+import Cursor from "./components/Cursor.js";
 
 export default function App() {
   const location = useLocation();
@@ -16,11 +17,17 @@ export default function App() {
   }
 
   if (location.pathname === "/" && !businessId) {
-    return <Landing />;
+    return (
+      <>
+        <Cursor />
+        <Landing />
+      </>
+    );
   }
 
   return (
     <div className="app-shell">
+      <Cursor />
       <header className="topbar">
         <NavLink to="/" className="brand">
           AdGo
