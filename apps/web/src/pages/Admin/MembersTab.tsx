@@ -52,27 +52,28 @@ export default function MembersTab({ workspaceId, members, onRefresh }: MembersT
           {error && <p className="error mt-2">{error}</p>}
           
           <form onSubmit={handleInvite} className="wizard-form mt-4">
-            <label>
-              User Email Address
+            <div className="flex-col">
+              <label htmlFor="member-email-input" className="font-weight-600 font-size-13 text-secondary block mb-1">User Email Address</label>
               <input
+                id="member-email-input"
                 type="email"
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
                 placeholder="teammate@company.com"
                 required
               />
-            </label>
+            </div>
             
-            <label className="mt-3">
-              Role Profile
-              <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value as any)}>
+            <div className="flex-col mt-3">
+              <label htmlFor="member-role-select" className="font-weight-600 font-size-13 text-secondary block mb-1">Role Profile</label>
+              <select id="member-role-select" value={inviteRole} onChange={(e) => setInviteRole(e.target.value as any)}>
                 <option value="admin">Admin (Manage Billing & Connections)</option>
                 <option value="member">Member (Create & Launch Campaigns)</option>
                 <option value="viewer">Viewer (Read-Only Analytics)</option>
               </select>
-            </label>
+            </div>
             
-            <button className="btn btn-primary mt-4" type="submit" disabled={inviting}>
+            <button className="btn btn-primary mt-4" type="submit" disabled={inviting} aria-label="Send workspace invitation email token">
               {inviting ? "Inviting..." : "Send Invite Token"}
             </button>
           </form>

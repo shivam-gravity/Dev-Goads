@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { db } from "../../db/db.js";
+import { prisma } from "../../db/prisma.js";
 
 export interface Asset {
   id: string;
@@ -27,40 +27,44 @@ const DEMO_ASSETS: Omit<Asset, "id" | "workspaceId" | "createdAt">[] = [
   { name: "Lifestyle Shot", type: "image", url: "https://images.unsplash.com/photo-1551434678-e076c223a692?w=1200&q=80", thumbnailUrl: "https://images.unsplash.com/photo-1551434678-e076c223a692?w=400&q=60", size: 367000, mimeType: "image/jpeg", tags: ["lifestyle", "people"], usageCount: 5, width: 1200, height: 800 },
 ];
 
-function save(a: Asset) {
-  db.prepare("INSERT OR REPLACE INTO assets (id, workspaceId, data, createdAt) VALUES (?, ?, ?, ?)").run(a.id, a.workspaceId, JSON.stringify(a), a.createdAt);
+async function save(a: Asset): Promise<void> {
+  await prisma.asset.upsert({
+    where: { id: a.id },
+    create: { id: a.id, workspaceId: a.workspaceId, data: a as any, createdAt: new Date(a.createdAt) },
+    update: { data: a as any },
+  });
 }
 
-export function seedDemoAssets(workspaceId: string) {
-  const existing = listAssets(workspaceId);
+export async function seedDemoAssets(workspaceId: string): Promise<void> {
+  const existing = await listAssets(workspaceId);
   if (existing.length > 0) return;
   for (const d of DEMO_ASSETS) {
     const a: Asset = { id: randomUUID(), workspaceId, createdAt: new Date().toISOString(), ...d };
-    save(a);
+    await save(a);
   }
 }
 
-export function listAssets(workspaceId: string, type?: Asset["type"]): Asset[] {
-  const rows = db.prepare("SELECT data FROM assets WHERE workspaceId = ? ORDER BY createdAt DESC").all(workspaceId) as { data: string }[];
-  const all = rows.map((r) => JSON.parse(r.data) as Asset);
+export async function listAssets(workspaceId: string, type?: Asset["type"]): Promise<Asset[]> {
+  const rows = await prisma.asset.findMany({ where: { workspaceId }, orderBy: { createdAt: "desc" } });
+  const all = rows.map((r) => r.data as unknown as Asset);
   return type ? all.filter((a) => a.type === type) : all;
 }
 
-export function createAsset(workspaceId: string, input: Omit<Asset, "id" | "workspaceId" | "createdAt" | "usageCount">): Asset {
+export async function createAsset(workspaceId: string, input: Omit<Asset, "id" | "workspaceId" | "createdAt" | "usageCount">): Promise<Asset> {
   const a: Asset = { id: randomUUID(), workspaceId, usageCount: 0, createdAt: new Date().toISOString(), ...input };
-  save(a);
+  await save(a);
   return a;
 }
 
-export function deleteAsset(id: string): boolean {
-  const r = db.prepare("DELETE FROM assets WHERE id = ?").run(id);
-  return r.changes > 0;
+export async function deleteAsset(id: string): Promise<boolean> {
+  const r = await prisma.asset.deleteMany({ where: { id } });
+  return r.count > 0;
 }
 
-export function updateAssetTags(id: string, tags: string[]): Asset {
-  const row = db.prepare("SELECT data FROM assets WHERE id = ?").get(id) as { data: string } | undefined;
+export async function updateAssetTags(id: string, tags: string[]): Promise<Asset> {
+  const row = await prisma.asset.findUnique({ where: { id } });
   if (!row) throw new Error("Asset not found");
-  const a: Asset = { ...JSON.parse(row.data), tags };
-  save(a);
+  const a: Asset = { ...(row.data as unknown as Asset), tags };
+  await save(a);
   return a;
 }

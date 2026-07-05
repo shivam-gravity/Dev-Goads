@@ -106,16 +106,17 @@ export default function DeveloperPortalTab() {
             <p className="muted-text mt-1">Register endpoints to receive real-time JSON payloads on events.</p>
             
             <form onSubmit={handleAddWebhook} className="wizard-form mt-4">
-              <label>
-                Endpoint URL
+              <div className="flex-col">
+                <label htmlFor="webhook-url-input" className="font-weight-600 font-size-13 text-secondary block mb-1">Endpoint URL</label>
                 <input
+                  id="webhook-url-input"
                   type="url"
                   value={webhookUrl}
                   onChange={(e) => setWebhookUrl(e.target.value)}
                   placeholder="https://yourdomain.com/webhook"
                   required
                 />
-              </label>
+              </div>
               
               <div className="mt-3">
                 <span className="font-size-13 font-weight-600 block text-secondary">Trigger Events</span>
@@ -127,6 +128,7 @@ export default function DeveloperPortalTab() {
                         checked={selectedEvents.includes(evt)}
                         onChange={() => handleToggleEvent(evt)}
                         style={{ accentColor: "#7033f5", width: "15px", height: "15px" }}
+                        aria-label={`Subscribe to ${evt}`}
                       />
                       {evt}
                     </label>
@@ -134,7 +136,7 @@ export default function DeveloperPortalTab() {
                 </div>
               </div>
               
-              <button className="btn btn-primary mt-4" type="submit" disabled={selectedEvents.length === 0}>
+              <button className="btn btn-primary mt-4" type="submit" disabled={selectedEvents.length === 0} aria-label="Register webhook delivery endpoint">
                 Add Webhook Endpoint
               </button>
             </form>

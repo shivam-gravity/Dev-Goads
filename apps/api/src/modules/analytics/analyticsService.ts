@@ -1,5 +1,4 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { db } from "../../db/db.js";
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
 import { normalizePerformance, getRawMetrics } from "../pipeline/performancePipeline.js";
 import { getBusiness } from "../business/businessService.js";
@@ -7,8 +6,8 @@ import type { AnalyticsSummary, TrendPoint, AudienceSuggestion, AdNetwork } from
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
-export function getAnalyticsSummary(businessId: string, period: "all" | "month" | "week" = "all"): AnalyticsSummary {
-  const campaigns = listCampaignsForBusiness(businessId);
+export async function getAnalyticsSummary(businessId: string, period: "all" | "month" | "week" = "all"): Promise<AnalyticsSummary> {
+  const campaigns = await listCampaignsForBusiness(businessId);
   const activeCampaigns = campaigns.filter((c) => c.status === "active").length;
 
   let totalSpendCents = 0;
@@ -23,10 +22,9 @@ export function getAnalyticsSummary(businessId: string, period: "all" | "month" 
   else if (period === "month") cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   for (const campaign of campaigns) {
-    const perf = normalizePerformance(campaign.id);
     // Apply period filter on raw metrics if needed
     if (cutoff) {
-      const raw = getRawMetrics(campaign.id).filter((m) => new Date(m.date) >= cutoff!);
+      const raw = (await getRawMetrics(campaign.id)).filter((m) => new Date(m.date) >= cutoff!);
       for (const m of raw) {
         totalSpendCents += m.spendCents;
         totalImpressions += m.impressions;
@@ -34,6 +32,7 @@ export function getAnalyticsSummary(businessId: string, period: "all" | "month" 
         totalConversions += m.conversions;
       }
     } else {
+      const perf = await normalizePerformance(campaign.id);
       for (const p of perf) {
         totalSpendCents += p.spendCents;
         totalImpressions += p.impressions;
@@ -62,8 +61,8 @@ export function getAnalyticsSummary(businessId: string, period: "all" | "month" 
   };
 }
 
-export function getCampaignTrend(campaignId: string): TrendPoint[] {
-  const raw = getRawMetrics(campaignId);
+export async function getCampaignTrend(campaignId: string): Promise<TrendPoint[]> {
+  const raw = await getRawMetrics(campaignId);
 
   // Group by date
   const byDate = new Map<string, typeof raw>();
@@ -178,7 +177,7 @@ function fallbackAudienceSuggestions(businessName: string, industry: string): Au
 }
 
 export async function getAudienceSuggestions(businessId: string): Promise<AudienceSuggestion[]> {
-  const business = getBusiness(businessId);
+  const business = await getBusiness(businessId);
   if (!business) throw new Error("Business not found");
 
   if (!anthropic) return fallbackAudienceSuggestions(business.name, business.industry);

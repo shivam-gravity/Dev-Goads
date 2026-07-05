@@ -1,111 +1,151 @@
 import { useEffect, useState } from "react";
-import { api, BusinessProfile, Campaign } from "../api/client.js";
+import { api, AnalyticsSummary, TrendPoint } from "../api/client.js";
+import AdsGoHeader from "../components/AdsGoHeader.js";
+
+interface DayTotals {
+  impressions: number;
+  clicks: number;
+  spendCents: number;
+}
+
+const PERIODS: { label: string; days: number; apiPeriod: "week" | "month" | "all" }[] = [
+  { label: "Today", days: 1, apiPeriod: "week" },
+  { label: "Last 7 days", days: 7, apiPeriod: "week" },
+  { label: "Last 14 days", days: 14, apiPeriod: "month" },
+  { label: "Last 30 days", days: 30, apiPeriod: "month" },
+  { label: "Last 90 days", days: 90, apiPeriod: "all" },
+];
+
+const METRICS = ["Spend", "CPM", "CPC", "CTR"] as const;
+type MetricKey = (typeof METRICS)[number];
+
+function dayValue(totals: DayTotals | undefined, metric: MetricKey): number {
+  if (!totals) return 0;
+  const spend = totals.spendCents / 100;
+  switch (metric) {
+    case "Spend":
+      return spend;
+    case "CPM":
+      return totals.impressions > 0 ? spend / (totals.impressions / 1000) : 0;
+    case "CPC":
+      return totals.clicks > 0 ? spend / totals.clicks : 0;
+    case "CTR":
+      return totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
+  }
+}
+
+function formatMetric(value: number, metric: MetricKey): string {
+  if (metric === "CTR") return `${value.toFixed(2)}%`;
+  return `$${value.toFixed(2)}`;
+}
 
 export default function Dashboard({ businessId }: { businessId: string }) {
-  const [business, setBusiness] = useState<BusinessProfile | null>(null);
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
+  const [totalsByDate, setTotalsByDate] = useState<Record<string, DayTotals>>({});
   const [error, setError] = useState<string | null>(null);
-  
-  // Dashboard state to match screenshot interactivity
-  const [activePeriod, setActivePeriod] = useState("Last 7 days");
-  const [activeMetric, setActiveMetric] = useState("Spend");
-  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
 
-  async function refresh() {
-    try {
-      const [biz, camps] = await Promise.all([
-        api.getBusiness(businessId),
-        api.listCampaigns(businessId),
-      ]);
-      setBusiness(biz);
-      setCampaigns(camps);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load dashboard data");
-    }
-  }
+  const [activePeriod, setActivePeriod] = useState(PERIODS[1].label);
+  const [activeMetric, setActiveMetric] = useState<MetricKey>("Spend");
+
+  const period = PERIODS.find((p) => p.label === activePeriod) ?? PERIODS[1];
 
   useEffect(() => {
-    refresh().catch((err) => setError(err.message));
-  }, [businessId]);
+    let cancelled = false;
 
-  // Generate dynamic date list for the last 7 days ending today
-  const dates: string[] = [];
-  for (let i = 0; i < 7; i++) {
+    async function load() {
+      try {
+        const [, camps] = await Promise.all([api.getBusiness(businessId), api.listCampaigns(businessId)]);
+        if (cancelled) return;
+
+        const [summaryResult, trends] = await Promise.all([
+          api.getAnalyticsSummary(businessId, period.apiPeriod),
+          Promise.all(camps.map((c) => api.getCampaignTrend(c.id).catch<TrendPoint[]>(() => []))),
+        ]);
+        if (cancelled) return;
+
+        const merged: Record<string, DayTotals> = {};
+        for (const trend of trends) {
+          for (const point of trend) {
+            const existing = merged[point.date] ?? { impressions: 0, clicks: 0, spendCents: 0 };
+            merged[point.date] = {
+              impressions: existing.impressions + point.impressions,
+              clicks: existing.clicks + point.clicks,
+              spendCents: existing.spendCents + point.spendCents,
+            };
+          }
+        }
+        setSummary(summaryResult);
+        setTotalsByDate(merged);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load dashboard data");
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId, period.apiPeriod]);
+
+  // Oldest to newest for the chart, newest to oldest for the table
+  const chartDates: string[] = [];
+  for (let i = period.days - 1; i >= 0; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i);
-    dates.push(d.toISOString().split("T")[0]);
+    chartDates.push(d.toISOString().split("T")[0]);
   }
-  
-  // Newest to oldest for table
-  const tableDates = [...dates];
-  // Oldest to newest for chart
-  const chartDates = [...dates].reverse();
+  const tableDates = [...chartDates].reverse();
 
-  // Selected date range string matching screenshot
-  const dateRangeStr = `${chartDates[0]}  →  ${chartDates[6]}`;
+  const dateRangeStr = `${chartDates[0]}  →  ${chartDates[chartDates.length - 1]}`;
+
+  const spend = (summary?.totalSpendCents ?? 0) / 100;
+  const cpm = summary && summary.totalImpressions > 0 ? spend / (summary.totalImpressions / 1000) : 0;
+  const cpc = summary?.avgCpc != null ? summary.avgCpc / 100 : 0;
+  const ctr = summary ? summary.avgCtr * 100 : 0;
+
+  const cardValues: Record<MetricKey, string> = {
+    Spend: `$${spend.toFixed(2)}`,
+    CPM: `$${cpm.toFixed(2)}`,
+    CPC: `$${cpc.toFixed(2)}`,
+    CTR: `${ctr.toFixed(2)}%`,
+  };
+
+  const chartValues = chartDates.map((d) => dayValue(totalsByDate[d], activeMetric));
+  const maxValue = Math.max(...chartValues, 1);
+
+  const pointCount = chartDates.length;
+  const xFor = (idx: number) => (pointCount === 1 ? 490 : 100 + idx * (780 / (pointCount - 1)));
+  const yFor = (value: number) => 200 - (value / maxValue) * 170;
+
+  const linePoints = chartValues.map((v, idx) => `${xFor(idx)},${yFor(v)}`).join(" ");
+  const areaPath = `M ${xFor(0)},200 ${chartValues
+    .map((v, idx) => `L ${xFor(idx)},${yFor(v)}`)
+    .join(" ")} L ${xFor(pointCount - 1)},200 Z`;
+
+  // Only label a handful of x-axis ticks so dense ranges (30/90 days) stay readable
+  const labelStep = Math.max(1, Math.ceil(pointCount / 6));
+  const avgValue = chartValues.reduce((s, v) => s + v, 0) / (chartValues.length || 1);
 
   return (
     <div className="adsgo-dashboard">
-      {/* Custom Header matching screenshot */}
-      <header className="adsgo-header">
-        <h1 className="adsgo-header-title">Home</h1>
-        <div className="adsgo-header-right">
-          {/* UTC Label */}
-          <div className="header-meta-item">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-            <span>UTC+5.5</span>
-          </div>
-
-          {/* Language Selector */}
-          <div className="header-meta-item">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="2" y1="12" x2="22" y2="12" />
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-            </svg>
-            <span>English</span>
-          </div>
-
-          {/* Bell Icon */}
-          <div className="header-bell">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-            </svg>
-          </div>
-
-          {/* Profile Dropdown */}
-          <div className="header-profile-dropdown" onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}>
-            <div className="profile-avatar">SS</div>
-            <div className="profile-info">
-              <span className="profile-name">ssrivastava</span>
-              <span className="profile-username">ssrivastava</span>
-            </div>
-            <span style={{ fontSize: "10px", color: "#9ca3af", marginLeft: "4px" }}>▼</span>
-          </div>
-        </div>
-      </header>
+      <AdsGoHeader breadcrumb={["Home"]} />
 
       {error && <p className="error" style={{ marginBottom: "20px" }}>{error}</p>}
 
       {/* Date Controls Row */}
       <div className="adsgo-controls-row">
         <div className="adsgo-date-pills">
-          {["Last 7 days", "Last 14 days", "Last 30 days", "Last 90 days", "Today"].map((period) => (
+          {PERIODS.map(({ label }) => (
             <button
-              key={period}
-              className={`adsgo-date-pill ${activePeriod === period ? "active" : ""}`}
-              onClick={() => setActivePeriod(period)}
+              key={label}
+              className={`adsgo-date-pill ${activePeriod === label ? "active" : ""}`}
+              onClick={() => setActivePeriod(label)}
             >
-              {period}
+              {label}
             </button>
           ))}
         </div>
 
-        {/* Datepicker Mock */}
         <div className="adsgo-datepicker-container">
           <input type="text" readOnly value={dateRangeStr} />
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -119,65 +159,22 @@ export default function Dashboard({ businessId }: { businessId: string }) {
 
       {/* Metric Cards Grid */}
       <div className="adsgo-metrics-grid">
-        {/* Spend Card */}
-        <div
-          className={`adsgo-metric-card ${activeMetric === "Spend" ? "active" : ""}`}
-          onClick={() => setActiveMetric("Spend")}
-        >
-          <div className="adsgo-metric-card-top">
-            <span className="metric-dot purple"></span>
-            <span>Spend</span>
+        {METRICS.map((metric) => (
+          <div
+            key={metric}
+            className={`adsgo-metric-card ${activeMetric === metric ? "active" : ""}`}
+            onClick={() => setActiveMetric(metric)}
+          >
+            <div className="adsgo-metric-card-top">
+              <span className={`metric-dot ${metric === "Spend" ? "purple" : "grey"}`}></span>
+              <span>{metric}</span>
+            </div>
+            <div className="metric-checkbox">
+              {activeMetric === metric && <span className="metric-checkbox-tick">✓</span>}
+            </div>
+            <div className="metric-value">{cardValues[metric]}</div>
           </div>
-          <div className="metric-checkbox">
-            {activeMetric === "Spend" && <span className="metric-checkbox-tick">✓</span>}
-          </div>
-          <div className="metric-value">$0</div>
-        </div>
-
-        {/* CPM Card */}
-        <div
-          className={`adsgo-metric-card ${activeMetric === "CPM" ? "active" : ""}`}
-          onClick={() => setActiveMetric("CPM")}
-        >
-          <div className="adsgo-metric-card-top">
-            <span className="metric-dot grey"></span>
-            <span>CPM</span>
-          </div>
-          <div className="metric-checkbox">
-            {activeMetric === "CPM" && <span className="metric-checkbox-tick">✓</span>}
-          </div>
-          <div className="metric-value">$0</div>
-        </div>
-
-        {/* CPC Card */}
-        <div
-          className={`adsgo-metric-card ${activeMetric === "CPC" ? "active" : ""}`}
-          onClick={() => setActiveMetric("CPC")}
-        >
-          <div className="adsgo-metric-card-top">
-            <span className="metric-dot grey"></span>
-            <span>CPC</span>
-          </div>
-          <div className="metric-checkbox">
-            {activeMetric === "CPC" && <span className="metric-checkbox-tick">✓</span>}
-          </div>
-          <div className="metric-value">$0</div>
-        </div>
-
-        {/* CTR Card */}
-        <div
-          className={`adsgo-metric-card ${activeMetric === "CTR" ? "active" : ""}`}
-          onClick={() => setActiveMetric("CTR")}
-        >
-          <div className="adsgo-metric-card-top">
-            <span className="metric-dot grey"></span>
-            <span>CTR</span>
-          </div>
-          <div className="metric-checkbox">
-            {activeMetric === "CTR" && <span className="metric-checkbox-tick">✓</span>}
-          </div>
-          <div className="metric-value">0%</div>
-        </div>
+        ))}
       </div>
 
       {/* SVG Chart Card */}
@@ -190,7 +187,6 @@ export default function Dashboard({ businessId }: { businessId: string }) {
             </linearGradient>
           </defs>
 
-          {/* Grid lines */}
           {[0, 1, 2, 3, 4, 5].map((idx) => (
             <line
               key={idx}
@@ -204,10 +200,9 @@ export default function Dashboard({ businessId }: { businessId: string }) {
             />
           ))}
 
-          {/* Y-axis Ticks */}
-          {[1, 0.8, 0.6, 0.4, 0.2, 0].map((val, idx) => (
+          {[1, 0.8, 0.6, 0.4, 0.2, 0].map((frac, idx) => (
             <text
-              key={val}
+              key={frac}
               x="45"
               y={34 + idx * 34}
               fill="#9ca3af"
@@ -215,48 +210,34 @@ export default function Dashboard({ businessId }: { businessId: string }) {
               fontFamily="-apple-system, BlinkMacSystemFont, sans-serif"
               textAnchor="end"
             >
-              {val}
+              {activeMetric === "CTR" ? `${(maxValue * frac).toFixed(1)}%` : `$${(maxValue * frac).toFixed(0)}`}
             </text>
           ))}
 
-          {/* X-axis line */}
           <line x1="60" y1="200" x2="940" y2="200" stroke="#e5e7eb" strokeWidth="1" />
 
-          {/* X-axis date labels */}
-          {chartDates.map((date, idx) => (
-            <text
-              key={date}
-              x={100 + idx * 130}
-              y="222"
-              fill="#9ca3af"
-              fontSize="12"
-              fontFamily="-apple-system, BlinkMacSystemFont, sans-serif"
-              textAnchor="middle"
-            >
-              {date}
-            </text>
-          ))}
+          {chartDates.map((date, idx) =>
+            idx % labelStep === 0 ? (
+              <text
+                key={date}
+                x={xFor(idx)}
+                y="222"
+                fill="#9ca3af"
+                fontSize="12"
+                fontFamily="-apple-system, BlinkMacSystemFont, sans-serif"
+                textAnchor="middle"
+              >
+                {date}
+              </text>
+            ) : null
+          )}
 
-          {/* Performance Line (Flat at Y=200, corresponding to 0 value) */}
-          <polyline
-            points="100,200 230,200 360,200 490,200 620,200 750,200 880,200"
-            fill="none"
-            stroke="#7033f5"
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-
-          {/* Gradient area under flat line (for visual completion matching active state styles) */}
-          <path
-            d="M 100,200 L 880,200 L 880,200 L 100,200 Z"
-            fill="url(#chartGrad)"
-          />
+          <polyline points={linePoints} fill="none" stroke="#7033f5" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          <path d={areaPath} fill="url(#chartGrad)" />
         </svg>
 
-        {/* Avg metric indicator */}
         <div className="chart-avg-badge">
-          Avg Spend
+          Avg {activeMetric}: {formatMetric(avgValue, activeMetric)}
         </div>
       </div>
 
@@ -281,22 +262,30 @@ export default function Dashboard({ businessId }: { businessId: string }) {
               </tr>
             </thead>
             <tbody>
-              {tableDates.map((date) => (
-                <tr key={date}>
-                  <td style={{ fontWeight: 500, color: "#4b5563" }}>{date}</td>
-                  <td>$0</td>
-                  <td>0</td>
-                  <td>$0</td>
-                  <td>0</td>
-                  <td>$0</td>
-                  <td>0%</td>
-                </tr>
-              ))}
+              {tableDates.map((date) => {
+                const totals = totalsByDate[date];
+                const daySpend = (totals?.spendCents ?? 0) / 100;
+                const impressions = totals?.impressions ?? 0;
+                const clicks = totals?.clicks ?? 0;
+                const dayCpm = impressions > 0 ? daySpend / (impressions / 1000) : 0;
+                const dayCpc = clicks > 0 ? daySpend / clicks : 0;
+                const dayCtr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+                return (
+                  <tr key={date}>
+                    <td style={{ fontWeight: 500, color: "#4b5563" }}>{date}</td>
+                    <td>${daySpend.toFixed(2)}</td>
+                    <td>{impressions}</td>
+                    <td>${dayCpm.toFixed(2)}</td>
+                    <td>{clicks}</td>
+                    <td>${dayCpc.toFixed(2)}</td>
+                    <td>{dayCtr.toFixed(2)}%</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </section>
-
     </div>
   );
 }

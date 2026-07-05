@@ -18,10 +18,10 @@ function score(v: NormalizedPerformance): number {
  * closing the loop from performance data -> budget/pause actions.
  */
 export async function runOptimizationPass(campaignId: string): Promise<OptimizationDecision[]> {
-  const campaign = getCampaign(campaignId);
+  const campaign = await getCampaign(campaignId);
   if (!campaign) throw new Error(`Campaign ${campaignId} not found`);
 
-  const stats = normalizePerformance(campaignId);
+  const stats = await normalizePerformance(campaignId);
   const decisions: OptimizationDecision[] = [];
   const decidedAt = new Date().toISOString();
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { db } from "../../db/db.js";
+import { analyticsStore } from "../../infra/analyticsStore.js";
 import { adapters } from "../orchestrator/campaignOrchestrator.js";
 import { getCampaign } from "../orchestrator/campaignOrchestrator.js";
 import type { NormalizedPerformance, PerformanceMetric } from "../../types/index.js";
@@ -10,7 +10,7 @@ function todayISO(): string {
 
 /** Pulls fresh insights for every launched variant in a campaign and stores raw metrics. */
 export async function ingestCampaignMetrics(campaignId: string): Promise<PerformanceMetric[]> {
-  const campaign = getCampaign(campaignId);
+  const campaign = await getCampaign(campaignId);
   if (!campaign) throw new Error(`Campaign ${campaignId} not found`);
 
   const date = todayISO();
@@ -30,26 +30,20 @@ export async function ingestCampaignMetrics(campaignId: string): Promise<Perform
       ...raw,
     };
 
-    db.prepare("INSERT INTO metrics (id, campaignId, data, date) VALUES (?, ?, ?, ?)").run(
-      metric.id,
-      metric.campaignId,
-      JSON.stringify(metric),
-      metric.date
-    );
+    await analyticsStore.recordMetric(metric);
     results.push(metric);
   }
 
   return results;
 }
 
-export function getRawMetrics(campaignId: string): PerformanceMetric[] {
-  const rows = db.prepare("SELECT data FROM metrics WHERE campaignId = ? ORDER BY date DESC").all(campaignId) as { data: string }[];
-  return rows.map((r) => JSON.parse(r.data));
+export async function getRawMetrics(campaignId: string): Promise<PerformanceMetric[]> {
+  return analyticsStore.queryMetrics(campaignId);
 }
 
 /** Aggregates raw metrics per variant into normalized rate stats used by the optimization engine. */
-export function normalizePerformance(campaignId: string): NormalizedPerformance[] {
-  const raw = getRawMetrics(campaignId);
+export async function normalizePerformance(campaignId: string): Promise<NormalizedPerformance[]> {
+  const raw = await getRawMetrics(campaignId);
   const byVariant = new Map<string, PerformanceMetric[]>();
   for (const m of raw) {
     const list = byVariant.get(m.variantId) ?? [];

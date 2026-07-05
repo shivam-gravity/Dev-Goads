@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import { db } from "../../db/db.js";
+import { prisma } from "../../db/prisma.js";
 import type { CreativeAsset, AdCreative } from "../../types/index.js";
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
@@ -31,22 +31,20 @@ const CREATIVE_VARIATION_TOOL = {
   },
 };
 
-export function listCreatives(businessId: string): CreativeAsset[] {
-  const rows = db
-    .prepare("SELECT data FROM creatives WHERE businessId = ? ORDER BY createdAt DESC")
-    .all(businessId) as { data: string }[];
-  return rows.map((r) => JSON.parse(r.data));
+export async function listCreatives(businessId: string): Promise<CreativeAsset[]> {
+  const rows = await prisma.creative.findMany({ where: { businessId }, orderBy: { createdAt: "desc" } });
+  return rows.map((r) => r.data as unknown as CreativeAsset);
 }
 
-export function getCreative(id: string): CreativeAsset | null {
-  const row = db.prepare("SELECT data FROM creatives WHERE id = ?").get(id) as { data: string } | undefined;
-  return row ? JSON.parse(row.data) : null;
+export async function getCreative(id: string): Promise<CreativeAsset | null> {
+  const row = await prisma.creative.findUnique({ where: { id } });
+  return row ? (row.data as unknown as CreativeAsset) : null;
 }
 
-export function createCreative(
+export async function createCreative(
   businessId: string,
   input: { headline: string; body: string; callToAction: string; format?: "text" | "image" | "video"; tags?: string[] }
-): CreativeAsset {
+): Promise<CreativeAsset> {
   const creative: CreativeAsset = {
     id: randomUUID(),
     businessId,
@@ -58,19 +56,16 @@ export function createCreative(
     createdAt: new Date().toISOString(),
   };
 
-  db.prepare("INSERT INTO creatives (id, businessId, data, createdAt) VALUES (?, ?, ?, ?)").run(
-    creative.id,
-    creative.businessId,
-    JSON.stringify(creative),
-    creative.createdAt
-  );
+  await prisma.creative.create({
+    data: { id: creative.id, businessId: creative.businessId, data: creative as any, createdAt: new Date(creative.createdAt) },
+  });
 
   return creative;
 }
 
-export function deleteCreative(id: string): boolean {
-  const result = db.prepare("DELETE FROM creatives WHERE id = ?").run(id);
-  return result.changes > 0;
+export async function deleteCreative(id: string): Promise<boolean> {
+  const result = await prisma.creative.deleteMany({ where: { id } });
+  return result.count > 0;
 }
 
 export interface CreativeVariation extends AdCreative {

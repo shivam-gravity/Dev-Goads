@@ -123,91 +123,94 @@ export default function AutomationRules({ businessId }: { businessId: string }) 
         <section className="card mb-4 creative-create-card">
           <h2>Create Optimization Rule</h2>
           <form onSubmit={handleAddRule} className="creative-form mt-3">
-            <label>
-              Rule Name
+            <div className="flex-col">
+              <label htmlFor="rule-name-input" className="font-weight-600 font-size-13 text-secondary block mb-1">Rule Name</label>
               <input
+                id="rule-name-input"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Budget Cap for Low ROI"
                 required
               />
-            </label>
+            </div>
 
             <div className="form-row-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px", marginTop: "12px" }}>
-              <label>
-                Trigger Metric
-                <select value={metric} onChange={(e) => setMetric(e.target.value as any)}>
+              <div className="flex-col">
+                <label htmlFor="rule-metric-select" className="font-weight-600 font-size-13 text-secondary block mb-1">Trigger Metric</label>
+                <select id="rule-metric-select" value={metric} onChange={(e) => setMetric(e.target.value as any)}>
                   <option value="CPA">CPA (Cost Per Acquisition)</option>
                   <option value="CTR">CTR (Click-Through Rate)</option>
                   <option value="ROAS">ROAS (Return on Ad Spend)</option>
                   <option value="Spend">Spend (Total budget spent)</option>
                 </select>
-              </label>
+              </div>
 
-              <label>
-                Condition
-                <select value={operator} onChange={(e) => setOperator(e.target.value as any)}>
+              <div className="flex-col">
+                <label htmlFor="rule-operator-select" className="font-weight-600 font-size-13 text-secondary block mb-1">Condition</label>
+                <select id="rule-operator-select" value={operator} onChange={(e) => setOperator(e.target.value as any)}>
                   <option value=">">Is Greater Than (&gt;)</option>
                   <option value="<">Is Less Than (&lt;)</option>
                   <option value="=">Equals (=)</option>
                 </select>
-              </label>
+              </div>
 
-              <label>
-                Threshold Value
+              <div className="flex-col">
+                <label htmlFor="rule-threshold-input" className="font-weight-600 font-size-13 text-secondary block mb-1">Threshold Value</label>
                 <input
+                  id="rule-threshold-input"
                   type="number"
                   step="any"
                   value={threshold}
                   onChange={(e) => setThreshold(Number(e.target.value))}
                   required
                 />
-              </label>
+              </div>
             </div>
 
             <div className="form-row-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px", marginTop: "12px" }}>
-              <label>
-                Action Output
-                <select value={action} onChange={(e) => setAction(e.target.value as any)}>
+              <div className="flex-col">
+                <label htmlFor="rule-action-select" className="font-weight-600 font-size-13 text-secondary block mb-1">Action Output</label>
+                <select id="rule-action-select" value={action} onChange={(e) => setAction(e.target.value as any)}>
                   <option value="Pause Campaign">Pause Campaign</option>
                   <option value="Increase Budget">Scale Budget (+%)</option>
                   <option value="Duplicate Campaign">Duplicate Campaign</option>
                   <option value="Notify Team">Send Alert Notification</option>
                 </select>
-              </label>
+              </div>
 
-              <label>
-                Action Parameter (e.g. 20%)
+              <div className="flex-col">
+                <label htmlFor="rule-action-val-input" className="font-weight-600 font-size-13 text-secondary block mb-1">Action Parameter (e.g. 20%)</label>
                 <input
+                  id="rule-action-val-input"
                   type="text"
                   value={actionValue}
                   onChange={(e) => setActionValue(e.target.value)}
                   placeholder="e.g. 20% (optional)"
                 />
-              </label>
+              </div>
 
-              <label>
-                Cooldown Period
-                <select value={cooldown} onChange={(e) => setCooldown(e.target.value)}>
+              <div className="flex-col">
+                <label htmlFor="rule-cooldown-select" className="font-weight-600 font-size-13 text-secondary block mb-1">Cooldown Period</label>
+                <select id="rule-cooldown-select" value={cooldown} onChange={(e) => setCooldown(e.target.value)}>
                   <option value="12h">12 Hours Cooldown</option>
                   <option value="24h">24 Hours Cooldown</option>
                   <option value="48h">48 Hours Cooldown</option>
                   <option value="7d">7 Days Cooldown</option>
                 </select>
-              </label>
+              </div>
             </div>
 
-            <label className="mt-3">
-              Rule Priority
-              <select value={priority} onChange={(e) => setPriority(e.target.value as any)}>
+            <div className="flex-col mt-3">
+              <label htmlFor="rule-priority-select" className="font-weight-600 font-size-13 text-secondary block mb-1">Rule Priority</label>
+              <select id="rule-priority-select" value={priority} onChange={(e) => setPriority(e.target.value as any)}>
                 <option value="Low">Low Priority</option>
                 <option value="Medium">Medium Priority</option>
                 <option value="High">High Priority</option>
               </select>
-            </label>
+            </div>
 
-            <button className="btn btn-primary mt-4" type="submit">
+            <button className="btn btn-primary mt-4" type="submit" aria-label="Save current automation rule details">
               Save Automation Rule
             </button>
           </form>

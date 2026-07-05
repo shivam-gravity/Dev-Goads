@@ -11,12 +11,17 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:migrate-from-sqlite": "tsx prisma/migrate-from-sqlite.ts",
+    "test": "tsx --test src/test/googleAdapter.test.ts src/test/googleAdapter.live.test.ts src/test/metaAdapter.test.ts src/test/metaAdapter.live.test.ts src/test/tiktokAdapter.test.ts src/test/tiktokAdapter.live.test.ts src/test/shopifyCatalogAdapter.live.test.ts src/test/wooCommerceCatalogAdapter.live.test.ts src/test/infra.test.ts src/test/campaignOrchestrator.test.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
     "@prisma/client": "^6.19.3",
-    "better-sqlite3": "^11.5.0",
     "cheerio": "^1.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
@@ -31,6 +36,7 @@
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^20.14.10",
+    "better-sqlite3": "^11.5.0",
     "prisma": "^6.19.3",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"

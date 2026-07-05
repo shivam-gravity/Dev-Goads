@@ -1,14 +1,14 @@
-import { NavLink, Route, Routes, Navigate, useLocation } from "react-router-dom";
-import { useState } from "react";
-import { MascotIcon } from "./components/icons.js";
+import { NavLink, Route, Routes, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { MascotIcon, SearchIcon } from "./components/icons.js";
 import { AuthProvider, useAuth } from "./context/AuthContext.js";
 
 // Page imports
-import Landing from "./pages/Landing.js";
 import Onboarding from "./pages/Onboarding.js";
 import Dashboard from "./pages/Dashboard.js";
 import CampaignDetail from "./pages/CampaignDetail.js";
 import Campaigns from "./pages/Campaigns.js";
+import NewCampaign from "./pages/NewCampaign.js";
 import Analytics from "./pages/Analytics.js";
 import Audiences from "./pages/Audiences.js";
 import Creatives from "./pages/Creatives.js";
@@ -27,7 +27,7 @@ import Blog from "./pages/Blog.js";
 // New Pages Imports
 import Login from "./pages/Login.js";
 import Signup from "./pages/Signup.js";
-import CampaignWizard from "./pages/CampaignWizard.js";
+import CampaignGenerator from "./pages/CampaignGenerator.js";
 import CreativeStudio from "./pages/CreativeStudio.js";
 import AudienceBuilder from "./pages/AudienceBuilder.js";
 import AdsManager from "./pages/AdsManager.js";
@@ -39,11 +39,15 @@ import Notifications from "./pages/Notifications.js";
 import HelpCenter from "./pages/HelpCenter.js";
 import Admin from "./pages/Admin/index.js";
 import AutomationRules from "./pages/AutomationRules.js";
+import MediaPlan from "./pages/MediaPlan.js";
+import OptimizeGoal from "./pages/OptimizeGoal.js";
+import BrandProfile from "./pages/BrandProfile.js";
+import Products from "./pages/Products.js";
 import { CopilotProvider, useCopilot } from "./providers/CopilotProvider.js";
 import CopilotDrawer from "./components/Copilot/Drawer.js";
+import ErrorBoundary from "./components/ErrorBoundary.js";
 
 const MARKETING_ROUTES: Record<string, JSX.Element> = {
-  "/": <Landing />,
   "/features": <Features />,
   "/pricing": <Pricing />,
   "/resources": <Resources />,
@@ -59,12 +63,38 @@ const MARKETING_ROUTES: Record<string, JSX.Element> = {
 
 function AuthenticatedApp() {
   const { businessId, logout } = useAuth();
+  const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [brandMenuOpen, setBrandMenuOpen] = useState(false);
+  const [brandQuery, setBrandQuery] = useState("");
+  const [brands, setBrands] = useState([{ id: "default", name: "Default Brand" }]);
+  const [selectedBrandId, setSelectedBrandId] = useState("default");
+  const brandMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!brandMenuOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (brandMenuRef.current && !brandMenuRef.current.contains(e.target as Node)) {
+        setBrandMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [brandMenuOpen]);
+
+  const selectedBrand = brands.find((b) => b.id === selectedBrandId) ?? brands[0];
+  const filteredBrands = brands.filter((b) => b.name.toLowerCase().includes(brandQuery.toLowerCase()));
+
+  function handleCreateBrand() {
+    setBrandMenuOpen(false);
+    setBrandQuery("");
+    navigate("/brand");
+  }
 
   return (
     <div className="app-shell-sidebar">
       {/* Sidebar */}
-      <aside className={`sidebar adsgo-sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
+      <aside className={`sidebar adsgo-sidebar ${sidebarOpen ? "sidebar-open" : ""} ${brandMenuOpen ? "sidebar-pinned" : ""}`}>
         <div className="sidebar-brand adsgo-brand">
           <NavLink to="/dashboard" className="brand-lockup-adsgo" onClick={() => setSidebarOpen(false)}>
             <svg className="brand-logo-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -77,13 +107,54 @@ function AuthenticatedApp() {
           </NavLink>
         </div>
 
-        <div className="workspace-selector">
-          <div className="workspace-avatar">D</div>
-          <div className="workspace-info">
-            <span className="workspace-title">Default Brand</span>
-            <span className="workspace-sub">Workspace</span>
+        <div className="workspace-selector-wrap" ref={brandMenuRef}>
+          <div className="workspace-selector" onClick={() => setBrandMenuOpen((o) => !o)}>
+            <div className="workspace-avatar">{selectedBrand.name.charAt(0).toUpperCase()}</div>
+            <div className="workspace-info">
+              <span className="workspace-title">{selectedBrand.name}</span>
+              <span className="workspace-sub">Workspace</span>
+            </div>
+            <span className={`workspace-chevron ${brandMenuOpen ? "workspace-chevron-open" : ""}`}>▼</span>
           </div>
-          <span className="workspace-chevron">▼</span>
+
+          {brandMenuOpen && (
+            <div className="workspace-dropdown">
+              <div className="workspace-dropdown-search">
+                <SearchIcon className="workspace-dropdown-search-icon" />
+                <input
+                  type="text"
+                  placeholder="Search brands..."
+                  value={brandQuery}
+                  onChange={(e) => setBrandQuery(e.target.value)}
+                  autoFocus
+                />
+              </div>
+
+              <div className="workspace-dropdown-list">
+                {filteredBrands.map((b) => (
+                  <div
+                    key={b.id}
+                    className="workspace-dropdown-item"
+                    onClick={() => {
+                      setSelectedBrandId(b.id);
+                      setBrandMenuOpen(false);
+                      setBrandQuery("");
+                    }}
+                  >
+                    <span>{b.name}</span>
+                    {b.id === selectedBrandId && <span className="workspace-dropdown-check">✓</span>}
+                  </div>
+                ))}
+                {filteredBrands.length === 0 && (
+                  <div className="workspace-dropdown-empty">No brands found</div>
+                )}
+              </div>
+
+              <button type="button" className="workspace-dropdown-create" onClick={handleCreateBrand}>
+                <span className="workspace-dropdown-create-icon">+</span> Create new brand
+              </button>
+            </div>
+          )}
         </div>
 
         {businessId && (
@@ -100,7 +171,7 @@ function AuthenticatedApp() {
                 <span className="sidebar-link-label">Media Plan</span>
               </span>
             </NavLink>
-            <NavLink to="/campaigns" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/campaigns/new" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="9" y1="3" x2="9" y2="21" /><line x1="15" y1="3" x2="15" y2="21" /></svg>
                 <span className="sidebar-link-label">New Campaign</span>
@@ -126,13 +197,6 @@ function AuthenticatedApp() {
                 <span className="sidebar-link-label">Draft & AI Recs</span>
               </span>
             </NavLink>
-            <NavLink to="/rules" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
-              <span className="sidebar-link-inner">
-                <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><polyline points="3.27 6.96 12 12.01 20.73 6.96" /><line x1="12" y1="22.08" x2="12" y2="12" /></svg>
-                <span className="sidebar-link-label">Automation Rules</span>
-              </span>
-            </NavLink>
-
             <div className="sidebar-nav-group-label adsgo-label">CREATIVE HUB</div>
             <NavLink to="/studio" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
@@ -165,15 +229,26 @@ function AuthenticatedApp() {
               <span>BRAND CENTER</span>
               <span style={{ fontSize: '10px' }}>▼</span>
             </div>
-
-            <NavLink to="/admin/workspace" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} style={{ marginTop: 'auto' }} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/goal" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
-                <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
-                <span className="sidebar-link-label">Workspace Settings</span>
+                <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" /></svg>
+                <span className="sidebar-link-label">Optimize Goal</span>
+              </span>
+            </NavLink>
+            <NavLink to="/brand" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+              <span className="sidebar-link-inner">
+                <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3h12l3 5-9 13L3 8Z" /><path d="M3 8h18M9 3l3 5 3-5M12 8l-2 13M12 8l2 13" /></svg>
+                <span className="sidebar-link-label">Brand Profile</span>
+              </span>
+            </NavLink>
+            <NavLink to="/products" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+              <span className="sidebar-link-inner">
+                <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><polyline points="3.27 6.96 12 12.01 20.73 6.96" /><line x1="12" y1="22.08" x2="12" y2="12" /></svg>
+                <span className="sidebar-link-label">Products</span>
               </span>
             </NavLink>
 
-            <NavLink to="/help" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/help" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} style={{ marginTop: 'auto' }} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01" /></svg>
                 <span className="sidebar-link-label">Help Center</span>
@@ -217,6 +292,10 @@ function AuthenticatedApp() {
               element={businessId ? <Campaigns businessId={businessId} /> : <Navigate to="/login" replace />}
             />
             <Route
+              path="/campaigns/new"
+              element={businessId ? <NewCampaign /> : <Navigate to="/login" replace />}
+            />
+            <Route
               path="/campaigns/:campaignId"
               element={businessId ? <CampaignDetail /> : <Navigate to="/login" replace />}
             />
@@ -240,7 +319,7 @@ function AuthenticatedApp() {
             {/* New Routes */}
             <Route
               path="/wizard"
-              element={businessId ? <CampaignWizard businessId={businessId} /> : <Navigate to="/login" replace />}
+              element={businessId ? <CampaignGenerator businessId={businessId} /> : <Navigate to="/login" replace />}
             />
             <Route
               path="/studio"
@@ -282,6 +361,22 @@ function AuthenticatedApp() {
               path="/rules"
               element={businessId ? <AutomationRules businessId={businessId} /> : <Navigate to="/login" replace />}
             />
+            <Route
+              path="/media-plan"
+              element={businessId ? <MediaPlan businessId={businessId} /> : <Navigate to="/login" replace />}
+            />
+            <Route
+              path="/goal"
+              element={businessId ? <OptimizeGoal /> : <Navigate to="/login" replace />}
+            />
+            <Route
+              path="/brand"
+              element={businessId ? <BrandProfile /> : <Navigate to="/login" replace />}
+            />
+            <Route
+              path="/products"
+              element={businessId ? <Products /> : <Navigate to="/login" replace />}
+            />
           </Routes>
         </main>
       </div>
@@ -316,16 +411,18 @@ export default function App() {
   }
 
   return (
-    <AuthProvider>
-      <CopilotProvider>
-        <Routes>
-          <Route path="/login" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/signup" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/get-started" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/*" element={<AuthenticatedApp />} />
-        </Routes>
-      </CopilotProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <CopilotProvider>
+          <Routes>
+            <Route path="/login" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/signup" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/get-started" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/*" element={<AuthenticatedApp />} />
+          </Routes>
+        </CopilotProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
 

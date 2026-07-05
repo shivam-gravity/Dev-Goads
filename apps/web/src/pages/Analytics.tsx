@@ -1,296 +1,239 @@
 import { useEffect, useState } from "react";
-import { api, AnalyticsSummary, Campaign, NormalizedPerformance, TrendPoint } from "../api/client.js";
-import KpiCard from "../components/KpiCard.js";
+import { Link } from "react-router-dom";
+import {
+  PieChart, Pie, Cell, ResponsiveContainer,
+  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
+} from "recharts";
+import { api, AdInsightNetwork, AdInsightsResponse } from "../api/client.js";
 import Reveal from "../components/Reveal.js";
+import { MetaInfinityIcon, GoogleIcon, TikTokIcon, BingIcon } from "../components/icons.js";
 
-type Period = "all" | "month" | "week";
+const AUDIENCE_COLORS = ["#7033f5", "#0e9f6e", "#f59e0b", "#9ca3af"];
+const PAGE_COLORS = ["#3b82f6", "#22d3ee", "#a5b4fc", "#c7d2fe"];
 
-interface CampaignWithPerf extends Campaign {
-  perf: NormalizedPerformance[];
-  trend: TrendPoint[];
+const PLATFORM_TABS: { id: AdInsightNetwork; label: string; icon: JSX.Element }[] = [
+  { id: "meta", label: "Meta", icon: <MetaInfinityIcon /> },
+  { id: "google", label: "Google", icon: <GoogleIcon /> },
+  { id: "tiktok", label: "TikTok", icon: <TikTokIcon /> },
+  { id: "bing", label: "Bing", icon: <BingIcon /> },
+];
+
+function fmtMoney(cents: number) {
+  return `$${Math.round(cents / 100).toLocaleString()}`;
+}
+
+function fmtCpa(cents: number | null) {
+  return cents == null ? "—" : (cents / 100).toFixed(1);
 }
 
 export default function Analytics({ businessId }: { businessId: string }) {
-  const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
-  const [campaigns, setCampaigns] = useState<CampaignWithPerf[]>([]);
-  const [period, setPeriod] = useState<Period>("month");
+  const [network, setNetwork] = useState<AdInsightNetwork>("meta");
+  const [data, setData] = useState<AdInsightsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Tab State
-  const [activeTab, setActiveTab] = useState<"dashboard" | "reports">("dashboard");
-  const [exporting, setExporting] = useState<"pdf" | "csv" | null>(null);
-  const [scheduledEmail, setScheduledEmail] = useState(true);
-  const [reportTemplate, setReportTemplate] = useState("Executive Overview");
-
-  async function refresh(p: Period) {
+  async function refresh(n: AdInsightNetwork) {
     setLoading(true);
     setError(null);
     try {
-      const [sum, camps] = await Promise.all([
-        api.getAnalyticsSummary(businessId, p),
-        api.listCampaigns(businessId),
-      ]);
-      setSummary(sum);
-
-      const withPerf = await Promise.all(
-        camps.map(async (c) => {
-          const [perf, trend] = await Promise.all([
-            api.getPerformance(c.id),
-            api.getCampaignTrend(c.id),
-          ]).catch(() => [[], []] as [NormalizedPerformance[], TrendPoint[]]);
-          return { ...c, perf, trend };
-        })
-      );
-      setCampaigns(withPerf);
+      const result = await api.getAdInsights(businessId, n);
+      setData(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load analytics");
+      setError(err instanceof Error ? err.message : "Failed to load ad insights");
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    refresh(period);
-  }, [businessId, period]);
-
-  function fmtMoney(cents: number) {
-    return `$${(cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  }
-
-  function fmtNum(n: number) {
-    return n.toLocaleString();
-  }
-
-  async function handleExport(format: "pdf" | "csv") {
-    setExporting(format);
-    // Simulate generation delay
-    await new Promise(r => setTimeout(r, 1200));
-    setExporting(null);
-    alert(`${format.toUpperCase()} report exported successfully. Download started.`);
-  }
+    refresh(network);
+  }, [businessId, network]);
 
   return (
     <div className="page-analytics">
       <div className="page-header">
         <div>
-          <h1>Analytics &amp; Reporting</h1>
-          <p className="subtitle">Track ROAS gains, review performance charts, and schedule automated reporting exports.</p>
+          <h1>Ad Insights</h1>
+          <p className="subtitle">Audience, landing page, and creative performance breakdowns across your ad platforms.</p>
         </div>
+        {data?.isDemo && <span className="pill demo-pill">Demo</span>}
       </div>
 
       {error && <p className="error">{error}</p>}
 
-      {/* Sub tabs navigation */}
-      <nav className="admin-tabs-nav">
-        <button
-          className={`admin-tab-link ${activeTab === "dashboard" ? "active" : ""}`}
-          onClick={() => setActiveTab("dashboard")}
-          style={{ background: "none", border: "none", borderBottom: activeTab === "dashboard" ? "2px solid #7033f5" : "2px solid transparent", cursor: "pointer" }}
-        >
-          Performance Dashboard
-        </button>
-        <button
-          className={`admin-tab-link ${activeTab === "reports" ? "active" : ""}`}
-          onClick={() => setActiveTab("reports")}
-          style={{ background: "none", border: "none", borderBottom: activeTab === "reports" ? "2px solid #7033f5" : "2px solid transparent", cursor: "pointer" }}
-        >
-          Saved Reports &amp; Exports
-        </button>
-      </nav>
+      <div className="platform-tabs">
+        {PLATFORM_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            className={`platform-tab ${network === tab.id ? "active" : ""}`}
+            onClick={() => setNetwork(tab.id)}
+          >
+            {tab.icon}
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-      {activeTab === "dashboard" ? (
-        /* Dashboard Tab */
-        <div>
-          <div className="flex justify-between items-center mb-4">
-            <span className="font-size-14 text-secondary">Summary KPIs</span>
-            <div className="period-tabs">
-              {(["week", "month", "all"] as Period[]).map((p) => (
-                <button
-                  key={p}
-                  className={`period-tab ${period === p ? "active" : ""}`}
-                  onClick={() => setPeriod(p)}
-                >
-                  {p === "all" ? "All Time" : p === "month" ? "30 Days" : "7 Days"}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <Reveal>
-            <div className="kpi-grid">
-              <KpiCard
-                label="Total Spend"
-                value={summary ? fmtMoney(summary.totalSpendCents) : "—"}
-                icon="💸"
-                loading={loading}
-              />
-              <KpiCard
-                label="Impressions"
-                value={summary ? fmtNum(summary.totalImpressions) : "—"}
-                icon="👁️"
-                loading={loading}
-              />
-              <KpiCard
-                label="Clicks"
-                value={summary ? fmtNum(summary.totalClicks) : "—"}
-                icon="🖱️"
-                loading={loading}
-              />
-              <KpiCard
-                label="ROAS"
-                value={summary?.roas != null ? `${summary.roas.toFixed(2)}×` : "—"}
-                icon="📈"
-                loading={loading}
-              />
-            </div>
-          </Reveal>
-
-          {/* Campaigns performance table list */}
-          <section className="card mt-4">
-            <h2>Campaign Breakdown</h2>
-            <div className="table-wrap mt-3">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Campaign Name</th>
-                    <th>Network</th>
-                    <th>Spend</th>
-                    <th>Clicks</th>
-                    <th>Conversions</th>
-                    <th>CTR</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {campaigns.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} style={{ textAlign: "center" }} className="muted-text">
-                        No campaign breakdowns available.
-                      </td>
-                    </tr>
-                  ) : (
-                    campaigns.map(c => {
-                      const perf = c.perf?.[0];
-                      return (
-                        <tr key={c.id}>
-                          <td><strong>{c.name}</strong></td>
-                          <td>
-                            {c.networks.map(n => (
-                              <span key={n} className={`network-badge network-badge-${n}`} style={{ marginRight: "4px" }}>
-                                {n.toUpperCase()}
-                              </span>
-                            ))}
-                          </td>
-                          <td>{perf ? fmtMoney(perf.spendCents) : "—"}</td>
-                          <td>{perf ? fmtNum(perf.clicks) : "—"}</td>
-                          <td>{perf ? fmtNum(perf.conversions) : "—"}</td>
-                          <td>{perf ? `${(perf.ctr * 100).toFixed(2)}%` : "—"}</td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
+      {loading || !data ? (
+        <div className="campaigns-loading">
+          {[1, 2].map(i => <div key={i} className="campaign-row-skeleton" />)}
         </div>
       ) : (
-        /* Reports and Exports Tab */
-        <div className="flex-col gap-4">
-          <div className="admin-layout">
-            {/* Left Column: Actions */}
-            <div className="flex-col gap-4">
+        <Reveal>
+          <div className="flex-col gap-4">
+            {data.isDemo && (
+              <div className="demo-banner">
+                <span>Demo data only. Create your first campaign to view performance data.</span>
+                <Link to="/campaigns/new" className="btn btn-primary btn-sm">✨ Create campaign</Link>
+              </div>
+            )}
+
+            <div className="grid-2 insight-grid">
+              {/* Audience Insight */}
               <section className="card">
-                <h2>Saved Report Layouts</h2>
-                <p className="muted-text mt-1">Select a template visualization format to customize your summaries.</p>
-                
-                <div className="wizard-form mt-4">
-                  <label>
-                    Report Template
-                    <select value={reportTemplate} onChange={(e) => setReportTemplate(e.target.value)}>
-                      <option value="Executive Overview">Executive Overview (Weekly summary)</option>
-                      <option value="ROAS Breakdown">ROAS Breakdown (Creative level)</option>
-                      <option value="Media split comparison">Google vs Meta Split Comparison</option>
-                      <option value="Custom Campaign log">Custom Campaign Log</option>
-                    </select>
-                  </label>
-                  
-                  <div className="flex gap-2 mt-4">
-                    <button
-                      className="btn btn-primary"
-                      style={{ flex: 1 }}
-                      onClick={() => handleExport("pdf")}
-                      disabled={exporting !== null}
-                    >
-                      {exporting === "pdf" ? "Generating PDF..." : "📥 Export PDF Document"}
-                    </button>
-                    <button
-                      className="btn btn-secondary"
-                      onClick={() => handleExport("csv")}
-                      disabled={exporting !== null}
-                    >
-                      {exporting === "csv" ? "Generating CSV..." : "📥 Export CSV Data"}
-                    </button>
+                <h2 className="insight-section-title">Audience Insight</h2>
+                <h3 className="insight-subsection-title">Spend Distribution</h3>
+                <div className="donut-row">
+                  <div className="donut-chart-wrap">
+                    <ResponsiveContainer width="100%" height={180}>
+                      <PieChart>
+                        <Pie
+                          data={data.audience.distribution}
+                          dataKey="sharePct"
+                          nameKey="label"
+                          innerRadius={55}
+                          outerRadius={80}
+                          paddingAngle={2}
+                        >
+                          {data.audience.distribution.map((_, i) => (
+                            <Cell key={i} fill={AUDIENCE_COLORS[i % AUDIENCE_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(v: any) => `${v}%`} />
+                      </PieChart>
+                    </ResponsiveContainer>
                   </div>
+                  <ul className="donut-legend">
+                    {data.audience.distribution.map((slice, i) => (
+                      <li key={slice.label}>
+                        <span className="legend-dot" style={{ background: AUDIENCE_COLORS[i % AUDIENCE_COLORS.length] }} />
+                        {slice.label}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <h3 className="insight-subsection-title mt-3">Top Audiences</h3>
+                <div className="flex-col gap-3">
+                  {data.audience.top.map((a) => (
+                    <div key={a.name} className="top-insight-item">
+                      <strong>{a.name}</strong>
+                      {a.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          {a.tags.map(t => <span key={t} className="pill tag-pill">{t}</span>)}
+                        </div>
+                      )}
+                      <div className="top-insight-stats">
+                        <span className="stat-highlight">{fmtCpa(a.cpaCents)} CPA</span>
+                        <span className="muted-text">{fmtMoney(a.spendCents)} spend · {a.campaignCount} campaigns</span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </section>
 
+              {/* Page Insights */}
               <section className="card">
-                <h2>Shareable Report Link</h2>
-                <p className="muted-text mt-1">Generate a secure external link to share this report view with client viewers.</p>
-                <button
-                  className="btn btn-secondary mt-3"
-                  onClick={() => {
-                    navigator.clipboard.writeText(`https://adsgo.ai/shared/report_${wsId}_latest`);
-                    alert("Shareable report link copied to clipboard.");
-                  }}
-                >
-                  🔗 Copy Link
-                </button>
-              </section>
-            </div>
-
-            {/* Right Column: Scheduled Job Toggles */}
-            <div>
-              <section className="card" style={{ height: "100%" }}>
-                <h2>Report Scheduling</h2>
-                <p className="muted-text mt-1">Schedule automatic email reports sent straight to your mailbox.</p>
-                
-                <div className="mt-4 flex-col gap-3">
-                  <label style={{ display: "flex", alignItems: "center", gap: "10px", fontWeight: 600, cursor: "pointer" }} className="font-size-14">
-                    <input
-                      type="checkbox"
-                      checked={scheduledEmail}
-                      onChange={() => setScheduledEmail(!scheduledEmail)}
-                      style={{ accentColor: "#7033f5", width: "16px", height: "16px" }}
-                    />
-                    Weekly Executive Summary Email
-                  </label>
-                  <p className="muted-text font-size-12" style={{ paddingLeft: "26px" }}>
-                    Sent every Monday morning at 8:00 AM UTC. Summarizes ROAS shifts, budget efficiency, and active rules.
-                  </p>
-                  
-                  <div className="api-key-container mt-3" style={{ fontSize: "12px" }}>
-                    <span>Target Inbox: <strong>ssrivastava@example.com</strong></span>
+                <h2 className="insight-section-title">Page Insights</h2>
+                <h3 className="insight-subsection-title">Spend Distribution</h3>
+                <div className="donut-row">
+                  <div className="donut-chart-wrap">
+                    <ResponsiveContainer width="100%" height={180}>
+                      <PieChart>
+                        <Pie
+                          data={data.pages.distribution}
+                          dataKey="sharePct"
+                          nameKey="label"
+                          innerRadius={55}
+                          outerRadius={80}
+                          paddingAngle={2}
+                        >
+                          {data.pages.distribution.map((_, i) => (
+                            <Cell key={i} fill={PAGE_COLORS[i % PAGE_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(v: any) => `${v}%`} />
+                      </PieChart>
+                    </ResponsiveContainer>
                   </div>
+                  <ul className="donut-legend">
+                    {data.pages.distribution.map((slice, i) => (
+                      <li key={slice.label}>
+                        <span className="legend-dot" style={{ background: PAGE_COLORS[i % PAGE_COLORS.length] }} />
+                        {slice.label}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <h3 className="insight-subsection-title mt-3">Top Pages</h3>
+                <div className="flex-col gap-3">
+                  {data.pages.top.map((p) => (
+                    <div key={p.url} className="top-insight-item">
+                      <strong className="page-url-text">{p.url}</strong>
+                      <div className="top-insight-stats">
+                        <span className="stat-highlight">{p.cvr}% CVR</span>
+                        <span className="muted-text">{fmtMoney(p.spendCents)} spend · {p.campaignCount} campaigns</span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </section>
             </div>
+
+            {/* Creative Insight */}
+            <section className="card">
+              <h2 className="insight-section-title">Creative Insight</h2>
+              <h3 className="insight-subsection-title">Creative Performance</h3>
+              <ResponsiveContainer width="100%" height={260}>
+                <ScatterChart margin={{ top: 10, right: 20, bottom: 10, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis type="number" dataKey="ctr" name="CTR" unit="%" />
+                  <YAxis type="number" dataKey="cpaCentsDollars" name="CPA" />
+                  <Tooltip cursor={{ strokeDasharray: "3 3" }} formatter={(v: any, name: any) => name === "CTR" ? `${v}%` : v} />
+                  <Scatter
+                    data={data.creative.scatter.map(s => ({ ...s, cpaCentsDollars: Math.round(s.cpaCents / 100 * 10) / 10 }))}
+                    fill="#c2ee00"
+                    stroke="#0d031f"
+                    strokeWidth={1}
+                  />
+                </ScatterChart>
+              </ResponsiveContainer>
+
+              <h3 className="insight-subsection-title mt-3">Top Ads</h3>
+              <div className="top-ads-grid">
+                {data.creative.topAds.map((ad) => (
+                  <div key={ad.id} className="ad-creative-card">
+                    <div className="ad-creative-stats">
+                      <span className="stat-highlight">{ad.ctr}% CTR</span>
+                      <span className="muted-text">{fmtCpa(ad.cpaCents)} CPA · {ad.campaignCount} campaigns</span>
+                    </div>
+                    {ad.imageUrl && <img src={ad.imageUrl} alt={ad.headline} className="ad-creative-image" />}
+                    <div className="ad-creative-body">
+                      <strong>{ad.headline}</strong>
+                      <p className="muted-text mt-1">{ad.body}</p>
+                    </div>
+                    <div className="ad-creative-engagement">
+                      <span>👍 Like</span>
+                      <span>💬 Comment</span>
+                      <span>↗️ Share</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
           </div>
-          
-          {/* Executive summary block */}
-          <section className="card">
-            <h2>Executive Performance Summary</h2>
-            <div className="mt-3 font-size-14" style={{ lineHeight: "1.6", color: "#374151" }}>
-              <p>
-                During the selected period, total ad spend reached <strong>{summary ? fmtMoney(summary.totalSpendCents) : "$0.00"}</strong>, achieving an average ROAS of <strong>{summary?.roas != null ? `${summary.roas.toFixed(2)}x` : "0.00x"}</strong> across channels.
-              </p>
-              <p className="mt-2">
-                Budget optimization algorithms shifted <strong>$1,250.00</strong> automatically from underperforming Meta graphic ad sets to Google high-intent keyword search campaigns, resulting in a <strong>+24% clicks increment</strong> with zero budget growth. 
-              </p>
-            </div>
-          </section>
-        </div>
+        </Reveal>
       )}
     </div>
   );

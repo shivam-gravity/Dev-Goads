@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "node:crypto";
-import { db } from "../../db/db.js";
+import { prisma } from "../../db/prisma.js";
 import type { AdStrategy, BusinessProfile } from "../../types/index.js";
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
@@ -14,11 +14,11 @@ const STRATEGY_TOOL = {
       summary: { type: "string", description: "2-3 sentence strategy overview" },
       recommendedNetworks: {
         type: "array",
-        items: { type: "string", enum: ["meta", "google"] },
+        items: { type: "string", enum: ["meta", "google", "tiktok"] },
       },
       budgetSplit: {
         type: "object",
-        properties: { meta: { type: "number" }, google: { type: "number" } },
+        properties: { meta: { type: "number" }, google: { type: "number" }, tiktok: { type: "number" } },
         required: ["meta", "google"],
       },
       audiences: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 5 },
@@ -84,22 +84,19 @@ export async function generateStrategy(business: BusinessProfile): Promise<AdStr
     ...payload,
   };
 
-  db.prepare("INSERT INTO strategies (id, businessId, data, createdAt) VALUES (?, ?, ?, ?)").run(
-    strategy.id,
-    strategy.businessId,
-    JSON.stringify(strategy),
-    strategy.createdAt
-  );
+  await prisma.strategy.create({
+    data: { id: strategy.id, businessId: strategy.businessId, data: strategy as any, createdAt: new Date(strategy.createdAt) },
+  });
 
   return strategy;
 }
 
-export function getStrategy(id: string): AdStrategy | null {
-  const row = db.prepare("SELECT data FROM strategies WHERE id = ?").get(id) as { data: string } | undefined;
-  return row ? JSON.parse(row.data) : null;
+export async function getStrategy(id: string): Promise<AdStrategy | null> {
+  const row = await prisma.strategy.findUnique({ where: { id } });
+  return row ? (row.data as unknown as AdStrategy) : null;
 }
 
-export function listStrategiesForBusiness(businessId: string): AdStrategy[] {
-  const rows = db.prepare("SELECT data FROM strategies WHERE businessId = ? ORDER BY createdAt DESC").all(businessId) as { data: string }[];
-  return rows.map((r) => JSON.parse(r.data));
+export async function listStrategiesForBusiness(businessId: string): Promise<AdStrategy[]> {
+  const rows = await prisma.strategy.findMany({ where: { businessId }, orderBy: { createdAt: "desc" } });
+  return rows.map((r) => r.data as unknown as AdStrategy);
 }

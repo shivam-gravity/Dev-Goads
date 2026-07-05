@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { db } from "../../db/db.js";
+import { prisma } from "../../db/prisma.js";
 
 export interface Draft {
   id: string;
@@ -16,16 +16,20 @@ export interface Draft {
   updatedAt: string;
 }
 
-function save(d: Draft) {
-  db.prepare("INSERT OR REPLACE INTO drafts (id, workspaceId, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)").run(d.id, d.workspaceId, JSON.stringify(d), d.createdAt, d.updatedAt);
+async function save(d: Draft): Promise<void> {
+  await prisma.draft.upsert({
+    where: { id: d.id },
+    create: { id: d.id, workspaceId: d.workspaceId, data: d as any, createdAt: new Date(d.createdAt), updatedAt: new Date(d.updatedAt) },
+    update: { data: d as any, updatedAt: new Date(d.updatedAt) },
+  });
 }
 
-export function listDrafts(workspaceId: string): Draft[] {
-  const rows = db.prepare("SELECT data FROM drafts WHERE workspaceId = ? ORDER BY updatedAt DESC").all(workspaceId) as { data: string }[];
-  return rows.map((r) => JSON.parse(r.data) as Draft);
+export async function listDrafts(workspaceId: string): Promise<Draft[]> {
+  const rows = await prisma.draft.findMany({ where: { workspaceId }, orderBy: { updatedAt: "desc" } });
+  return rows.map((r) => r.data as unknown as Draft);
 }
 
-export function createDraft(workspaceId: string, input: Pick<Draft, "name" | "type" | "data" | "aiRecommendation" | "score" | "scheduledAt">): Draft {
+export async function createDraft(workspaceId: string, input: Pick<Draft, "name" | "type" | "data" | "aiRecommendation" | "score" | "scheduledAt">): Promise<Draft> {
   const d: Draft = {
     id: randomUUID(),
     workspaceId,
@@ -34,33 +38,34 @@ export function createDraft(workspaceId: string, input: Pick<Draft, "name" | "ty
     updatedAt: new Date().toISOString(),
     ...input,
   };
-  save(d);
+  await save(d);
   return d;
 }
 
-export function updateDraft(id: string, patch: Partial<Omit<Draft, "id" | "workspaceId" | "createdAt">>): Draft {
-  const row = db.prepare("SELECT data FROM drafts WHERE id = ?").get(id) as { data: string } | undefined;
+export async function updateDraft(id: string, patch: Partial<Omit<Draft, "id" | "workspaceId" | "createdAt">>): Promise<Draft> {
+  const row = await prisma.draft.findUnique({ where: { id } });
   if (!row) throw new Error("Draft not found");
-  const d: Draft = { ...JSON.parse(row.data), ...patch, updatedAt: new Date().toISOString() };
-  save(d);
+  const d: Draft = { ...(row.data as unknown as Draft), ...patch, updatedAt: new Date().toISOString() };
+  await save(d);
   return d;
 }
 
-export function publishDraft(id: string): Draft {
+export async function publishDraft(id: string): Promise<Draft> {
   return updateDraft(id, { status: "published", publishedAt: new Date().toISOString() });
 }
 
-export function deleteDraft(id: string): boolean {
-  return db.prepare("DELETE FROM drafts WHERE id = ?").run(id).changes > 0;
+export async function deleteDraft(id: string): Promise<boolean> {
+  const result = await prisma.draft.deleteMany({ where: { id } });
+  return result.count > 0;
 }
 
-export function scheduleDraft(id: string, scheduledAt: string): Draft {
+export async function scheduleDraft(id: string, scheduledAt: string): Promise<Draft> {
   return updateDraft(id, { status: "scheduled", scheduledAt });
 }
 
 // Create demo drafts
-export function seedDemoDrafts(workspaceId: string) {
-  const existing = listDrafts(workspaceId);
+export async function seedDemoDrafts(workspaceId: string): Promise<void> {
+  const existing = await listDrafts(workspaceId);
   if (existing.length > 0) return;
 
   const demos = [
@@ -70,7 +75,7 @@ export function seedDemoDrafts(workspaceId: string) {
   ];
 
   for (const d of demos) {
-    createDraft(workspaceId, d);
+    await createDraft(workspaceId, d);
   }
 }
 
@@ -104,35 +109,48 @@ export interface Ad {
   updatedAt: string;
 }
 
-function saveAdSet(a: AdSet) { db.prepare("INSERT OR REPLACE INTO ad_sets (id, campaignId, workspaceId, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)").run(a.id, a.campaignId, a.workspaceId ?? null, JSON.stringify(a), a.createdAt, a.updatedAt); }
-function saveAd(a: Ad) { db.prepare("INSERT OR REPLACE INTO ads (id, adSetId, workspaceId, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)").run(a.id, a.adSetId, a.workspaceId ?? null, JSON.stringify(a), a.createdAt, a.updatedAt); }
-
-export function listAdSets(campaignId: string): AdSet[] {
-  const rows = db.prepare("SELECT data FROM ad_sets WHERE campaignId = ? ORDER BY createdAt DESC").all(campaignId) as { data: string }[];
-  return rows.map((r) => JSON.parse(r.data) as AdSet);
+async function saveAdSet(a: AdSet): Promise<void> {
+  await prisma.adSet.upsert({
+    where: { id: a.id },
+    create: { id: a.id, campaignId: a.campaignId, workspaceId: a.workspaceId ?? null, data: a as any, createdAt: new Date(a.createdAt), updatedAt: new Date(a.updatedAt) },
+    update: { data: a as any, updatedAt: new Date(a.updatedAt) },
+  });
 }
 
-export function createAdSet(campaignId: string, input: Omit<AdSet, "id" | "campaignId" | "createdAt" | "updatedAt">): AdSet {
+async function saveAd(a: Ad): Promise<void> {
+  await prisma.ad.upsert({
+    where: { id: a.id },
+    create: { id: a.id, adSetId: a.adSetId, workspaceId: a.workspaceId ?? null, data: a as any, createdAt: new Date(a.createdAt), updatedAt: new Date(a.updatedAt) },
+    update: { data: a as any, updatedAt: new Date(a.updatedAt) },
+  });
+}
+
+export async function listAdSets(campaignId: string): Promise<AdSet[]> {
+  const rows = await prisma.adSet.findMany({ where: { campaignId }, orderBy: { createdAt: "desc" } });
+  return rows.map((r) => r.data as unknown as AdSet);
+}
+
+export async function createAdSet(campaignId: string, input: Omit<AdSet, "id" | "campaignId" | "createdAt" | "updatedAt">): Promise<AdSet> {
   const a: AdSet = { id: randomUUID(), campaignId, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ...input };
-  saveAdSet(a);
+  await saveAdSet(a);
   return a;
 }
 
-export function listAds(adSetId: string): Ad[] {
-  const rows = db.prepare("SELECT data FROM ads WHERE adSetId = ? ORDER BY createdAt DESC").all(adSetId) as { data: string }[];
-  return rows.map((r) => JSON.parse(r.data) as Ad);
+export async function listAds(adSetId: string): Promise<Ad[]> {
+  const rows = await prisma.ad.findMany({ where: { adSetId }, orderBy: { createdAt: "desc" } });
+  return rows.map((r) => r.data as unknown as Ad);
 }
 
-export function createAd(adSetId: string, input: Omit<Ad, "id" | "adSetId" | "createdAt" | "updatedAt">): Ad {
+export async function createAd(adSetId: string, input: Omit<Ad, "id" | "adSetId" | "createdAt" | "updatedAt">): Promise<Ad> {
   const a: Ad = { id: randomUUID(), adSetId, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ...input };
-  saveAd(a);
+  await saveAd(a);
   return a;
 }
 
-export function updateAd(id: string, patch: Partial<Pick<Ad, "name" | "status" | "creative" | "format">>): Ad {
-  const row = db.prepare("SELECT data FROM ads WHERE id = ?").get(id) as { data: string } | undefined;
+export async function updateAd(id: string, patch: Partial<Pick<Ad, "name" | "status" | "creative" | "format">>): Promise<Ad> {
+  const row = await prisma.ad.findUnique({ where: { id } });
   if (!row) throw new Error("Ad not found");
-  const a: Ad = { ...JSON.parse(row.data), ...patch, updatedAt: new Date().toISOString() };
-  saveAd(a);
+  const a: Ad = { ...(row.data as unknown as Ad), ...patch, updatedAt: new Date().toISOString() };
+  await saveAd(a);
   return a;
 }

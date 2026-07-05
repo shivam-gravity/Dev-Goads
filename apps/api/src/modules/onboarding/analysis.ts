@@ -1,5 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { AudienceAnalysis, ProductAnalysis, ScrapedSite } from "../../types/index.js";
+import { scrapeUrl } from "./scraper.js";
+import { vectorStore, hashEmbedding } from "../../infra/vectorStore.js";
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
@@ -108,4 +110,32 @@ export async function analyzeAudience(site: ScrapedSite, product: ProductAnalysi
   const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
   if (!toolUse) throw new Error("Audience analysis: model did not return structured output");
   return toolUse.input as AudienceAnalysis;
+}
+
+export interface DeepResearchResult {
+  site: ScrapedSite;
+  product: ProductAnalysis;
+  audience: AudienceAnalysis;
+}
+
+/** Crawls a promotional URL and runs the full product + audience analysis in one pass. */
+export async function runDeepResearch(url: string): Promise<DeepResearchResult> {
+  const site = await scrapeUrl(url);
+  const product = await analyzeProduct(site);
+  const audience = await analyzeAudience(site, product);
+
+  // Indexes this research so future onboarding runs can surface "businesses like this
+  // one" — hashEmbedding is a placeholder until a real embeddings provider is wired in,
+  // but it exercises the VectorStore interface's genuine upsert/query path today.
+  await vectorStore.upsert([
+    { id: site.url, embedding: hashEmbedding(site.excerpt), metadata: { url: site.url, title: site.title, category: product.category } },
+  ]);
+
+  return { site, product, audience };
+}
+
+/** Finds previously-researched sites whose content is most similar to the given text. */
+export async function findSimilarResearchedSites(text: string, topK = 5) {
+  const matches = await vectorStore.query(hashEmbedding(text), topK);
+  return matches.map((m) => ({ url: m.id, score: m.score, ...m.metadata }));
 }

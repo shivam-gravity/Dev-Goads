@@ -1,6 +1,11 @@
-// Production data model for AdGo. Postgres-targeted (metrics table is designed
-// to be converted to a TimescaleDB hypertable, partitioned on `date`, once
-// volume justifies it — see readme note near the Metric model).
+// Data model for AdGo, mirroring the shape of the app that was actually built
+// (see apps/api/src/db/db.ts for the SQLite predecessor this replaces).
+// Most tables keep a `data Json` blob column matching how the app already
+// reads/writes these records — this is a driver swap (SQLite -> Postgres),
+// not a data-model redesign. workspace_members relates to Workspace (for the
+// listWorkspacesForUser join) but NOT to User: inviteMember() can create a
+// member row for an email with no User yet (userId = "pending:<email>"), so
+// userId is a plain indexed column rather than an enforced FK.
 
 generator client {
   provider = "prisma-client-js"
@@ -11,360 +16,195 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ---------- Tenancy & auth ----------
-
-enum UserRole {
-  OWNER
-  ADMIN
-  MEMBER
-}
-
-model Organization {
-  id           String        @id @default(uuid())
-  name         String
-  createdAt    DateTime      @default(now())
-  users        User[]
-  businesses   Business[]
-  subscription Subscription?
-}
-
 model User {
-  id             String       @id @default(uuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id])
-  email          String       @unique
-  name           String?
-  role           UserRole     @default(ADMIN)
-  createdAt      DateTime     @default(now())
+  id           String   @id
+  email        String   @unique
+  passwordHash String?
+  name         String
+  avatar       String?
+  googleId     String?  @unique
+  createdAt    DateTime @default(now())
 
-  optimizationActions OptimizationAction[]
-  editedStrategies    Strategy[]
-
-  @@index([organizationId])
+  @@map("users")
 }
 
-// ---------- Client business & onboarding ----------
+model Workspace {
+  id        String            @id
+  name      String
+  ownerId   String
+  plan      String            @default("starter")
+  logoUrl   String?
+  timezone  String?           @default("UTC")
+  createdAt DateTime          @default(now())
+  members   WorkspaceMember[]
+
+  @@index([ownerId])
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String    @id
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  userId      String
+  role        String    @default("member")
+  invitedAt   DateTime
+  joinedAt    DateTime?
+
+  @@index([workspaceId])
+  @@index([userId])
+  @@map("workspace_members")
+}
 
 model Business {
-  id                 String       @id @default(uuid())
-  organizationId     String
-  organization       Organization @relation(fields: [organizationId], references: [id])
-  name               String
-  website            String?
-  industry           String?
-  targetAudience     String?
-  monthlyBudgetCents Int
-  goals              String[]
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  id          String   @id
+  workspaceId String?
+  data        Json
+  createdAt   DateTime @default(now())
 
-  scrapedPages     ScrapedPage[]
-  oauthConnections OAuthConnection[]
-  strategies       Strategy[]
-  campaigns        Campaign[]
-  notifications    Notification[]
-  usageRecords     UsageRecord[]
-  invoices         Invoice[]
-
-  @@index([organizationId])
+  @@index([workspaceId])
+  @@map("businesses")
 }
 
-/// Raw onboarding scrape of the client's site — text + image references — used
-/// as grounding input for strategy generation.
-model ScrapedPage {
-  id          String   @id @default(uuid())
-  businessId  String
-  business    Business @relation(fields: [businessId], references: [id])
-  url         String
-  textContent String   @db.Text
-  images      Json // [{ url, alt }]
-  scrapedAt   DateTime @default(now())
-
-  @@index([businessId])
-}
-
-enum AdNetwork {
-  META
-  GOOGLE
-}
-
-/// OAuth grant to a client's ad account. Tokens are stored encrypted at the
-/// application layer (AES-GCM) — this column never holds plaintext tokens.
-model OAuthConnection {
-  id                String    @id @default(uuid())
-  businessId        String
-  business          Business  @relation(fields: [businessId], references: [id])
-  network           AdNetwork
-  externalAccountId String
-  accessTokenEnc    String    @db.Text
-  refreshTokenEnc   String?   @db.Text
-  scopes            String[]
-  expiresAt         DateTime?
-  connectedAt       DateTime  @default(now())
-  revokedAt         DateTime?
-
-  @@unique([businessId, network])
-}
-
-// ---------- Strategy & creative ----------
-
-enum StrategyStatus {
-  DRAFT
-  IN_REVIEW
-  APPROVED
-  PUBLISHED
-  ARCHIVED
-}
-
-/// LLM-generated ad strategy. Stays in DRAFT/IN_REVIEW until a user approves
-/// it (functional req: "review/edit generated strategy before publishing").
 model Strategy {
-  id                  String         @id @default(uuid())
-  businessId          String
-  business            Business       @relation(fields: [businessId], references: [id])
-  status              StrategyStatus @default(DRAFT)
-  summary             String         @db.Text
-  audiences           Json
-  recommendedNetworks AdNetwork[]
-  budgetSplit         Json
-  generatedBy         String
-  editedByUserId      String?
-  editedByUser        User?          @relation(fields: [editedByUserId], references: [id])
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
-
-  creatives Creative[]
-  campaigns Campaign[]
+  id         String   @id
+  businessId String
+  data       Json
+  createdAt  DateTime @default(now())
 
   @@index([businessId])
-}
-
-enum CreativeType {
-  TEXT
-  IMAGE
-  VIDEO
-}
-
-enum CreativeStatus {
-  DRAFT
-  PENDING_REVIEW
-  APPROVED
-  REJECTED
-  ARCHIVED
-}
-
-/// A single ad creative. `performanceScore` is a rolling score the optimization
-/// engine updates so the strategy engine can bias new variant generation
-/// toward what has already worked (functional req: "generate new creative
-/// variants based on performance data").
-model Creative {
-  id               String         @id @default(uuid())
-  strategyId       String?
-  strategy         Strategy?      @relation(fields: [strategyId], references: [id])
-  businessId       String
-  type             CreativeType   @default(TEXT)
-  headline         String?
-  body             String?        @db.Text
-  callToAction     String?
-  assetUrl         String?
-  status           CreativeStatus @default(DRAFT)
-  generatedBy      String
-  performanceScore Float?
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
-
-  campaignCreatives CampaignCreative[]
-
-  @@index([businessId])
-  @@index([strategyId])
-}
-
-// ---------- Campaigns ----------
-
-enum CampaignStatus {
-  DRAFT
-  PENDING_LAUNCH
-  ACTIVE
-  PAUSED
-  COMPLETED
-  FAILED
-}
-
-enum PacingStrategy {
-  EVEN
-  ACCELERATED
+  @@map("strategies")
 }
 
 model Campaign {
-  id               String         @id @default(uuid())
-  businessId       String
-  business         Business       @relation(fields: [businessId], references: [id])
-  strategyId       String?
-  strategy         Strategy?      @relation(fields: [strategyId], references: [id])
-  name             String
-  status           CampaignStatus @default(DRAFT)
-  dailyBudgetCents Int
-  pacingStrategy   PacingStrategy @default(EVEN)
-  startDate        DateTime?
-  endDate          DateTime?
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
-
-  campaignCreatives   CampaignCreative[]
-  optimizationActions OptimizationAction[]
+  id          String   @id
+  businessId  String
+  workspaceId String?
+  data        Json
+  updatedAt   DateTime @default(now())
 
   @@index([businessId])
+  @@index([workspaceId])
+  @@map("campaigns")
 }
 
-/// Join of a campaign x creative x network, holding the external network's
-/// own IDs so the orchestrator can address the live ad/ad-set/campaign.
-model CampaignCreative {
-  id                 String         @id @default(uuid())
-  campaignId         String
-  campaign           Campaign       @relation(fields: [campaignId], references: [id])
-  creativeId         String
-  creative           Creative       @relation(fields: [creativeId], references: [id])
-  network            AdNetwork
-  externalAdId       String?
-  externalAdSetId    String?
-  externalCampaignId String?
-  status             CampaignStatus @default(DRAFT)
-  dailyBudgetCents   Int?
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+model AdSet {
+  id          String   @id
+  campaignId  String
+  workspaceId String?
+  data        Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
 
-  metrics Metric[]
-
-  @@unique([campaignId, creativeId, network])
   @@index([campaignId])
+  @@index([workspaceId])
+  @@map("ad_sets")
 }
 
-/// Normalized per-day performance for one campaign/creative/network. At scale
-/// this table should become a TimescaleDB hypertable partitioned on `date`
-/// rather than a plain Postgres table.
+model Ad {
+  id          String   @id
+  adSetId     String
+  workspaceId String?
+  data        Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
+
+  @@index([adSetId])
+  @@index([workspaceId])
+  @@map("ads")
+}
+
 model Metric {
-  id                 String           @id @default(uuid())
-  campaignId         String
-  campaignCreativeId String
-  campaignCreative   CampaignCreative @relation(fields: [campaignCreativeId], references: [id])
-  network            AdNetwork
-  date               DateTime         @db.Date
-  impressions        Int              @default(0)
-  clicks             Int              @default(0)
-  conversions        Int              @default(0)
-  spendCents         Int              @default(0)
-  fetchedAt          DateTime         @default(now())
+  id         String @id
+  campaignId String
+  data       Json
+  date       String
 
-  @@unique([campaignCreativeId, date])
-  @@index([campaignId, date])
-}
-
-// ---------- Optimization audit trail ----------
-
-enum OptimizationActionType {
-  INCREASE_BUDGET
-  DECREASE_BUDGET
-  PAUSE
-  RESUME
-  GENERATE_VARIANT
-  HOLD
-}
-
-enum ActionTrigger {
-  SYSTEM
-  USER
-}
-
-/// Every automated pause/budget-change is logged here with its reason — the
-/// auditability requirement for client trust and dispute resolution.
-model OptimizationAction {
-  id                 String                 @id @default(uuid())
-  campaignId         String
-  campaign           Campaign               @relation(fields: [campaignId], references: [id])
-  campaignCreativeId String?
-  actionType         OptimizationActionType
-  reason             String                 @db.Text
-  previousValue      Json?
-  newValue           Json?
-  triggeredBy        ActionTrigger          @default(SYSTEM)
-  triggeredByUserId  String?
-  triggeredByUser    User?                  @relation(fields: [triggeredByUserId], references: [id])
-  createdAt          DateTime               @default(now())
-
-  @@index([campaignId, createdAt])
-}
-
-enum NotificationSeverity {
-  INFO
-  WARNING
-  CRITICAL
-}
-
-model Notification {
-  id         String               @id @default(uuid())
-  businessId String
-  business   Business             @relation(fields: [businessId], references: [id])
-  type       String
-  message    String
-  severity   NotificationSeverity @default(INFO)
-  readAt     DateTime?
-  createdAt  DateTime             @default(now())
-
-  @@index([businessId, createdAt])
-}
-
-// ---------- Billing ----------
-
-enum SubscriptionStatus {
-  ACTIVE
-  PAST_DUE
-  CANCELED
-  TRIALING
-}
-
-model Subscription {
-  id                   String             @id @default(uuid())
-  organizationId       String             @unique
-  organization         Organization       @relation(fields: [organizationId], references: [id])
-  stripeCustomerId     String
-  stripeSubscriptionId String
-  plan                 String
-  status               SubscriptionStatus @default(TRIALING)
-  currentPeriodStart   DateTime
-  currentPeriodEnd     DateTime
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
-}
-
-/// One row per billing period per business — the source of truth reported to
-/// Stripe as metered usage (ad spend managed) before an invoice is cut.
-model UsageRecord {
-  id                  String   @id @default(uuid())
-  businessId          String
-  business            Business @relation(fields: [businessId], references: [id])
-  periodStart         DateTime
-  periodEnd           DateTime
-  adSpendCents        Int
-  platformFeeCents    Int
-  reportedToStripe    Boolean  @default(false)
-  stripeUsageRecordId String?
-  createdAt           DateTime @default(now())
-
-  @@index([businessId, periodStart])
+  @@index([campaignId])
+  @@map("metrics")
 }
 
 model Invoice {
-  id               String   @id @default(uuid())
-  businessId       String
-  business         Business @relation(fields: [businessId], references: [id])
-  stripeInvoiceId  String?
-  periodStart      DateTime
-  periodEnd        DateTime
-  adSpendCents     Int
-  platformFeeCents Int
-  totalCents       Int
-  status           String   @default("draft")
-  createdAt        DateTime @default(now())
+  id         String   @id
+  businessId String
+  data       Json
+  createdAt  DateTime @default(now())
 
   @@index([businessId])
+  @@map("invoices")
+}
+
+model Creative {
+  id         String   @id
+  businessId String?
+  workspaceId String?
+  data       Json
+  createdAt  DateTime @default(now())
+
+  @@index([businessId])
+  @@index([workspaceId])
+  @@map("creatives")
+}
+
+model Asset {
+  id          String   @id
+  workspaceId String
+  data        Json
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("assets")
+}
+
+model Draft {
+  id          String   @id
+  workspaceId String
+  data        Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("drafts")
+}
+
+model Insight {
+  id          String   @id
+  workspaceId String
+  data        Json
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("insights")
+}
+
+model Integration {
+  id          String   @id
+  workspaceId String
+  platform    String
+  data        Json
+  updatedAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@index([workspaceId, platform])
+  @@map("integrations")
+}
+
+model Notification {
+  id          String   @id
+  workspaceId String
+  data        Json
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("notifications")
+}
+
+model SavedAudience {
+  id          String   @id
+  workspaceId String
+  data        Json
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("saved_audiences")
 }

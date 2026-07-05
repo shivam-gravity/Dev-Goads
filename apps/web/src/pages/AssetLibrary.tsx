@@ -1,16 +1,98 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, Asset } from "../api/client.js";
 import Reveal from "../components/Reveal.js";
 
-const FILE_TYPES = ["all", "image", "video", "logo", "template"] as const;
+const ITEM_TYPES = ["image", "video", "logo", "template"] as const;
+
+function Icon({ name, size = 16 }: { name: string; size?: number }) {
+  const common = {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none" as const,
+    stroke: "currentColor",
+    strokeWidth: 1.8,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+  switch (name) {
+    case "chevron":
+      return (
+        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 6l6 6-6 6" />
+        </svg>
+      );
+    case "calendar":
+      return (
+        <svg {...common}>
+          <rect x="3" y="4.5" width="18" height="16" rx="2" />
+          <line x1="3" y1="9.5" x2="21" y2="9.5" />
+          <line x1="8" y1="2.5" x2="8" y2="6.5" />
+          <line x1="16" y1="2.5" x2="16" y2="6.5" />
+        </svg>
+      );
+    case "arrow-right":
+      return (
+        <svg {...common}>
+          <line x1="5" y1="12" x2="19" y2="12" />
+          <polyline points="13 6 19 12 13 18" />
+        </svg>
+      );
+    case "chevron-down":
+      return (
+        <svg {...common}>
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      );
+    case "add":
+      return (
+        <svg {...common}>
+          <rect x="3" y="3" width="18" height="18" rx="4" />
+          <line x1="12" y1="8" x2="12" y2="16" />
+          <line x1="8" y1="12" x2="16" y2="12" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
+function EmptyCreativesIllustration() {
+  return (
+    <svg width="104" height="104" viewBox="0 0 104 104" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="52" cy="86" rx="34" ry="7" fill="#111827" />
+      <path
+        d="M40 86c-10-4-16-13-16-23 0-15 12-27 27-27s27 12 27 27"
+        stroke="#0f172a"
+        strokeWidth="2"
+        strokeLinecap="round"
+        fill="none"
+      />
+      <path
+        d="M46 74c-2-10 1-20 9-27 3-2.5 6.5-3.8 6.5-3.8"
+        stroke="#0f172a"
+        strokeWidth="2"
+        strokeLinecap="round"
+        fill="none"
+      />
+      <path
+        d="M60 42.5l3-3.2c1-1 2.7-1 3.7.1 1 1 .9 2.6-.1 3.6l-3.1 3.1-3.5-3.6z"
+        fill="#0f172a"
+      />
+      <circle cx="30" cy="30" r="2.4" fill="#c7c9d9" />
+      <path
+        d="M76 22l1.6 4 4 1.6-4 1.6-1.6 4-1.6-4-4-1.6 4-1.6z"
+        fill="#7033f5"
+      />
+    </svg>
+  );
+}
 
 export default function AssetLibrary({ businessId }: { businessId: string }) {
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [activeFilter, setActiveFilter] = useState<(typeof FILE_TYPES)[number]>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Upload Form State
   const [showUpload, setShowUpload] = useState(false);
   const [assetName, setAssetName] = useState("");
   const [assetUrl, setAssetUrl] = useState("");
@@ -18,10 +100,11 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
   const [assetTags, setAssetTags] = useState("");
   const [uploading, setUploading] = useState(false);
 
-  // Brand Configuration States
-  const [primaryColor, setPrimaryColor] = useState("#4f46e5");
-  const [secondaryColor, setSecondaryColor] = useState("#10b981");
-  const [fontFamily, setFontFamily] = useState("Inter, sans-serif");
+  const [uploadStart, setUploadStart] = useState("");
+  const [uploadEnd, setUploadEnd] = useState("");
+  const [lifetimeStart, setLifetimeStart] = useState("");
+  const [lifetimeEnd, setLifetimeEnd] = useState("");
+  const [itemFilter, setItemFilter] = useState("");
 
   const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
 
@@ -29,8 +112,7 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
     setLoading(true);
     setError(null);
     try {
-      const filterParam = activeFilter === "all" ? undefined : activeFilter;
-      const data = await api.listAssets(wsId, filterParam);
+      const data = await api.listAssets(wsId);
       setAssets(data);
     } catch {
       setError("Failed to fetch assets library.");
@@ -41,7 +123,7 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
 
   useEffect(() => {
     loadAssets();
-  }, [businessId, activeFilter]);
+  }, [businessId]);
 
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
@@ -67,137 +149,56 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
       setShowUpload(false);
       await loadAssets();
     } catch {
-      setError("Failed to add asset to library.");
+      setError("Failed to add creative to library.");
     } finally {
       setUploading(false);
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("Delete this asset from library?")) return;
+    if (!confirm("Delete this creative from library?")) return;
     try {
       await api.deleteAsset(id);
       await loadAssets();
     } catch {
-      setError("Failed to delete asset.");
+      setError("Failed to delete creative.");
     }
   }
 
+  const filteredAssets = useMemo(() => {
+    return assets.filter(a => {
+      if (itemFilter && a.type !== itemFilter) return false;
+      if (uploadStart && a.createdAt < uploadStart) return false;
+      if (uploadEnd && a.createdAt > `${uploadEnd}T23:59:59`) return false;
+      return true;
+    });
+  }, [assets, itemFilter, uploadStart, uploadEnd]);
+
   return (
-    <div className="asset-library">
-      <div className="page-header">
-        <div>
-          <h1>Asset Library</h1>
-          <p className="subtitle">Manage brand visual resources, copy templates, and track asset usage.</p>
-        </div>
-        <button className="btn btn-primary" onClick={() => setShowUpload(!showUpload)}>
-          {showUpload ? "Cancel Upload" : "+ Add Asset"}
-        </button>
+    <div className="dap-page creative-lib-page">
+      <div className="dap-breadcrumb">
+        <span>Creative Hub</span>
+        <Icon name="chevron" />
+        <span className="dap-breadcrumb-current">Creative Library</span>
       </div>
+
+      <div className="dap-tabs">
+        <button type="button" className="dap-tab active">All Creatives</button>
+      </div>
+
+      <button className="btn btn-primary creative-lib-add-btn" onClick={() => setShowUpload(!showUpload)}>
+        <Icon name="add" size={16} />
+        {showUpload ? "Cancel" : "Add Creative"}
+      </button>
 
       {error && <p className="error">{error}</p>}
 
-      {/* Brand Configuration Card */}
-      <section className="card mb-4">
-        <h2>🎨 Brand Style Kit</h2>
-        <p className="muted-text mt-1">Configure style parameters, approved messaging guidelines, and design directives to keep AI ad creatives on-brand.</p>
-        
-        <div className="brand-kit-grid mt-4">
-          <label>
-            Primary Brand Color
-            <div className="color-picker-row">
-              <input type="color" value={primaryColor} onChange={(e) => setPrimaryColor(e.target.value)} />
-              <span>{primaryColor}</span>
-            </div>
-          </label>
-          <label>
-            Secondary Brand Color
-            <div className="color-picker-row">
-              <input type="color" value={secondaryColor} onChange={(e) => setSecondaryColor(e.target.value)} />
-              <span>{secondaryColor}</span>
-            </div>
-          </label>
-          <label>
-            Primary Font Family
-            <select value={fontFamily} onChange={(e) => setFontFamily(e.target.value)}>
-              <option value="Inter, sans-serif">Inter (Modern Sans)</option>
-              <option value="'Outfit', sans-serif">Outfit (Premium Sans)</option>
-              <option value="system-ui, sans-serif">System UI</option>
-            </select>
-          </label>
-          <label>
-            Brand Voice &amp; Tone
-            <select defaultValue="professional">
-              <option value="professional">Professional / Authoritative</option>
-              <option value="casual">Casual / Friendly</option>
-              <option value="energetic">Energetic / Bold</option>
-              <option value="luxury">Luxury / Sophisticated</option>
-            </select>
-          </label>
-        </div>
-
-        {/* Logo variants */}
-        <div className="mt-4">
-          <span className="font-size-13 font-weight-600 block text-secondary mb-2">Logo Asset Variants</span>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "12px" }}>
-            {[
-              { type: "Horizontal Logo", spec: "250x60px PNG" },
-              { type: "Square Icon / Avatar", spec: "512x512px PNG" },
-              { type: "Light Background Logo", spec: "Vector SVG" },
-              { type: "Dark Background Logo", spec: "Vector SVG" }
-            ].map(v => (
-              <div key={v.type} style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px", background: "#f9fafb" }}>
-                <strong className="block font-size-12">{v.type}</strong>
-                <span className="muted-text font-size-11 block mt-1">{v.spec}</span>
-                <button className="btn btn-sm btn-secondary mt-2 w-full" onClick={() => alert("Upload dialog simulated.")}>Upload Asset</button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Approved Copywriting Blocks */}
-        <div className="mt-4">
-          <span className="font-size-13 font-weight-600 block text-secondary mb-2">Approved Copywriting &amp; Slogans</span>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-            <label>
-              Core Brand Tagline
-              <textarea
-                style={{ width: "100%", height: "60px", padding: "8px", border: "1px solid #e5e7eb", borderRadius: "8px", fontSize: "12px", outline: "none", resize: "none", marginTop: "4px" }}
-                defaultValue="Unlock high-efficiency campaign optimization with epsilon-greedy AI agents."
-              />
-            </label>
-            <label>
-              Value Proposition Copy
-              <textarea
-                style={{ width: "100%", height: "60px", padding: "8px", border: "1px solid #e5e7eb", borderRadius: "8px", fontSize: "12px", outline: "none", resize: "none", marginTop: "4px" }}
-                defaultValue="Stop wasting six hours a week adjusting ad budgets manually. AdsGo automates budget split and copy variations on autpilot."
-              />
-            </label>
-          </div>
-        </div>
-
-        {/* Design guidelines */}
-        <div className="mt-4" style={{ display: "flex", gap: "24px" }}>
-          <div>
-            <span className="font-size-12 font-weight-600 block text-secondary mb-1">Image Aspect Ratio Guidelines</span>
-            <span className="pill font-size-11" style={{ marginRight: "4px" }}>1:1 Square</span>
-            <span className="pill font-size-11" style={{ marginRight: "4px" }}>9:16 Stories</span>
-            <span className="pill font-size-11">16:9 Landscape</span>
-          </div>
-          <div>
-            <span className="font-size-12 font-weight-600 block text-secondary mb-1">Brand Creative Mood Direction</span>
-            <span className="status status-active" style={{ background: "rgba(112, 51, 245, 0.08)", color: "#7033f5", fontWeight: 700 }}>Minimalist &amp; Premium</span>
-          </div>
-        </div>
-      </section>
-
-      {/* Add Asset Form */}
       {showUpload && (
         <section className="card mb-4 creative-create-card">
-          <h2>Upload Brand Asset</h2>
+          <h2>Add Creative</h2>
           <form onSubmit={handleUpload} className="creative-form mt-3">
             <label>
-              Asset Name
+              Creative Name
               <input
                 type="text"
                 value={assetName}
@@ -207,7 +208,7 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
               />
             </label>
             <label>
-              Asset Image/Video URL
+              Creative Image/Video URL
               <input
                 type="url"
                 value={assetUrl}
@@ -217,8 +218,8 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
               />
             </label>
             <label>
-              Asset Type
-              <select value={assetType} onChange={(e) => setAssetType(e.target.value as any)}>
+              Item Type
+              <select value={assetType} onChange={(e) => setAssetType(e.target.value as Asset["type"])}>
                 <option value="image">Image</option>
                 <option value="video">Video</option>
                 <option value="logo">Logo</option>
@@ -235,41 +236,65 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
               />
             </label>
             <button className="btn btn-primary" type="submit" disabled={uploading}>
-              {uploading ? "Saving..." : "Save Asset"}
+              {uploading ? "Saving..." : "Save Creative"}
             </button>
           </form>
         </section>
       )}
 
-      {/* Filters */}
-      <div className="status-tabs">
-        {FILE_TYPES.map((t) => (
-          <button
-            key={t}
-            className={`status-tab ${activeFilter === t ? "active" : ""}`}
-            onClick={() => setActiveFilter(t)}
-          >
-            {t.toUpperCase()}
-          </button>
-        ))}
+      <div className="creative-lib-filters">
+        <div className="creative-lib-filter">
+          <span className="creative-lib-filter-label">Upload Date</span>
+          <div className="creative-lib-date-range">
+            <input type="date" value={uploadStart} onChange={(e) => setUploadStart(e.target.value)} aria-label="Upload date start" />
+            <Icon name="arrow-right" size={14} />
+            <input type="date" value={uploadEnd} onChange={(e) => setUploadEnd(e.target.value)} aria-label="Upload date end" />
+            <Icon name="calendar" size={16} />
+          </div>
+        </div>
+
+        <div className="creative-lib-filter">
+          <span className="creative-lib-filter-label">Limited Lifetime</span>
+          <div className="creative-lib-date-range">
+            <input type="date" value={lifetimeStart} onChange={(e) => setLifetimeStart(e.target.value)} aria-label="Limited lifetime start" />
+            <Icon name="arrow-right" size={14} />
+            <input type="date" value={lifetimeEnd} onChange={(e) => setLifetimeEnd(e.target.value)} aria-label="Limited lifetime end" />
+            <Icon name="calendar" size={16} />
+          </div>
+        </div>
+
+        <div className="creative-lib-filter">
+          <span className="creative-lib-filter-label">Item</span>
+          <div className="creative-lib-select">
+            <select value={itemFilter} onChange={(e) => setItemFilter(e.target.value)}>
+              <option value="">Please select</option>
+              {ITEM_TYPES.map(t => (
+                <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
+              ))}
+            </select>
+            <Icon name="chevron-down" size={16} />
+          </div>
+        </div>
       </div>
 
-      {/* Assets Grid */}
       {loading ? (
         <div className="campaigns-loading">
           {[1, 2].map(i => <div key={i} className="creative-asset-skeleton" />)}
         </div>
-      ) : assets.length === 0 ? (
-        <p className="muted-text mt-3">No assets found in library matching this filter.</p>
+      ) : filteredAssets.length === 0 ? (
+        <div className="creative-lib-empty">
+          <EmptyCreativesIllustration />
+          <p>No creatives found. Add creative</p>
+        </div>
       ) : (
         <Reveal>
           <div className="assets-grid-layout mt-3">
-            {assets.map((asset) => (
+            {filteredAssets.map((asset) => (
               <div key={asset.id} className="asset-grid-card">
                 <div className="asset-grid-preview">
                   {asset.type === "video" ? (
                     <div className="video-asset-mock">
-                      <span>📹 Video</span>
+                      <span>Video</span>
                     </div>
                   ) : (
                     <img src={asset.url} alt={asset.name} />

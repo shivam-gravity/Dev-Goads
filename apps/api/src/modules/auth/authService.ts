@@ -1,6 +1,6 @@
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import jwt from "jsonwebtoken";
-import { db } from "../../db/db.js";
+import { prisma } from "../../db/prisma.js";
 
 const JWT_SECRET = process.env.JWT_SECRET ?? "dev-secret-change-me";
 
@@ -8,8 +8,8 @@ export interface User {
   id: string;
   email: string;
   name: string;
-  avatar?: string;
-  googleId?: string;
+  avatar?: string | null;
+  googleId?: string | null;
   createdAt: string;
 }
 
@@ -25,51 +25,48 @@ function issueToken(userId: string, workspaceId?: string): string {
   return jwt.sign({ sub: userId, workspaceId }, JWT_SECRET, { expiresIn: "30d" });
 }
 
-export function getUserById(id: string): User | null {
-  const row = db.prepare("SELECT id, email, name, avatar, googleId, createdAt FROM users WHERE id = ?").get(id) as User | undefined;
-  return row ?? null;
+function toUser(row: { id: string; email: string; name: string; avatar: string | null; googleId: string | null; createdAt: Date }): User {
+  return { id: row.id, email: row.email, name: row.name, avatar: row.avatar, googleId: row.googleId, createdAt: row.createdAt.toISOString() };
 }
 
-export function getUserByEmail(email: string): (User & { passwordHash?: string }) | null {
-  const row = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
-  return row ?? null;
+export async function getUserById(id: string): Promise<User | null> {
+  const row = await prisma.user.findUnique({ where: { id } });
+  return row ? toUser(row) : null;
+}
+
+export async function getUserByEmail(email: string): Promise<(User & { passwordHash?: string | null }) | null> {
+  const row = await prisma.user.findUnique({ where: { email } });
+  return row ? { ...toUser(row), passwordHash: row.passwordHash } : null;
 }
 
 export interface RegisterInput { email: string; password: string; name: string; }
 export interface AuthResult { user: User; token: string; workspaceId?: string; }
 
-export function register(input: RegisterInput): AuthResult {
-  const existing = getUserByEmail(input.email);
+export async function register(input: RegisterInput): Promise<AuthResult> {
+  const existing = await getUserByEmail(input.email);
   if (existing) throw new Error("Email already in use");
 
   const salt = generateSalt();
   const passwordHash = `${salt}:${hashPassword(input.password, salt)}`;
-  const user: User = {
-    id: randomUUID(),
-    email: input.email.toLowerCase().trim(),
-    name: input.name.trim(),
-    createdAt: new Date().toISOString(),
-  };
-
-  db.prepare("INSERT INTO users (id, email, passwordHash, name, avatar, googleId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
-    user.id, user.email, passwordHash, user.name, null, null, user.createdAt
-  );
-
-  // Create default workspace
+  const id = randomUUID();
+  const email = input.email.toLowerCase().trim();
+  const name = input.name.trim();
+  const createdAt = new Date();
   const workspaceId = randomUUID();
-  db.prepare("INSERT INTO workspaces (id, name, ownerId, plan, createdAt) VALUES (?, ?, ?, ?, ?)").run(
-    workspaceId, `${user.name}'s Workspace`, user.id, "starter", user.createdAt
-  );
-  db.prepare("INSERT INTO workspace_members (id, workspaceId, userId, role, invitedAt, joinedAt) VALUES (?, ?, ?, ?, ?, ?)").run(
-    randomUUID(), workspaceId, user.id, "owner", user.createdAt, user.createdAt
-  );
 
+  await prisma.$transaction([
+    prisma.user.create({ data: { id, email, passwordHash, name, createdAt } }),
+    prisma.workspace.create({ data: { id: workspaceId, name: `${name}'s Workspace`, ownerId: id, plan: "starter", createdAt } }),
+    prisma.workspaceMember.create({ data: { id: randomUUID(), workspaceId, userId: id, role: "owner", invitedAt: createdAt, joinedAt: createdAt } }),
+  ]);
+
+  const user: User = { id, email, name, createdAt: createdAt.toISOString() };
   const token = issueToken(user.id, workspaceId);
   return { user, token, workspaceId };
 }
 
-export function login(email: string, password: string): AuthResult {
-  const row = getUserByEmail(email) as any;
+export async function login(email: string, password: string): Promise<AuthResult> {
+  const row = await getUserByEmail(email);
   if (!row) throw new Error("Invalid email or password");
 
   if (row.passwordHash) {
@@ -79,38 +76,38 @@ export function login(email: string, password: string): AuthResult {
 
   const user: User = { id: row.id, email: row.email, name: row.name, avatar: row.avatar, createdAt: row.createdAt };
 
-  // Get primary workspace
-  const member = db.prepare("SELECT workspaceId FROM workspace_members WHERE userId = ? ORDER BY joinedAt ASC LIMIT 1").get(user.id) as { workspaceId: string } | undefined;
+  const member = await prisma.workspaceMember.findFirst({ where: { userId: user.id }, orderBy: { joinedAt: "asc" } });
   const workspaceId = member?.workspaceId;
   const token = issueToken(user.id, workspaceId);
   return { user, token, workspaceId };
 }
 
-export function googleAuth(name: string, email: string, googleId: string): AuthResult {
-  let row = db.prepare("SELECT * FROM users WHERE googleId = ? OR email = ?").get(googleId, email.toLowerCase()) as any;
+export async function googleAuth(name: string, email: string, googleId: string): Promise<AuthResult> {
+  const normalizedEmail = email.toLowerCase();
+  let row = await prisma.user.findFirst({ where: { OR: [{ googleId }, { email: normalizedEmail }] } });
 
   if (!row) {
-    const user: User = { id: randomUUID(), email: email.toLowerCase(), name, createdAt: new Date().toISOString() };
-    db.prepare("INSERT INTO users (id, email, passwordHash, name, avatar, googleId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
-      user.id, user.email, null, user.name, null, googleId, user.createdAt
-    );
+    const id = randomUUID();
+    const createdAt = new Date();
     const workspaceId = randomUUID();
-    db.prepare("INSERT INTO workspaces (id, name, ownerId, plan, createdAt) VALUES (?, ?, ?, ?, ?)").run(
-      workspaceId, `${user.name}'s Workspace`, user.id, "starter", user.createdAt
-    );
-    db.prepare("INSERT INTO workspace_members (id, workspaceId, userId, role, invitedAt, joinedAt) VALUES (?, ?, ?, ?, ?, ?)").run(
-      randomUUID(), workspaceId, user.id, "owner", user.createdAt, user.createdAt
-    );
+
+    await prisma.$transaction([
+      prisma.user.create({ data: { id, email: normalizedEmail, name, googleId, createdAt } }),
+      prisma.workspace.create({ data: { id: workspaceId, name: `${name}'s Workspace`, ownerId: id, plan: "starter", createdAt } }),
+      prisma.workspaceMember.create({ data: { id: randomUUID(), workspaceId, userId: id, role: "owner", invitedAt: createdAt, joinedAt: createdAt } }),
+    ]);
+
+    const user: User = { id, email: normalizedEmail, name, createdAt: createdAt.toISOString() };
     const token = issueToken(user.id, workspaceId);
     return { user, token, workspaceId };
   }
 
   if (!row.googleId) {
-    db.prepare("UPDATE users SET googleId = ? WHERE id = ?").run(googleId, row.id);
+    row = await prisma.user.update({ where: { id: row.id }, data: { googleId } });
   }
 
-  const user: User = { id: row.id, email: row.email, name: row.name, avatar: row.avatar, createdAt: row.createdAt };
-  const member = db.prepare("SELECT workspaceId FROM workspace_members WHERE userId = ? ORDER BY joinedAt ASC LIMIT 1").get(user.id) as { workspaceId: string } | undefined;
+  const user = toUser(row);
+  const member = await prisma.workspaceMember.findFirst({ where: { userId: user.id }, orderBy: { joinedAt: "asc" } });
   const token = issueToken(user.id, member?.workspaceId);
   return { user, token, workspaceId: member?.workspaceId };
 }

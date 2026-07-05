@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { db } from "../../db/db.js";
+import { prisma } from "../../db/prisma.js";
 
 export interface Notification {
   id: string;
@@ -13,47 +13,51 @@ export interface Notification {
   createdAt: string;
 }
 
-function save(n: Notification) {
-  db.prepare("INSERT OR REPLACE INTO notifications (id, workspaceId, data, createdAt) VALUES (?, ?, ?, ?)").run(
-    n.id, n.workspaceId, JSON.stringify(n), n.createdAt
-  );
+async function save(n: Notification): Promise<void> {
+  await prisma.notification.upsert({
+    where: { id: n.id },
+    create: { id: n.id, workspaceId: n.workspaceId, data: n as any, createdAt: new Date(n.createdAt) },
+    update: { data: n as any },
+  });
 }
 
-export function createNotification(workspaceId: string, input: Omit<Notification, "id" | "workspaceId" | "read" | "createdAt">): Notification {
+export async function createNotification(workspaceId: string, input: Omit<Notification, "id" | "workspaceId" | "read" | "createdAt">): Promise<Notification> {
   const n: Notification = { id: randomUUID(), workspaceId, read: false, createdAt: new Date().toISOString(), ...input };
-  save(n);
+  await save(n);
   return n;
 }
 
-export function listNotifications(workspaceId: string): Notification[] {
-  const rows = db.prepare("SELECT data FROM notifications WHERE workspaceId = ? ORDER BY createdAt DESC LIMIT 50").all(workspaceId) as { data: string }[];
-  return rows.map((r) => JSON.parse(r.data));
+export async function listNotifications(workspaceId: string): Promise<Notification[]> {
+  const rows = await prisma.notification.findMany({ where: { workspaceId }, orderBy: { createdAt: "desc" }, take: 50 });
+  return rows.map((r) => r.data as unknown as Notification);
 }
 
-export function markRead(id: string): Notification {
-  const row = db.prepare("SELECT data FROM notifications WHERE id = ?").get(id) as { data: string } | undefined;
+export async function markRead(id: string): Promise<Notification> {
+  const row = await prisma.notification.findUnique({ where: { id } });
   if (!row) throw new Error("Notification not found");
-  const n: Notification = { ...JSON.parse(row.data), read: true };
-  save(n);
+  const n: Notification = { ...(row.data as unknown as Notification), read: true };
+  await save(n);
   return n;
 }
 
-export function markAllRead(workspaceId: string): void {
-  const rows = db.prepare("SELECT data FROM notifications WHERE workspaceId = ? AND json_extract(data,'$.read') = 0").all(workspaceId) as { data: string }[];
+export async function markAllRead(workspaceId: string): Promise<void> {
+  // `data` stays a JSON blob column, so the SQLite-era `json_extract` filter
+  // has no Postgres equivalent here — filter unread rows in JS instead.
+  const rows = await prisma.notification.findMany({ where: { workspaceId } });
   for (const row of rows) {
-    const n: Notification = { ...JSON.parse(row.data), read: true };
-    save(n);
+    const n = row.data as unknown as Notification;
+    if (!n.read) await save({ ...n, read: true });
   }
 }
 
-export function unreadCount(workspaceId: string): number {
-  const rows = listNotifications(workspaceId);
+export async function unreadCount(workspaceId: string): Promise<number> {
+  const rows = await listNotifications(workspaceId);
   return rows.filter((n) => !n.read).length;
 }
 
 // Seed demo notifications for a workspace
-export function seedDemoNotifications(workspaceId: string) {
-  const existing = listNotifications(workspaceId);
+export async function seedDemoNotifications(workspaceId: string): Promise<void> {
+  const existing = await listNotifications(workspaceId);
   if (existing.length > 0) return;
 
   const demos = [
@@ -64,6 +68,6 @@ export function seedDemoNotifications(workspaceId: string) {
   ];
 
   for (const d of demos) {
-    createNotification(workspaceId, d);
+    await createNotification(workspaceId, d);
   }
 }

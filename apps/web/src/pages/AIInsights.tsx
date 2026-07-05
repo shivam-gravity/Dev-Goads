@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { api, Insight } from "../api/client.js";
+import { FormEvent, useEffect, useState } from "react";
+import { api, AudienceAnalysis, Insight, ProductAnalysis, ScrapedSite } from "../api/client.js";
 import Reveal from "../components/Reveal.js";
+import { ClockIcon, GlobeIcon, SparkleIcon, XIcon } from "../components/icons.js";
 
 const SEVERITY_COLORS = {
   high: "var(--danger)",
@@ -78,6 +79,14 @@ export default function AIInsights({ businessId }: { businessId: string }) {
   const [activeTab, setActiveTab] = useState<"insights" | "kb">("insights");
   const [searchQuery, setSearchQuery] = useState("");
 
+  // Brand Profile analysis modal state
+  const [brandModalOpen, setBrandModalOpen] = useState(false);
+  const [brandUrl, setBrandUrl] = useState("");
+  const [brandStep, setBrandStep] = useState<"form" | "analyzing-product" | "analyzing-audience" | "result">("form");
+  const [brandError, setBrandError] = useState<string | null>(null);
+  const [brandProduct, setBrandProduct] = useState<ProductAnalysis | null>(null);
+  const [brandAudience, setBrandAudience] = useState<AudienceAnalysis | null>(null);
+
   const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
 
   async function loadInsights() {
@@ -131,6 +140,37 @@ export default function AIInsights({ businessId }: { businessId: string }) {
     }
   }
 
+  function openBrandModal() {
+    setBrandUrl("");
+    setBrandStep("form");
+    setBrandError(null);
+    setBrandProduct(null);
+    setBrandAudience(null);
+    setBrandModalOpen(true);
+  }
+
+  function closeBrandModal() {
+    setBrandModalOpen(false);
+  }
+
+  async function handleStartAnalysis(e: FormEvent) {
+    e.preventDefault();
+    setBrandError(null);
+    setBrandStep("analyzing-product");
+    try {
+      const scraped: ScrapedSite = await api.scrapeWebsite(brandUrl);
+      const product = await api.analyzeProduct(scraped);
+      setBrandProduct(product);
+      setBrandStep("analyzing-audience");
+      const audience = await api.analyzeAudience(scraped, product);
+      setBrandAudience(audience);
+      setBrandStep("result");
+    } catch (err) {
+      setBrandError(err instanceof Error ? err.message : "Couldn't analyze that website");
+      setBrandStep("form");
+    }
+  }
+
   // Filter Knowledge Base items
   const filteredKb = KNOWLEDGE_BASE_ITEMS.filter(item =>
     item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -146,6 +186,9 @@ export default function AIInsights({ businessId }: { businessId: string }) {
           <h1>AI Knowledge &amp; Recommendations</h1>
           <p className="subtitle">Review real-time budget diagnostics and browse our historical playbook of winning ad variants.</p>
         </div>
+        <button type="button" className="btn btn-primary" onClick={openBrandModal}>
+          <SparkleIcon /> Create Brand Profile
+        </button>
       </div>
 
       {error && <p className="error">{error}</p>}
@@ -310,6 +353,88 @@ export default function AIInsights({ businessId }: { businessId: string }) {
               )}
             </div>
           </Reveal>
+        </div>
+      )}
+
+      {brandModalOpen && (
+        <div className="brand-modal-overlay" onClick={closeBrandModal}>
+          <div className="brand-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="brand-modal-header">
+              <div className="brand-modal-header-left">
+                <span className="brand-modal-icon"><SparkleIcon /></span>
+                <h2>Create Brand Profile</h2>
+              </div>
+              <button type="button" className="brand-modal-close" onClick={closeBrandModal} aria-label="Close">
+                <XIcon />
+              </button>
+            </div>
+
+            <div className="brand-modal-body">
+              {brandStep === "form" && (
+                <form onSubmit={handleStartAnalysis}>
+                  <div className="brand-modal-banner">
+                    <ClockIcon />
+                    <span>2-3 min for AI to complete brand profile analysis</span>
+                  </div>
+
+                  {brandError && <p className="error mt-3">{brandError}</p>}
+
+                  <label className="brand-modal-field-label mt-4">
+                    <GlobeIcon /> Brand Url
+                  </label>
+                  <input
+                    type="url"
+                    className="brand-modal-input"
+                    value={brandUrl}
+                    onChange={(e) => setBrandUrl(e.target.value)}
+                    placeholder="e.g. https://www.adsgo.ai"
+                    required
+                  />
+
+                  <button type="submit" className="brand-modal-submit">
+                    <SparkleIcon /> Start Analysis
+                  </button>
+                </form>
+              )}
+
+              {(brandStep === "analyzing-product" || brandStep === "analyzing-audience") && (
+                <div className="brand-modal-loading">
+                  <div className="onboarding-spinner" />
+                  <p>
+                    {brandStep === "analyzing-product"
+                      ? "Reading your website and identifying what you offer…"
+                      : "Working out who's likely to buy this…"}
+                  </p>
+                </div>
+              )}
+
+              {brandStep === "result" && brandProduct && brandAudience && (
+                <div className="brand-modal-result">
+                  <span className="pill">{brandProduct.category}</span>
+                  <h3 className="mt-2">{brandProduct.productName}</h3>
+                  <p className="muted-text">{brandProduct.summary}</p>
+                  <p className="onboarding-value-prop">{brandProduct.valueProposition}</p>
+
+                  <h4>Key features spotted</h4>
+                  <ul>
+                    {brandProduct.keyFeatures.map((f) => <li key={f}>{f}</li>)}
+                  </ul>
+
+                  <h4>Primary audience</h4>
+                  <p>{brandAudience.primaryAudience}</p>
+
+                  <h4>Pain points</h4>
+                  <ul>
+                    {brandAudience.painPoints.map((p) => <li key={p}>{p}</li>)}
+                  </ul>
+
+                  <button type="button" className="brand-modal-submit" onClick={closeBrandModal}>
+                    Done
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -1,282 +1,229 @@
 import { useState } from "react";
-import { api, CreativeVariation } from "../api/client.js";
-import Reveal from "../components/Reveal.js";
+import { SparkleIcon } from "../components/icons.js";
+import AdsGoHeader from "../components/AdsGoHeader.js";
 
-const TEMPLATES = [
-  { id: "meta-feed", name: "Meta Feed Ad", platform: "meta", format: "1:1 Square" },
-  { id: "meta-story", name: "Meta Story Ad", platform: "meta", format: "9:16 Vertical" },
-  { id: "google-search", name: "Google Text Ad", platform: "google", format: "Text-Only" },
-  { id: "tiktok-video", name: "TikTok Video Ad", platform: "tiktok", format: "9:16 Video" }
+const SELECT_TYPES = [
+  { value: "upload", label: "User upload" },
+  { value: "product-url", label: "Product URL" },
+  { value: "text-prompt", label: "Text prompt" },
 ];
 
-export default function CreativeStudio({ businessId }: { businessId: string }) {
-  const [headline, setHeadline] = useState("");
-  const [body, setBody] = useState("");
-  const [cta, setCta] = useState("Learn More");
-  
-  // AI Variation states
-  const [variations, setVariations] = useState<CreativeVariation[]>([]);
-  const [generating, setGenerating] = useState(false);
-  const [imageGenerating, setImageGenerating] = useState(false);
-  const [imageUrl, setImageUrl] = useState("https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=800&q=80");
-  const [error, setError] = useState<string | null>(null);
-  const [activeTemplate, setActiveTemplate] = useState("meta-feed");
+const IMAGE_POOL = [
+  "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=800&q=80",
+  "https://images.unsplash.com/photo-1542744094-3a31f103e35f?w=800&q=80",
+  "https://images.unsplash.com/photo-1551434678-e076c223a692?w=800&q=80",
+  "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=800&q=80",
+  "https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=800&q=80",
+];
 
-  async function handleGenerateCopy() {
-    if (!headline || !body) {
-      setError("Please input initial headline and body to create variations.");
+function RegenerateIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="23 4 23 10 17 10" />
+      <polyline points="1 20 1 14 7 14" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+    </svg>
+  );
+}
+
+interface GeneratedResult {
+  id: string;
+  imageUrl: string;
+  ratio: string;
+  createdAt: number;
+  regenerating: boolean;
+}
+
+function randomImage() {
+  return IMAGE_POOL[Math.floor(Math.random() * IMAGE_POOL.length)];
+}
+
+function formatTimestamp(ts: number) {
+  return new Date(ts).toLocaleString(undefined, {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+export default function CreativeStudio({ businessId }: { businessId: string }) {
+  const [selectType, setSelectType] = useState(SELECT_TYPES[0].value);
+  const [productUrl, setProductUrl] = useState("");
+  const [fetchingImages, setFetchingImages] = useState(false);
+  const [fetchedCount, setFetchedCount] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [freeImagesLeft, setFreeImagesLeft] = useState(8);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<GeneratedResult[]>([]);
+
+  async function handleFetchImages() {
+    if (!productUrl.trim()) return;
+    setError(null);
+    setFetchingImages(true);
+    setFetchedCount(null);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      setFetchedCount(Math.floor(Math.random() * 3) + 2);
+    } finally {
+      setFetchingImages(false);
+    }
+  }
+
+  async function handleSubmit() {
+    if (!productUrl.trim()) {
+      setError("Please enter a product URL to continue.");
       return;
     }
-    setGenerating(true);
+    if (freeImagesLeft <= 0) {
+      setError("You've used all your free images.");
+      return;
+    }
     setError(null);
+    setSubmitting(true);
     try {
-      const vars = await api.generateCreativeVariations({ headline, body, callToAction: cta });
-      setVariations(vars);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate variations");
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const next: GeneratedResult = {
+        id: `${Date.now()}`,
+        imageUrl: randomImage(),
+        ratio: "1:1 (1024*1024)",
+        createdAt: Date.now(),
+        regenerating: false,
+      };
+      setResults((prev) => [next, ...prev]);
+      setFreeImagesLeft((prev) => Math.max(0, prev - 1));
     } finally {
-      setGenerating(false);
+      setSubmitting(false);
     }
   }
 
-  async function handleGenerateImage() {
-    setImageGenerating(true);
+  async function handleRegenerate(id: string) {
+    if (freeImagesLeft <= 0) {
+      setError("You've used all your free images.");
+      return;
+    }
     setError(null);
-    try {
-      // Simulate AI generation delay
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      
-      const pool = [
-        "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=800&q=80",
-        "https://images.unsplash.com/photo-1542744094-3a31f103e35f?w=800&q=80",
-        "https://images.unsplash.com/photo-1551434678-e076c223a692?w=800&q=80",
-        "https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=800&q=80"
-      ];
-      const randomImage = pool[Math.floor(Math.random() * pool.length)];
-      setImageUrl(randomImage);
-
-      // Save generated image as asset in library
-      const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
-      await api.createAsset(wsId, {
-        name: `AI Generated Ad Creative - ${Date.now()}`,
-        type: "image",
-        url: randomImage,
-        thumbnailUrl: randomImage,
-        size: 145000,
-        mimeType: "image/jpeg",
-        tags: ["ai-generated", "creative-studio"]
-      });
-    } catch (err) {
-      setError("Failed to generate AI image. Please try again.");
-    } finally {
-      setImageGenerating(false);
-    }
+    setResults((prev) => prev.map((r) => (r.id === id ? { ...r, regenerating: true } : r)));
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    setResults((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, imageUrl: randomImage(), regenerating: false, createdAt: Date.now() } : r))
+    );
+    setFreeImagesLeft((prev) => Math.max(0, prev - 1));
   }
-
-  async function handleSaveVariation(v: CreativeVariation) {
-    setError(null);
-    try {
-      await api.createCreative(businessId, {
-        headline: v.headline,
-        body: v.body,
-        callToAction: v.callToAction,
-        format: "image",
-        tags: ["ai-generated", v.angle]
-      });
-      alert("Creative saved to library!");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save creative");
-    }
-  }
-
-  const selectedTemplateObj = TEMPLATES.find(t => t.id === activeTemplate) || TEMPLATES[0];
 
   return (
-    <div className="creative-studio">
-      <div className="page-header">
-        <div>
-          <h1>AI Creative Studio</h1>
-          <p className="subtitle">Craft, iterate, and preview high-performance ad copy and visuals using AI.</p>
-        </div>
+    <div className="ai-generate-page" data-business-id={businessId}>
+      <AdsGoHeader breadcrumb={["Creative Hub", "AI Generate"]} />
+
+      <div className="ai-generate-toolbar">
+        <span className="ai-generate-free-badge">
+          Free <strong>{freeImagesLeft}</strong> images
+          <span className="ai-generate-info-icon" title="Every generation or regeneration uses one free image credit.">?</span>
+        </span>
+        <a className="how-to-use-link" href="#" onClick={(e) => e.preventDefault()}>
+          <span className="how-to-use-icon" aria-hidden="true">📖</span>
+          How to use?
+        </a>
       </div>
 
-      {error && <p className="error">{error}</p>}
+      <div className="ai-generate-layout">
+        <section className="ai-generate-form gen-card">
+          <label className="ai-generate-field">
+            <span className="ai-generate-field-label">Select Type</span>
+            <select
+              className="ai-generate-select"
+              value={selectType}
+              onChange={(e) => setSelectType(e.target.value)}
+            >
+              {SELECT_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+          </label>
 
-      <div className="creative-studio-layout">
-        {/* Left Control Panel */}
-        <div className="studio-controls flex-col gap-4">
-          <section className="card">
-            <h2>1. Base Creative</h2>
-            <div className="wizard-form mt-3">
-              <label>
-                Headline / Hook
-                <input
-                  type="text"
-                  value={headline}
-                  onChange={(e) => setHeadline(e.target.value)}
-                  placeholder="e.g. Scale your startup faster"
-                  maxLength={100}
-                />
-              </label>
-              <label>
-                Ad Body Text
-                <textarea
-                  value={body}
-                  onChange={(e) => setBody(e.target.value)}
-                  placeholder="e.g. Try our automatic budgeting tool..."
-                  maxLength={500}
-                  rows={3}
-                />
-              </label>
-              <label>
-                Call to Action
-                <select value={cta} onChange={(e) => setCta(e.target.value)}>
-                  <option value="Learn More">Learn More</option>
-                  <option value="Shop Now">Shop Now</option>
-                  <option value="Sign Up">Sign Up</option>
-                  <option value="Get Quote">Get Quote</option>
-                </select>
-              </label>
-
-              <div className="button-group-row mt-3">
-                <button
-                  className="btn btn-secondary flex-1"
-                  onClick={handleGenerateCopy}
-                  disabled={generating}
-                >
-                  {generating ? "Generating..." : "✨ AI Copy Variations"}
-                </button>
-                <button
-                  className="btn btn-secondary flex-1"
-                  onClick={handleGenerateImage}
-                  disabled={imageGenerating}
-                >
-                  {imageGenerating ? "Generating..." : "🖼️ AI Image Generator"}
-                </button>
-              </div>
+          <label className="ai-generate-field">
+            <span className="ai-generate-field-label">
+              <span className="adsgo-required">*</span> Product URL
+              <span className="ai-generate-info-icon" title="Paste a link to the product page you want to advertise.">i</span>
+            </span>
+            <div className="ai-generate-url-row">
+              <input
+                type="text"
+                className="ai-generate-url-input"
+                placeholder="Please enter product URL"
+                value={productUrl}
+                onChange={(e) => { setProductUrl(e.target.value); setFetchedCount(null); }}
+              />
+              <button
+                type="button"
+                className="btn btn-secondary ai-generate-fetch-btn"
+                onClick={handleFetchImages}
+                disabled={!productUrl.trim() || fetchingImages}
+              >
+                {fetchingImages ? "Fetching…" : "Fetch Images"}
+              </button>
             </div>
-          </section>
+            {fetchedCount !== null && (
+              <span className="ai-generate-fetch-note">Found {fetchedCount} images on this page.</span>
+            )}
+          </label>
 
-          {/* AI Variations Panel */}
-          {variations.length > 0 && (
-            <Reveal>
-              <section className="card">
-                <h2>AI Variations</h2>
-                <div className="studio-variations-list mt-3">
-                  {variations.map((v, i) => (
-                    <div key={i} className="variation-item-inline">
-                      <span className="badge-small">{v.angle}</span>
-                      <h4>{v.headline}</h4>
-                      <p>{v.body}</p>
-                      <div className="button-group-row justify-between mt-2">
-                        <button
-                          className="btn btn-sm btn-secondary"
-                          onClick={() => {
-                            setHeadline(v.headline);
-                            setBody(v.body);
-                            setCta(v.callToAction);
-                          }}
-                        >
-                          Use for Preview
-                        </button>
-                        <button
-                          className="btn btn-sm btn-primary"
-                          onClick={() => handleSaveVariation(v)}
-                        >
-                          Save to Library
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </Reveal>
+          {error && <p className="error">{error}</p>}
+
+          <button
+            type="button"
+            className="btn btn-primary ai-generate-submit-btn"
+            onClick={handleSubmit}
+            disabled={submitting || freeImagesLeft <= 0}
+          >
+            {submitting ? "Generating…" : freeImagesLeft <= 0 ? "No free images left" : "Submit Now"}
+          </button>
+        </section>
+
+        <div className="ai-generate-results-feed">
+          {results.length === 0 && (
+            <div className="ai-generate-empty empty-state">
+              <span className="empty-icon" aria-hidden="true">✨</span>
+              <p>Your AI-generated creatives will show up here after you submit a product URL.</p>
+            </div>
           )}
-        </div>
 
-        {/* Right Preview Panel */}
-        <div className="studio-preview-panel">
-          <section className="card">
-            <div className="card-header">
-              <h2>2. Live Ad Preview</h2>
-              <div className="template-picker-row">
-                {TEMPLATES.map(t => (
-                  <button
-                    key={t.id}
-                    className={`btn btn-sm ${activeTemplate === t.id ? "btn-primary" : "btn-secondary"}`}
-                    onClick={() => setActiveTemplate(t.id)}
-                  >
-                    {t.name}
-                  </button>
-                ))}
+          {results.map((r) => (
+            <section key={r.id} className="ai-generate-result-card gen-card">
+              <div className="ai-generate-result-header">
+                <span className="ai-generate-result-avatar" aria-hidden="true">
+                  <SparkleIcon />
+                </span>
+                <div className="ai-generate-result-meta">
+                  <strong>AdsGo Creative Expert</strong>
+                  <span>{r.ratio}</span>
+                </div>
+                <span className="ai-generate-result-timestamp">{formatTimestamp(r.createdAt)}</span>
               </div>
-            </div>
 
-            <div className="ad-preview-container-box mt-4">
-              {selectedTemplateObj.platform === "meta" && (
-                <div className={`ad-preview-card-meta ${activeTemplate === "meta-story" ? "meta-story-format" : ""}`}>
-                  <div className="ad-preview-header">
-                    <div className="ad-preview-avatar">✨</div>
-                    <div>
-                      <strong>AdGo Creative</strong>
-                      <span>Sponsored • Instagram &amp; Facebook</span>
-                    </div>
+              <div className="ai-generate-result-image-wrap">
+                {r.regenerating ? (
+                  <div className="image-loading-skeleton">
+                    <div className="onboarding-spinner" />
+                    <span>Generating custom asset…</span>
                   </div>
-                  <p className="ad-preview-body">{body || "Ad copy body text goes here..."}</p>
-                  
-                  <div className="ad-preview-media">
-                    {imageGenerating ? (
-                      <div className="image-loading-skeleton">
-                        <div className="onboarding-spinner" />
-                        <span>Generating custom asset...</span>
-                      </div>
-                    ) : (
-                      <img src={imageUrl} alt="Ad Visual" />
-                    )}
-                  </div>
+                ) : (
+                  <img src={r.imageUrl} alt="AI generated creative" />
+                )}
+              </div>
 
-                  <div className="ad-preview-footer">
-                    <div>
-                      <span className="ad-preview-domain">WWW.ADGO.IO</span>
-                      <strong>{headline || "Ad headline goes here..."}</strong>
-                    </div>
-                    <span className="btn btn-sm btn-secondary">{cta}</span>
-                  </div>
-                </div>
-              )}
-
-              {selectedTemplateObj.platform === "google" && (
-                <div className="ad-preview-card-google">
-                  <div className="google-ad-badge">Ad</div>
-                  <span className="google-url">https://www.adgo.io</span>
-                  <h3 className="google-headline">
-                    {headline || "Ad Headline Goes Here"} | Maximize Your Growth
-                  </h3>
-                  <p className="google-description">
-                    {body || "This is a mockup description text of your search campaign. Highly optimized keywords will deliver direct clicks."}
-                  </p>
-                </div>
-              )}
-
-              {selectedTemplateObj.platform === "tiktok" && (
-                <div className="ad-preview-card-tiktok">
-                  <div className="tiktok-video-mock">
-                    <img src={imageUrl} alt="TikTok Background Mock" className="tiktok-video-bg" />
-                    <div className="tiktok-overlay">
-                      <div className="tiktok-user-info">
-                        <strong>@adgo_studio</strong>
-                        <p>{body || "Short body copy fits best for video ad overlays."}</p>
-                      </div>
-                      <div className="tiktok-cta-bar">
-                        <span>{headline || "Headline"}</span>
-                        <button className="btn btn-sm btn-primary">{cta}</button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </section>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm ai-generate-regenerate-btn"
+                onClick={() => handleRegenerate(r.id)}
+                disabled={r.regenerating}
+              >
+                <RegenerateIcon />
+                Regenerate
+              </button>
+            </section>
+          ))}
         </div>
       </div>
     </div>

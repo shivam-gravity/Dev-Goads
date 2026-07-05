@@ -56,22 +56,40 @@ export interface Campaign { id: string; businessId: string; strategyId: string; 
 export interface NormalizedPerformance { campaignId: string; variantId: string; network: "meta" | "google"; impressions: number; clicks: number; conversions: number; spendCents: number; ctr: number; cpaCents: number | null; conversionRate: number; }
 export interface OptimizationDecision { campaignId: string; chosenVariantId: string; action: string; reason: string; decidedAt: string; }
 export interface Invoice { id: string; businessId: string; periodStart: string; periodEnd: string; adSpendCents: number; platformFeeCents: number; totalCents: number; createdAt: string; }
-export interface ScrapedSite { url: string; title: string; description: string; excerpt: string; }
+export interface ScrapedSite { url: string; title: string; description: string; excerpt: string; images: string[]; crawledPages: string[]; }
 export interface ProductAnalysis { productName: string; category: string; summary: string; valueProposition: string; keyFeatures: string[]; }
 export interface AudienceAnalysis { primaryAudience: string; segments: { name: string; description: string }[]; painPoints: string[]; buyingMotivations: string[]; }
+export interface DeepResearchResult { site: ScrapedSite; product: ProductAnalysis; audience: AudienceAnalysis; }
 export interface CreativeAsset { id: string; businessId: string; headline: string; body: string; callToAction: string; format: "text" | "image" | "video"; tags: string[]; createdAt: string; }
 export interface CreativeVariation { headline: string; body: string; callToAction: string; angle: string; }
 export interface TrendPoint { date: string; impressions: number; clicks: number; conversions: number; spendCents: number; ctr: number; }
 export interface AnalyticsSummary { businessId: string; totalSpendCents: number; totalImpressions: number; totalClicks: number; totalConversions: number; avgCtr: number; avgCpc: number | null; roas: number | null; activeCampaigns: number; period: "all" | "month" | "week"; }
 export interface AudienceSuggestion { name: string; description: string; estimatedReach: string; platforms: ("meta" | "google")[]; interests: string[]; demographics: string; painPoints: string[]; buyingIntent: "low" | "medium" | "high"; }
+export interface StrategistChatMessage { role: "user" | "assistant"; content: string; }
 
 export interface Notification { id: string; workspaceId: string; type: string; title: string; message: string; read: boolean; severity: "info" | "warning" | "success" | "error"; actionUrl?: string; createdAt: string; }
 export interface Asset { id: string; workspaceId: string; name: string; type: "image" | "video" | "logo" | "font" | "template"; url: string; thumbnailUrl?: string; size: number; mimeType: string; tags: string[]; usageCount: number; width?: number; height?: number; createdAt: string; }
 export interface Insight { id: string; workspaceId: string; type: "anomaly" | "recommendation" | "trend" | "opportunity"; title: string; description: string; metric?: string; change?: number; severity: "low" | "medium" | "high"; actionLabel?: string; actionUrl?: string; dismissed: boolean; createdAt: string; }
 export interface Integration { id: string; workspaceId: string; platform: "meta" | "google" | "tiktok" | "shopify" | "pixel"; status: "connected" | "disconnected" | "error" | "pending"; accountName?: string; accountId?: string; permissions: string[]; settings: Record<string, unknown>; connectedAt?: string; errorMessage?: string; updatedAt: string; }
+export type ProductCatalogSource = "shopify" | "facebook" | "google";
+export interface ProductCatalogItem { id: string; source: ProductCatalogSource; name: string; category: string; priceCents: number; imageUrl: string; url: string; }
+export interface CatalogSourceResult { source: ProductCatalogSource; connected: boolean; accountName?: string; items: ProductCatalogItem[]; }
 export interface Draft { id: string; workspaceId: string; name: string; type: "campaign" | "ad_set" | "ad"; status: "draft" | "review" | "scheduled" | "published"; data: Record<string, unknown>; aiRecommendation?: string; score?: number; scheduledAt?: string; publishedAt?: string; createdAt: string; updatedAt: string; }
 export interface AdSet { id: string; campaignId: string; name: string; status: "active" | "paused" | "draft"; dailyBudgetCents: number; targeting: Record<string, unknown>; placements: string[]; bidStrategy: string; startDate?: string; endDate?: string; createdAt: string; updatedAt: string; }
 export interface Ad { id: string; adSetId: string; name: string; status: "active" | "paused" | "draft" | "rejected"; creative: { headline: string; body: string; callToAction: string; imageUrl?: string }; format: "single_image" | "carousel" | "video" | "collection"; externalId?: string; createdAt: string; updatedAt: string; }
+
+export type AdInsightNetwork = "meta" | "google" | "tiktok" | "bing";
+export interface DistributionSlice { label: string; sharePct: number; }
+export interface AudienceInsightItem { name: string; tags: string[]; cpaCents: number | null; spendCents: number; campaignCount: number; }
+export interface PageInsightItem { url: string; cvr: number; spendCents: number; campaignCount: number; }
+export interface CreativeInsightItem { id: string; headline: string; body: string; imageUrl?: string; ctr: number; cpaCents: number | null; campaignCount: number; }
+export interface AdInsightsResponse {
+  network: AdInsightNetwork;
+  isDemo: boolean;
+  audience: { distribution: DistributionSlice[]; top: AudienceInsightItem[] };
+  pages: { distribution: DistributionSlice[]; top: PageInsightItem[] };
+  creative: { scatter: { id: string; ctr: number; cpaCents: number }[]; topAds: CreativeInsightItem[] };
+}
 
 // ── API methods ───────────────────────────────────────────────────────────────
 export const api = {
@@ -124,6 +142,8 @@ export const api = {
     request<Integration>(`/workspaces/${workspaceId}/integrations/${platform}/disconnect`, { method: "POST" }),
   updateIntegrationSettings: (workspaceId: string, platform: Integration["platform"], settings: Record<string, unknown>) =>
     request<Integration>(`/workspaces/${workspaceId}/integrations/${platform}/settings`, { method: "PATCH", body: JSON.stringify(settings) }),
+  listProductCatalog: (workspaceId: string, source: ProductCatalogSource | "all") =>
+    request<CatalogSourceResult[]>(`/workspaces/${workspaceId}/products?source=${source}`),
 
   // Drafts
   listDrafts: (workspaceId: string) => request<Draft[]>(`/workspaces/${workspaceId}/drafts`),
@@ -151,6 +171,8 @@ export const api = {
     request<ProductAnalysis>("/onboarding/analyze-product", { method: "POST", body: JSON.stringify(site) }),
   analyzeAudience: (site: ScrapedSite, product: ProductAnalysis) =>
     request<AudienceAnalysis>("/onboarding/analyze-audience", { method: "POST", body: JSON.stringify({ site, product }) }),
+  deepResearch: (url: string) =>
+    request<DeepResearchResult>("/onboarding/deep-research", { method: "POST", body: JSON.stringify({ url }) }),
 
   // Business
   createBusiness: (input: Omit<BusinessProfile, "id">) =>
@@ -184,6 +206,10 @@ export const api = {
     request<AnalyticsSummary>(`/businesses/${businessId}/analytics/summary?period=${period}`),
   getAudienceSuggestions: (businessId: string) =>
     request<AudienceSuggestion[]>(`/businesses/${businessId}/audience-suggestions`),
+  getAdInsights: (businessId: string, network: AdInsightNetwork = "meta") =>
+    request<AdInsightsResponse>(`/businesses/${businessId}/ad-insights?network=${network}`),
+  chatWithStrategist: (businessId: string, messages: StrategistChatMessage[]) =>
+    request<{ reply: string }>(`/businesses/${businessId}/strategist/chat`, { method: "POST", body: JSON.stringify({ messages }) }),
 
   // Creatives
   listCreatives: (businessId: string) => request<CreativeAsset[]>(`/businesses/${businessId}/creatives`),

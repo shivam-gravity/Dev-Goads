@@ -1,10 +1,12 @@
-export type AdNetwork = "meta" | "google";
+export type AdNetwork = "meta" | "google" | "tiktok";
 
 export interface ScrapedSite {
   url: string;
   title: string;
   description: string;
   excerpt: string;
+  images: string[];
+  crawledPages: string[];
 }
 
 export interface ProductAnalysis {
@@ -27,6 +29,18 @@ export interface AudienceAnalysis {
   buyingMotivations: string[];
 }
 
+export type ProductCatalogSource = "shopify" | "facebook" | "google" | "woocommerce";
+
+export interface ProductCatalogItem {
+  id: string;
+  source: ProductCatalogSource;
+  name: string;
+  category: string;
+  priceCents: number;
+  imageUrl: string;
+  url: string;
+}
+
 export interface BusinessProfile {
   id: string;
   name: string;
@@ -41,6 +55,7 @@ export interface AdCreative {
   headline: string;
   body: string;
   callToAction: string;
+  imageUrl?: string;
 }
 
 export interface AdStrategy {
@@ -48,7 +63,7 @@ export interface AdStrategy {
   businessId: string;
   summary: string;
   recommendedNetworks: AdNetwork[];
-  budgetSplit: Record<AdNetwork, number>;
+  budgetSplit: Partial<Record<AdNetwork, number>>;
   audiences: string[];
   creatives: AdCreative[];
   createdAt: string;
@@ -62,6 +77,8 @@ export interface CampaignVariant {
   network: AdNetwork;
   externalId?: string;
   status: CampaignStatus;
+  audienceName?: string;
+  landingPageUrl?: string;
 }
 
 export interface Campaign {
@@ -163,4 +180,55 @@ export interface AudienceSuggestion {
   demographics: string;
   painPoints: string[];
   buyingIntent: "low" | "medium" | "high";
+}
+
+/* Ad Insights */
+
+export type AdInsightNetwork = AdNetwork | "tiktok" | "bing";
+
+export interface DistributionSlice {
+  label: string;
+  sharePct: number;
+}
+
+export interface AudienceInsightItem {
+  name: string;
+  tags: string[];
+  cpaCents: number | null;
+  spendCents: number;
+  campaignCount: number;
+}
+
+export interface PageInsightItem {
+  url: string;
+  cvr: number;
+  spendCents: number;
+  campaignCount: number;
+}
+
+export interface CreativeInsightItem {
+  id: string;
+  headline: string;
+  body: string;
+  imageUrl?: string;
+  ctr: number;
+  cpaCents: number | null;
+  campaignCount: number;
+}
+
+export interface AdInsightsResponse {
+  network: AdInsightNetwork;
+  isDemo: boolean;
+  audience: {
+    distribution: DistributionSlice[];
+    top: AudienceInsightItem[];
+  };
+  pages: {
+    distribution: DistributionSlice[];
+    top: PageInsightItem[];
+  };
+  creative: {
+    scatter: { id: string; ctr: number; cpaCents: number }[];
+    topAds: CreativeInsightItem[];
+  };
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import { db } from "../../db/db.js";
+import { prisma } from "../../db/prisma.js";
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
 import { normalizePerformance } from "../pipeline/performancePipeline.js";
 
@@ -30,29 +30,33 @@ const DEMO_INSIGHTS: Omit<Insight, "id" | "workspaceId" | "dismissed" | "created
   { type: "opportunity", title: "Competitor analysis: gap in search", description: "AI detected low competition for 5 high-intent keywords in your category. These keywords have avg CPC 40% below your current spend with similar conversion intent.", metric: "CPC", change: -40, severity: "low", actionLabel: "View Keywords", actionUrl: "/campaigns" },
 ];
 
-function save(i: Insight) {
-  db.prepare("INSERT OR REPLACE INTO insights (id, workspaceId, data, createdAt) VALUES (?, ?, ?, ?)").run(i.id, i.workspaceId, JSON.stringify(i), i.createdAt);
+async function save(i: Insight): Promise<void> {
+  await prisma.insight.upsert({
+    where: { id: i.id },
+    create: { id: i.id, workspaceId: i.workspaceId, data: i as any, createdAt: new Date(i.createdAt) },
+    update: { data: i as any },
+  });
 }
 
-export function seedDemoInsights(workspaceId: string) {
-  const existing = listInsights(workspaceId);
+export async function seedDemoInsights(workspaceId: string): Promise<void> {
+  const existing = await listInsights(workspaceId);
   if (existing.length > 0) return;
   for (const d of DEMO_INSIGHTS) {
     const i: Insight = { id: randomUUID(), workspaceId, dismissed: false, createdAt: new Date().toISOString(), ...d };
-    save(i);
+    await save(i);
   }
 }
 
-export function listInsights(workspaceId: string): Insight[] {
-  const rows = db.prepare("SELECT data FROM insights WHERE workspaceId = ? ORDER BY createdAt DESC").all(workspaceId) as { data: string }[];
-  return rows.map((r) => JSON.parse(r.data) as Insight);
+export async function listInsights(workspaceId: string): Promise<Insight[]> {
+  const rows = await prisma.insight.findMany({ where: { workspaceId }, orderBy: { createdAt: "desc" } });
+  return rows.map((r) => r.data as unknown as Insight);
 }
 
-export function dismissInsight(id: string): Insight {
-  const row = db.prepare("SELECT data FROM insights WHERE id = ?").get(id) as { data: string } | undefined;
+export async function dismissInsight(id: string): Promise<Insight> {
+  const row = await prisma.insight.findUnique({ where: { id } });
   if (!row) throw new Error("Insight not found");
-  const i: Insight = { ...JSON.parse(row.data), dismissed: true };
-  save(i);
+  const i: Insight = { ...(row.data as unknown as Insight), dismissed: true };
+  await save(i);
   return i;
 }
 
@@ -87,12 +91,12 @@ const INSIGHT_TOOL = {
 
 export async function generateInsights(workspaceId: string, businessId: string): Promise<Insight[]> {
   if (!anthropic) {
-    seedDemoInsights(workspaceId);
+    await seedDemoInsights(workspaceId);
     return listInsights(workspaceId);
   }
 
-  const campaigns = listCampaignsForBusiness(businessId);
-  const perfData = campaigns.flatMap((c) => normalizePerformance(c.id));
+  const campaigns = await listCampaignsForBusiness(businessId);
+  const perfData = (await Promise.all(campaigns.map((c) => normalizePerformance(c.id)))).flat();
 
   const msg = await anthropic.messages.create({
     model: "claude-sonnet-5",
@@ -103,13 +107,13 @@ export async function generateInsights(workspaceId: string, businessId: string):
   });
 
   const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) { seedDemoInsights(workspaceId); return listInsights(workspaceId); }
+  if (!toolUse) { await seedDemoInsights(workspaceId); return listInsights(workspaceId); }
 
   const result = toolUse.input as { insights: Omit<Insight, "id" | "workspaceId" | "dismissed" | "createdAt">[] };
   const created: Insight[] = [];
   for (const d of result.insights) {
     const i: Insight = { id: randomUUID(), workspaceId, dismissed: false, createdAt: new Date().toISOString(), ...d };
-    save(i);
+    await save(i);
     created.push(i);
   }
   return created;
