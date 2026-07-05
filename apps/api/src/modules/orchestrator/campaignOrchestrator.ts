@@ -114,4 +114,14 @@ export async function reallocateBudget(campaignId: string, variantId: string, da
   return campaign;
 }
 
+export function updateCampaign(campaignId: string, patch: { name?: string; dailyBudgetCents?: number }): Campaign {
+  const campaign = getCampaign(campaignId);
+  if (!campaign) throw new Error(`Campaign ${campaignId} not found`);
+  if (patch.name !== undefined) campaign.name = patch.name;
+  if (patch.dailyBudgetCents !== undefined) campaign.dailyBudgetCents = patch.dailyBudgetCents;
+  campaign.updatedAt = new Date().toISOString();
+  saveCampaign(campaign);
+  return campaign;
+}
+
 export { adapters };

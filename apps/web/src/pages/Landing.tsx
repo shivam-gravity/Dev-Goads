@@ -1,7 +1,31 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Reveal from "../components/Reveal.js";
-import { MascotIcon, SparkleIcon } from "../components/icons.js";
+import CountUp from "../components/CountUp.js";
+import BackToTop from "../components/BackToTop.js";
+import SiteNav from "../components/SiteNav.js";
+import SiteFooter from "../components/SiteFooter.js";
+import { GoogleIcon, MascotIcon, SparkleIcon } from "../components/icons.js";
+
+const INDUSTRY_MARQUEE = [
+  "E-commerce",
+  "Local services",
+  "SaaS",
+  "Mobile apps",
+  "Fitness",
+  "Real estate",
+  "Fashion",
+  "B2B agencies",
+  "Restaurants",
+  "Home services",
+];
+
+const CALCULATOR_INDUSTRIES = [
+  { key: "ecommerce", label: "Online shopping", baseUplift: 18, cpm: 12 },
+  { key: "services", label: "Services / SaaS", baseUplift: 24, cpm: 18 },
+  { key: "local", label: "Local store", baseUplift: 14, cpm: 9 },
+  { key: "app", label: "Mobile app", baseUplift: 27, cpm: 7 },
+];
 
 const CATEGORIES = [
   {
@@ -101,79 +125,139 @@ const FAQS = [
   },
 ];
 
+const TESTIMONIALS = [
+  {
+    quote:
+      "We used to juggle two ad dashboards and a spreadsheet to keep budgets in sync. Now it just moves toward whatever's converting on its own.",
+    name: "J. Alvarez",
+    role: "Growth lead, e-commerce",
+  },
+  {
+    quote:
+      "The first strategy draft needed maybe two tweaks before we launched it. I expected to rewrite the whole thing.",
+    name: "P. Nakamura",
+    role: "Founder, local services",
+  },
+  {
+    quote:
+      "Watching cost-per-acquisition drop after the first optimization pass is what got the rest of the team on board.",
+    name: "S. Okafor",
+    role: "Marketing manager, SaaS",
+  },
+];
+
 function currency(n: number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 }
 
 export default function Landing() {
-  const [budget, setBudget] = useState(2000);
-  const [cpa, setCpa] = useState(40);
+  const [calcIndustry, setCalcIndustry] = useState(0);
+  const [calcBudget, setCalcBudget] = useState(2000);
   const [activeTab, setActiveTab] = useState(0);
+  const [tabProgress, setTabProgress] = useState(0);
+  const [tabAutoPaused, setTabAutoPaused] = useState(false);
   const [activeCategory, setActiveCategory] = useState(0);
+  const [activeTestimonial, setActiveTestimonial] = useState(0);
+  const [testimonialPaused, setTestimonialPaused] = useState(false);
+  const [openFaqs, setOpenFaqs] = useState<number[]>([0]);
 
-  const { reclaimed, extraConversions } = useMemo(() => {
-    const reclaimedBudget = Math.round(budget * 0.15);
-    const conversions = cpa > 0 ? Math.round(reclaimedBudget / cpa) : 0;
-    return { reclaimed: reclaimedBudget, extraConversions: conversions };
-  }, [budget, cpa]);
+  function toggleFaq(i: number) {
+    setOpenFaqs((open) => (open.includes(i) ? open.filter((x) => x !== i) : [...open, i]));
+  }
+
+  const industry = CALCULATOR_INDUSTRIES[calcIndustry];
+
+  const { uplift, dailyImpressions } = useMemo(() => {
+    const budgetBonus = Math.min((calcBudget / 10000) * 6, 6);
+    return {
+      uplift: Math.round(industry.baseUplift + budgetBonus),
+      dailyImpressions: Math.round(((calcBudget / 30) / industry.cpm) * 1000),
+    };
+  }, [industry, calcBudget]);
 
   const category = CATEGORIES[activeCategory];
+
+  useEffect(() => {
+    if (testimonialPaused) return;
+    const id = setInterval(() => {
+      setActiveTestimonial((i) => (i + 1) % TESTIMONIALS.length);
+    }, 5000);
+    return () => clearInterval(id);
+  }, [testimonialPaused]);
+
+  useEffect(() => {
+    if (tabAutoPaused) return;
+    const stepMs = 60;
+    const durationMs = 6000;
+    const id = setInterval(() => {
+      setTabProgress((p) => {
+        if (p + (100 * stepMs) / durationMs >= 100) {
+          setActiveTab((t) => (t + 1) % TABS.length);
+          return 0;
+        }
+        return p + (100 * stepMs) / durationMs;
+      });
+    }, stepMs);
+    return () => clearInterval(id);
+  }, [tabAutoPaused]);
+
+  function selectTab(i: number) {
+    setActiveTab(i);
+    setTabProgress(0);
+    setTabAutoPaused(true);
+  }
 
   return (
     <div className="landing">
       <div className="announce-bar">
-        <SparkleIcon />
+        <SparkleIcon className="sparkle-icon" />
         <span>Live demo — generate a real AI ad strategy in under a minute</span>
-        <SparkleIcon />
+        <SparkleIcon className="sparkle-icon sparkle-icon-delay" />
       </div>
 
-      <header className="landing-nav">
-        <Link to="/" className="brand">
-          AdGo
-        </Link>
-        <nav className="landing-nav-links">
-          <a href="#how-it-works">How it works</a>
-          <a href="#pricing">Pricing</a>
-          <a href="#faq">FAQ</a>
-          <Link to="/get-started" className="btn btn-primary">
-            Get started
-          </Link>
-        </nav>
-      </header>
+      <SiteNav />
 
       <section className="hero">
         <div className="hero-glow" aria-hidden="true" />
-        <div className="hero-mascot-row">
+        <div className="hero-mascot-row hero-enter" style={{ animationDelay: "0ms" }}>
           <MascotIcon className="mascot" />
           <span className="status-chip">
             <span className="live-dot" />
             Strategy engine online
           </span>
         </div>
-        <span className="eyebrow">AI-driven ad automation</span>
-        <h1>
+        <span className="eyebrow hero-enter" style={{ animationDelay: "80ms" }}>
+          AI-driven ad automation
+        </span>
+        <h1 className="hero-enter" style={{ animationDelay: "160ms" }}>
           Describe your business.
           <br />
           Let <span className="highlight">AI run your ads</span>.
         </h1>
-        <p className="lead">
+        <p className="lead hero-enter" style={{ animationDelay: "260ms" }}>
           AdGo generates a full ad strategy from a short business description, launches it across Google and Meta,
           and continuously reallocates your budget toward what's actually converting.
         </p>
-        <div className="hero-actions">
+        <p className="hero-meta hero-enter" style={{ animationDelay: "340ms" }}>
+          Setup in under 5 minutes <span className="hero-meta-divider">|</span> Works with your existing Google &amp; Meta ad accounts
+        </p>
+        <div className="hero-actions hero-enter" style={{ animationDelay: "420ms" }}>
           <Link to="/get-started" className="btn btn-primary btn-lg">
             Get started free
           </Link>
-          <a href="#how-it-works" className="btn btn-secondary btn-lg">
-            See how it works
-          </a>
+          <Link to="/get-started" className="btn btn-google btn-lg">
+            <GoogleIcon />
+            Continue with Google
+          </Link>
         </div>
-        <p className="hero-note">No credit card required to try the full flow.</p>
+        <p className="hero-note hero-enter" style={{ animationDelay: "500ms" }}>
+          No credit card required to try the full flow.
+        </p>
 
         <div className="sticky-note">No signup wall on the demo</div>
 
         <div className="float-card float-card-left">
-          <div className="float-card-title">Strategy ready</div>
+          <div className="float-card-title">Example strategy output</div>
           <div className="float-card-bars">
             <div className="float-bar" style={{ height: "70%" }} />
             <div className="float-bar" style={{ height: "45%" }} />
@@ -185,15 +269,19 @@ export default function Landing() {
 
         <div className="float-card float-card-right">
           <div className="float-card-title">
-            <span className="live-dot" /> Campaign live
+            <span className="live-dot" /> Example campaign
           </div>
           <div className="float-card-stat">
             <span>CTR</span>
-            <strong>3.2%</strong>
+            <strong>
+              <CountUp to={3.2} decimals={1} suffix="%" />
+            </strong>
           </div>
           <div className="float-card-stat">
             <span>CPA</span>
-            <strong>$18.40</strong>
+            <strong>
+              <CountUp to={18.4} decimals={2} prefix="$" />
+            </strong>
           </div>
         </div>
       </section>
@@ -203,6 +291,16 @@ export default function Landing() {
         <span className="trust-chip">Runs on Meta Ads</span>
         <span className="trust-chip">Strategy generated by Claude</span>
         <span className="trust-chip">Usage-based billing</span>
+      </div>
+
+      <div className="marquee-wrap" aria-hidden="true">
+        <div className="marquee-track">
+          {[...INDUSTRY_MARQUEE, ...INDUSTRY_MARQUEE].map((item, i) => (
+            <span className="marquee-item" key={i}>
+              {item}
+            </span>
+          ))}
+        </div>
       </div>
 
       <section className="section" id="how-it-works">
@@ -220,9 +318,14 @@ export default function Landing() {
                 <button
                   key={tab.key}
                   className={`tab-btn ${activeTab === i ? "active" : ""}`}
-                  onClick={() => setActiveTab(i)}
+                  onClick={() => selectTab(i)}
                 >
                   {tab.label}
+                  {activeTab === i && (
+                    <span className="tab-progress-track">
+                      <span className="tab-progress-fill" style={{ width: `${tabProgress}%` }} />
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
@@ -250,18 +353,20 @@ export default function Landing() {
                   <button className="accordion-header" onClick={() => setActiveCategory(i)}>
                     {c.name}
                   </button>
-                  {activeCategory === i && (
-                    <div className="accordion-body">
-                      <p>{c.blurb}</p>
-                      <div className="tag-row">
-                        {c.tags.map((tag) => (
-                          <span className="trust-chip" key={tag}>
-                            {tag}
-                          </span>
-                        ))}
+                  <div className="accordion-collapse">
+                    <div className="accordion-collapse-inner">
+                      <div className="accordion-body">
+                        <p>{c.blurb}</p>
+                        <div className="tag-row">
+                          {c.tags.map((tag) => (
+                            <span className="trust-chip" key={tag}>
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -271,7 +376,9 @@ export default function Landing() {
               <div className="preview-card-body">
                 <strong>{category.preview.headline}</strong>
                 <p>{category.preview.body}</p>
-                <span className="btn btn-primary preview-cta">Learn more</span>
+                <Link to="/features" className="btn btn-primary preview-cta">
+                  Learn more
+                </Link>
               </div>
             </div>
           </div>
@@ -282,44 +389,46 @@ export default function Landing() {
         <Reveal>
           <div className="section-header">
             <h2>See what automated optimization could reclaim</h2>
-            <p>A rough estimate of budget AdGo's bandit optimizer could shift away from underperforming variants.</p>
+            <p>Pick your industry and budget — see the kind of ROAS lift AdGo's optimization loop is built to chase.</p>
           </div>
         </Reveal>
         <Reveal delay={80}>
           <div className="calculator">
             <div className="calculator-inputs">
-              <label>
-                Monthly ad budget (USD)
-                <input
-                  type="number"
-                  min={100}
-                  step={100}
-                  value={budget}
-                  onChange={(e) => setBudget(Math.max(0, Number(e.target.value)))}
-                />
-              </label>
-              <label>
-                Typical cost per conversion (USD)
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={cpa}
-                  onChange={(e) => setCpa(Math.max(0, Number(e.target.value)))}
-                />
-              </label>
+              <span className="calculator-step-label">1. Your industry</span>
+              <div className="industry-cards">
+                {CALCULATOR_INDUSTRIES.map((ind, i) => (
+                  <button
+                    key={ind.key}
+                    className={`industry-card ${calcIndustry === i ? "active" : ""}`}
+                    onClick={() => setCalcIndustry(i)}
+                  >
+                    {ind.label}
+                  </button>
+                ))}
+              </div>
+
+              <span className="calculator-step-label">2. Monthly ad budget</span>
+              <input
+                type="range"
+                min={200}
+                max={10000}
+                step={50}
+                value={calcBudget}
+                onChange={(e) => setCalcBudget(Number(e.target.value))}
+                className="calculator-slider"
+              />
+              <div className="calculator-slider-value">
+                <strong>{currency(calcBudget)}/mo</strong>
+                <span>Estimated impressions: ~{dailyImpressions.toLocaleString()}/day</span>
+              </div>
             </div>
             <div className="calculator-result">
-              <span className="big-number">{currency(reclaimed)}/mo</span>
-              <span className="result-label">reclaimed from underperforming variants</span>
-              <div className="result-secondary">
-                <span className="big-number">~{extraConversions}</span>
-                <span className="result-label">additional conversions/mo at your current CPA</span>
-              </div>
-              <p className="calculator-disclaimer">
-                Illustrative estimate based on typical bandit-optimization reallocation — actual results depend on
-                your campaigns.
-              </p>
+              <span className="big-number">
+                <CountUp key={`${calcIndustry}-${calcBudget}`} to={uplift} suffix="%" duration={700} />
+              </span>
+              <span className="result-label">potential ROAS boost in 2 weeks of optimization</span>
+              <p className="calculator-disclaimer">*Illustrative estimate based on typical bandit-optimization reallocation — actual results depend on your campaigns.</p>
             </div>
           </div>
         </Reveal>
@@ -343,6 +452,44 @@ export default function Landing() {
         </div>
       </section>
 
+      <section className="section">
+        <Reveal>
+          <div className="section-header">
+            <h2>What early users say</h2>
+            <p>Sample feedback from the beta — illustrative, not verified reviews.</p>
+          </div>
+        </Reveal>
+        <Reveal delay={80}>
+          <div
+            className="testimonial-carousel"
+            onMouseEnter={() => setTestimonialPaused(true)}
+            onMouseLeave={() => setTestimonialPaused(false)}
+          >
+            <div className="testimonial-track" style={{ transform: `translateX(-${activeTestimonial * 100}%)` }}>
+              {TESTIMONIALS.map((t) => (
+                <blockquote className="testimonial-slide" key={t.name}>
+                  <p>&ldquo;{t.quote}&rdquo;</p>
+                  <footer>
+                    <strong>{t.name}</strong>
+                    <span>{t.role}</span>
+                  </footer>
+                </blockquote>
+              ))}
+            </div>
+            <div className="testimonial-dots">
+              {TESTIMONIALS.map((t, i) => (
+                <button
+                  key={t.name}
+                  className={`testimonial-dot ${activeTestimonial === i ? "active" : ""}`}
+                  aria-label={`Show testimonial ${i + 1}`}
+                  onClick={() => setActiveTestimonial(i)}
+                />
+              ))}
+            </div>
+          </div>
+        </Reveal>
+      </section>
+
       <section className="section" id="pricing">
         <Reveal>
           <div className="section-header">
@@ -351,7 +498,7 @@ export default function Landing() {
           </div>
         </Reveal>
         <Reveal delay={80}>
-          <div className="pricing-card">
+          <div className="pricing-card border-beam">
             <div className="pill">Platform fee</div>
             <div className="price">
               $49<span>/mo + 12% of managed ad spend</span>
@@ -372,17 +519,36 @@ export default function Landing() {
       <section className="section section-alt" id="faq">
         <Reveal>
           <div className="section-header">
+            <MascotIcon className="mascot-sm faq-mascot" />
             <h2>Frequently asked questions</h2>
+            <p>
+              Need more details?{" "}
+              <a href="mailto:hello@example.com" className="faq-contact-link">
+                Contact us
+              </a>
+              .
+            </p>
           </div>
         </Reveal>
         <Reveal delay={80}>
           <div className="faq">
-            {FAQS.map((f) => (
-              <details className="faq-item" key={f.q}>
-                <summary>{f.q}</summary>
-                <p>{f.a}</p>
-              </details>
-            ))}
+            {FAQS.map((f, i) => {
+              const open = openFaqs.includes(i);
+              return (
+                <div className={`faq-item ${open ? "open" : ""}`} key={f.q}>
+                  <button className="faq-question" onClick={() => toggleFaq(i)} aria-expanded={open}>
+                    <span className="faq-number">{String(i + 1).padStart(2, "0")}</span>
+                    <span className="faq-question-text">{f.q}</span>
+                    <span className="faq-chevron">⌄</span>
+                  </button>
+                  <div className="accordion-collapse">
+                    <div className="accordion-collapse-inner">
+                      <p className="faq-answer">{f.a}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </Reveal>
       </section>
@@ -392,17 +558,27 @@ export default function Landing() {
           <div className="cta-banner-inner">
             <h2>Ready to put your ad spend on autopilot?</h2>
             <p>Set up your business and get a full ad strategy in minutes.</p>
-            <Link to="/get-started" className="btn btn-primary btn-lg">
-              Get started free
-            </Link>
+            <div className="hero-actions">
+              <Link to="/get-started" className="btn btn-primary btn-lg">
+                Get started free
+              </Link>
+              <a href="mailto:hello@example.com" className="btn btn-secondary btn-lg">
+                Book a demo
+              </a>
+            </div>
+            <p className="hero-note cta-banner-note">No credit card required</p>
+            <div className="integration-row">
+              <span className="integration-chip">Google Ads</span>
+              <span className="integration-chip">Meta Ads</span>
+            </div>
           </div>
         </Reveal>
       </section>
 
-      <footer className="landing-footer">
-        <span>AdGo — AI Ad Automation</span>
-        <span>© {new Date().getFullYear()}</span>
-      </footer>
+      <BackToTop />
+
+      <SiteFooter />
     </div>
   );
 }
+

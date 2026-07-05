@@ -1,20 +1,32 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { api, Campaign, NormalizedPerformance, OptimizationDecision } from "../api/client.js";
+import { Link, useParams } from "react-router-dom";
+import { api, Campaign, NormalizedPerformance, OptimizationDecision, TrendPoint } from "../api/client.js";
+import StatusBadge, { NetworkBadge } from "../components/StatusBadge.js";
+import SparkChart from "../components/SparkChart.js";
+import Reveal from "../components/Reveal.js";
 
 export default function CampaignDetail() {
   const { campaignId } = useParams<{ campaignId: string }>();
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [performance, setPerformance] = useState<NormalizedPerformance[]>([]);
+  const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [decisions, setDecisions] = useState<OptimizationDecision[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editingBudget, setEditingBudget] = useState(false);
+  const [newBudget, setNewBudget] = useState("");
 
   async function refresh() {
     if (!campaignId) return;
-    const [camp, perf] = await Promise.all([api.getCampaign(campaignId), api.getPerformance(campaignId)]);
+    const [camp, perf, trendData] = await Promise.all([
+      api.getCampaign(campaignId),
+      api.getPerformance(campaignId),
+      api.getCampaignTrend(campaignId),
+    ]);
     setCampaign(camp);
     setPerformance(perf);
+    setTrend(trendData);
+    setNewBudget(String(camp.dailyBudgetCents / 100));
   }
 
   useEffect(() => {
@@ -50,92 +62,276 @@ export default function CampaignDetail() {
     }
   }
 
-  if (!campaign) return <p>Loading...</p>;
+  async function handlePauseVariant(variantId: string) {
+    if (!campaignId) return;
+    setBusy(`pause-${variantId}`);
+    try {
+      await api.pauseVariant(campaignId, variantId);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Pause failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleSaveBudget() {
+    if (!campaignId || !campaign) return;
+    const cents = Math.round(parseFloat(newBudget) * 100);
+    if (isNaN(cents) || cents <= 0) return;
+    try {
+      await api.updateCampaign(campaignId, { dailyBudgetCents: cents });
+      setEditingBudget(false);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Budget update failed");
+    }
+  }
+
+  if (!campaign) {
+    return (
+      <div className="campaign-detail-loading">
+        <div className="onboarding-spinner" />
+        <p>Loading campaign…</p>
+      </div>
+    );
+  }
+
+  const totalSpend = performance.reduce((s, p) => s + p.spendCents, 0);
+  const totalImpressions = performance.reduce((s, p) => s + p.impressions, 0);
+  const totalClicks = performance.reduce((s, p) => s + p.clicks, 0);
+  const totalConversions = performance.reduce((s, p) => s + p.conversions, 0);
+  const overallCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+  const overallCpa = totalConversions > 0 ? totalSpend / totalConversions : null;
+
+  const spendTrend = trend.map((t) => t.spendCents);
+  const clicksTrend = trend.map((t) => t.clicks);
+
+  function fmtMoney(cents: number) {
+    return `$${(cents / 100).toFixed(2)}`;
+  }
 
   return (
     <div className="campaign-detail">
-      <h1>{campaign.name}</h1>
-      <span className={`status status-${campaign.status}`}>{campaign.status}</span>
-      {error && <p className="error">{error}</p>}
-
-      <div className="actions">
-        <button onClick={runIngest} disabled={busy !== null}>
-          {busy === "ingest" ? "Pulling metrics..." : "Pull latest metrics"}
-        </button>
-        <button onClick={runOptimize} disabled={busy !== null} className="secondary">
-          {busy === "optimize" ? "Optimizing..." : "Run optimization pass"}
-        </button>
+      {/* Breadcrumb */}
+      <div className="breadcrumb">
+        <Link to="/campaigns">Campaigns</Link>
+        <span>/</span>
+        <span>{campaign.name}</span>
       </div>
 
-      <section className="card">
-        <h2>Variants</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Network</th>
-              <th>Headline</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {campaign.variants.map((v) => (
-              <tr key={v.id}>
-                <td>{v.network}</td>
-                <td>{v.creative.headline}</td>
-                <td>
-                  <span className={`status status-${v.status}`}>{v.status}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      {/* Hero */}
+      <div className="campaign-detail-hero">
+        <div>
+          <h1>{campaign.name}</h1>
+          <div className="campaign-detail-meta">
+            <StatusBadge status={campaign.status} />
+            <div className="network-badges">
+              {campaign.networks.map((n) => <NetworkBadge key={n} network={n} />)}
+            </div>
+            {editingBudget ? (
+              <div className="budget-edit-row">
+                <span className="muted-text">$</span>
+                <input
+                  type="number"
+                  value={newBudget}
+                  onChange={(e) => setNewBudget(e.target.value)}
+                  className="budget-input"
+                  min={1}
+                />
+                <span className="muted-text">/day</span>
+                <button className="btn btn-sm btn-primary" onClick={handleSaveBudget}>Save</button>
+                <button className="btn btn-sm btn-secondary" onClick={() => setEditingBudget(false)}>Cancel</button>
+              </div>
+            ) : (
+              <button className="budget-display" onClick={() => setEditingBudget(true)}>
+                ${(campaign.dailyBudgetCents / 100).toFixed(0)}/day ✏️
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="campaign-detail-actions">
+          <button className="btn btn-primary" onClick={runIngest} disabled={busy !== null}>
+            {busy === "ingest" ? "Pulling…" : "⬇ Pull Metrics"}
+          </button>
+          <button className="btn btn-secondary" onClick={runOptimize} disabled={busy !== null}>
+            {busy === "optimize" ? "Optimizing…" : "⚡ Run Optimization"}
+          </button>
+        </div>
+      </div>
 
-      <section className="card">
-        <h2>Performance</h2>
-        {performance.length === 0 ? (
-          <p>No metrics ingested yet.</p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Network</th>
-                <th>Impressions</th>
-                <th>Clicks</th>
-                <th>CTR</th>
-                <th>Conversions</th>
-                <th>CPA</th>
-                <th>Spend</th>
-              </tr>
-            </thead>
-            <tbody>
-              {performance.map((p) => (
-                <tr key={p.variantId}>
-                  <td>{p.network}</td>
-                  <td>{p.impressions.toLocaleString()}</td>
-                  <td>{p.clicks.toLocaleString()}</td>
-                  <td>{(p.ctr * 100).toFixed(2)}%</td>
-                  <td>{p.conversions}</td>
-                  <td>{p.cpaCents !== null ? `$${(p.cpaCents / 100).toFixed(2)}` : "—"}</td>
-                  <td>${(p.spendCents / 100).toFixed(2)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      {error && <p className="error">{error}</p>}
 
-      {decisions.length > 0 && (
+      {/* KPI row */}
+      <div className="campaign-kpi-row">
+        <div className="campaign-kpi">
+          <span className="campaign-kpi-label">Total Spend</span>
+          <span className="campaign-kpi-value">{fmtMoney(totalSpend)}</span>
+        </div>
+        <div className="campaign-kpi">
+          <span className="campaign-kpi-label">Impressions</span>
+          <span className="campaign-kpi-value">{totalImpressions.toLocaleString()}</span>
+        </div>
+        <div className="campaign-kpi">
+          <span className="campaign-kpi-label">Clicks</span>
+          <span className="campaign-kpi-value">{totalClicks.toLocaleString()}</span>
+        </div>
+        <div className="campaign-kpi">
+          <span className="campaign-kpi-label">CTR</span>
+          <span className="campaign-kpi-value">{overallCtr.toFixed(2)}%</span>
+        </div>
+        <div className="campaign-kpi">
+          <span className="campaign-kpi-label">Conversions</span>
+          <span className="campaign-kpi-value">{totalConversions}</span>
+        </div>
+        <div className="campaign-kpi">
+          <span className="campaign-kpi-label">CPA</span>
+          <span className="campaign-kpi-value">{overallCpa ? fmtMoney(overallCpa) : "—"}</span>
+        </div>
+      </div>
+
+      {/* Trend charts */}
+      {trend.length > 1 && (
+        <Reveal>
+          <div className="trend-charts-grid">
+            <section className="card trend-chart-card">
+              <h3>Spend Trend</h3>
+              <SparkChart data={spendTrend} width={400} height={80} color="var(--accent)" fill />
+              <div className="trend-chart-labels">
+                <span>{trend[0]?.date}</span>
+                <span>{trend[trend.length - 1]?.date}</span>
+              </div>
+            </section>
+            <section className="card trend-chart-card">
+              <h3>Clicks Trend</h3>
+              <SparkChart data={clicksTrend} width={400} height={80} color="var(--accent-2)" fill />
+              <div className="trend-chart-labels">
+                <span>{trend[0]?.date}</span>
+                <span>{trend[trend.length - 1]?.date}</span>
+              </div>
+            </section>
+          </div>
+        </Reveal>
+      )}
+
+      {/* Variants */}
+      <Reveal>
         <section className="card">
-          <h2>Latest optimization decisions</h2>
-          <ul className="decision-list">
-            {decisions.map((d, i) => (
-              <li key={i}>
-                <strong>{d.action.replace("_", " ")}</strong> — {d.reason}
-              </li>
-            ))}
-          </ul>
+          <h2>Variants ({campaign.variants.length})</h2>
+          <div className="variants-grid">
+            {campaign.variants.map((v) => {
+              const vPerf = performance.find((p) => p.variantId === v.id);
+              return (
+                <div key={v.id} className="variant-card">
+                  <div className="variant-card-header">
+                    <NetworkBadge network={v.network} />
+                    <StatusBadge status={v.status} />
+                  </div>
+                  <strong className="variant-headline">{v.creative.headline}</strong>
+                  <p className="variant-body">{v.creative.body}</p>
+                  <span className="pill">{v.creative.callToAction}</span>
+
+                  {vPerf && (
+                    <div className="variant-perf">
+                      <div className="variant-stat">
+                        <span>Spend</span>
+                        <strong>{fmtMoney(vPerf.spendCents)}</strong>
+                      </div>
+                      <div className="variant-stat">
+                        <span>CTR</span>
+                        <strong>{(vPerf.ctr * 100).toFixed(2)}%</strong>
+                      </div>
+                      <div className="variant-stat">
+                        <span>Conv.</span>
+                        <strong>{vPerf.conversions}</strong>
+                      </div>
+                      {vPerf.cpaCents && (
+                        <div className="variant-stat">
+                          <span>CPA</span>
+                          <strong>{fmtMoney(vPerf.cpaCents)}</strong>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {v.status === "active" && (
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => handlePauseVariant(v.id)}
+                      disabled={busy === `pause-${v.id}`}
+                    >
+                      {busy === `pause-${v.id}` ? "Pausing…" : "⏸ Pause"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </section>
+      </Reveal>
+
+      {/* Performance table */}
+      {performance.length > 0 && (
+        <Reveal>
+          <section className="card">
+            <h2>Performance by Variant</h2>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Network</th>
+                    <th>Impressions</th>
+                    <th>Clicks</th>
+                    <th>CTR</th>
+                    <th>Conv.</th>
+                    <th>Conv. Rate</th>
+                    <th>CPA</th>
+                    <th>Spend</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {performance.map((p) => (
+                    <tr key={p.variantId}>
+                      <td>
+                        <NetworkBadge network={p.network} />
+                      </td>
+                      <td>{p.impressions.toLocaleString()}</td>
+                      <td>{p.clicks.toLocaleString()}</td>
+                      <td>{(p.ctr * 100).toFixed(2)}%</td>
+                      <td>{p.conversions}</td>
+                      <td>{(p.conversionRate * 100).toFixed(2)}%</td>
+                      <td>{p.cpaCents !== null ? fmtMoney(p.cpaCents) : "—"}</td>
+                      <td>{fmtMoney(p.spendCents)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </Reveal>
+      )}
+
+      {/* Optimization decisions timeline */}
+      {decisions.length > 0 && (
+        <Reveal>
+          <section className="card">
+            <h2>⚡ Optimization Decisions</h2>
+            <div className="decisions-timeline">
+              {decisions.map((d, i) => (
+                <div key={i} className={`decision-item decision-${d.action}`}>
+                  <div className="decision-icon">
+                    {d.action === "increase_budget" ? "⬆" : d.action === "decrease_budget" ? "⬇" : d.action === "pause" ? "⏸" : "⏸"}
+                  </div>
+                  <div className="decision-content">
+                    <strong className="decision-action">{d.action.replace(/_/g, " ")}</strong>
+                    <p className="decision-reason">{d.reason}</p>
+                    <span className="decision-time">{new Date(d.decidedAt).toLocaleTimeString()}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </Reveal>
       )}
     </div>
   );

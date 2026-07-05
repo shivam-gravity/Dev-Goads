@@ -1,5 +1,32 @@
 export type AdNetwork = "meta" | "google";
 
+export interface ScrapedSite {
+  url: string;
+  title: string;
+  description: string;
+  excerpt: string;
+}
+
+export interface ProductAnalysis {
+  productName: string;
+  category: string;
+  summary: string;
+  valueProposition: string;
+  keyFeatures: string[];
+}
+
+export interface AudienceSegment {
+  name: string;
+  description: string;
+}
+
+export interface AudienceAnalysis {
+  primaryAudience: string;
+  segments: AudienceSegment[];
+  painPoints: string[];
+  buyingMotivations: string[];
+}
+
 export interface BusinessProfile {
   id: string;
   name: string;
@@ -92,4 +119,48 @@ export interface Invoice {
   platformFeeCents: number;
   totalCents: number;
   createdAt: string;
+}
+
+export interface CreativeAsset {
+  id: string;
+  businessId: string;
+  headline: string;
+  body: string;
+  callToAction: string;
+  format: "text" | "image" | "video";
+  tags: string[];
+  createdAt: string;
+}
+
+export interface TrendPoint {
+  date: string;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  spendCents: number;
+  ctr: number;
+}
+
+export interface AnalyticsSummary {
+  businessId: string;
+  totalSpendCents: number;
+  totalImpressions: number;
+  totalClicks: number;
+  totalConversions: number;
+  avgCtr: number;
+  avgCpc: number | null;
+  roas: number | null;
+  activeCampaigns: number;
+  period: "all" | "month" | "week";
+}
+
+export interface AudienceSuggestion {
+  name: string;
+  description: string;
+  estimatedReach: string;
+  platforms: AdNetwork[];
+  interests: string[];
+  demographics: string;
+  painPoints: string[];
+  buyingIntent: "low" | "medium" | "high";
 }

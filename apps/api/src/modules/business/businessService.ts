@@ -21,3 +21,11 @@ export function listBusinesses(): BusinessProfile[] {
   const rows = db.prepare("SELECT data FROM businesses ORDER BY createdAt DESC").all() as { data: string }[];
   return rows.map((r) => JSON.parse(r.data));
 }
+
+export function updateBusiness(id: string, patch: Partial<Omit<BusinessProfile, "id">>): BusinessProfile {
+  const existing = getBusiness(id);
+  if (!existing) throw new Error(`Business ${id} not found`);
+  const updated: BusinessProfile = { ...existing, ...patch };
+  db.prepare("UPDATE businesses SET data = ? WHERE id = ?").run(JSON.stringify(updated), id);
+  return updated;
+}
