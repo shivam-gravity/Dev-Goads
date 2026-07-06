@@ -75,6 +75,20 @@ export default function CampaignDetail() {
     }
   }
 
+  async function handleActivateVariant(variantId: string) {
+    if (!campaignId) return;
+    if (!confirm("Activate this ad? It will start spending your budget immediately.")) return;
+    setBusy(`activate-${variantId}`);
+    try {
+      await api.activateVariant(campaignId, variantId);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Activate failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleSaveBudget() {
     if (!campaignId || !campaign) return;
     const cents = Math.round(parseFloat(newBudget) * 100);
@@ -261,6 +275,15 @@ export default function CampaignDetail() {
                       disabled={busy === `pause-${v.id}`}
                     >
                       {busy === `pause-${v.id}` ? "Pausing…" : "⏸ Pause"}
+                    </button>
+                  )}
+                  {v.status === "paused" && (
+                    <button
+                      className="btn btn-sm btn-primary"
+                      onClick={() => handleActivateVariant(v.id)}
+                      disabled={busy === `activate-${v.id}`}
+                    >
+                      {busy === `activate-${v.id}` ? "Activating…" : "▶ Activate"}
                     </button>
                   )}
                 </div>

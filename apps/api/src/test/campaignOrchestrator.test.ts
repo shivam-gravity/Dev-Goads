@@ -5,7 +5,9 @@ import {
   buildCampaignFromStrategy,
   launchCampaign,
   pauseVariant,
-  reallocateBudget
+  reallocateBudget,
+  activateVariant,
+  applyCreativeMedia,
 } from "../modules/orchestrator/campaignOrchestrator.js";
 
 // Setup helper to insert strategy
@@ -14,8 +16,8 @@ async function seedTestStrategy(id: string, businessId: string) {
     id,
     businessId,
     summary: "Test strategy overview",
-    recommendedNetworks: ["meta", "google"],
-    budgetSplit: { meta: 0.5, google: 0.5 },
+    recommendedNetworks: ["meta", "google", "tiktok"],
+    budgetSplit: { meta: 0.34, google: 0.33, tiktok: 0.33 },
     audiences: ["Custom Lookalike"],
     creatives: [
       { headline: "Headline 1", body: "Body 1", callToAction: "Learn More" },
@@ -41,7 +43,7 @@ test("Campaign Orchestrator - buildCampaignFromStrategy drafting", async () => {
   assert.strictEqual(campaign.name, "Test Promo Campaign");
   assert.strictEqual(campaign.status, "draft");
   assert.strictEqual(campaign.dailyBudgetCents, 10000);
-  assert.strictEqual(campaign.variants.length, 4, "Should generate 4 variants (2 networks x 2 creatives)");
+  assert.strictEqual(campaign.variants.length, 6, "Should generate 6 variants (3 networks x 2 creatives)");
 
   const googleVariants = campaign.variants.filter(v => v.network === "google");
   assert.strictEqual(googleVariants.length, 2, "Should have 2 Google variants");
@@ -56,7 +58,11 @@ test("Campaign Orchestrator - launchCampaign and pauseVariant execution flow", a
 
   // Launch campaign
   const launched = await launchCampaign(campaignDraft.id);
-  assert.strictEqual(launched.status, "active", "Campaign status should change to active");
+  // Meta and Google now launch through their real object-graph hierarchy, paused by
+  // default (safety default — see launchMetaHierarchy/launchGoogleHierarchy); only
+  // TikTok's flat mock path still launches "active" today, so the campaign is "active"
+  // overall because at least one variant is.
+  assert.strictEqual(launched.status, "active", "Campaign status should change to active (TikTok variant still launches active)");
   assert.ok(launched.variants.every(v => v.externalId), "All variants should be assigned external IDs");
 
   // Pause a variant
@@ -65,4 +71,53 @@ test("Campaign Orchestrator - launchCampaign and pauseVariant execution flow", a
   const pausedVariant = pausedCampaign.variants.find(v => v.id === targetVariant.id);
 
   assert.strictEqual(pausedVariant?.status, "paused", "Target variant should change to paused");
+});
+
+test("Campaign Orchestrator - Meta and Google variants launch through their hierarchy paths as paused (mock mode)", async () => {
+  const strategyId = `strat_test_${Date.now()}`;
+  const businessId = "biz_test_1";
+  await seedTestStrategy(strategyId, businessId);
+
+  const campaignDraft = await buildCampaignFromStrategy(strategyId, "Hierarchy Test Campaign", 30000);
+  const launched = await launchCampaign(campaignDraft.id, "demo");
+
+  const metaVariants = launched.variants.filter(v => v.network === "meta");
+  const googleVariants = launched.variants.filter(v => v.network === "google");
+  assert.ok(metaVariants.length > 0, "Test strategy should produce at least one meta variant");
+  assert.ok(googleVariants.length > 0, "Test strategy should produce at least one google variant");
+
+  for (const variant of [...metaVariants, ...googleVariants]) {
+    assert.strictEqual(variant.status, "paused", `${variant.network} variants should launch paused by default (safety default)`);
+    assert.ok(variant.externalId, `${variant.network} variant should get a mock ad id`);
+    assert.ok(variant.adSetExternalId, `${variant.network} variant should be attached to a mock ad set/ad group id`);
+  }
+
+  const tiktokVariants = launched.variants.filter(v => v.network === "tiktok");
+  assert.ok(tiktokVariants.every(v => v.status === "active"), "TikTok keeps the existing flat mock behavior (active) until it gets the same hierarchy depth");
+  assert.strictEqual(launched.status, "active", "Campaign is active overall since the TikTok variant is active");
+});
+
+test("Campaign Orchestrator - activateVariant flips a launched Meta variant to active", async () => {
+  const strategyId = `strat_test_${Date.now()}`;
+  const businessId = "biz_test_1";
+  await seedTestStrategy(strategyId, businessId);
+
+  const campaignDraft = await buildCampaignFromStrategy(strategyId, "Activate Test Campaign", 30000);
+  const launched = await launchCampaign(campaignDraft.id, "demo");
+  const metaVariant = launched.variants.find(v => v.network === "meta")!;
+
+  const activated = await activateVariant(launched.id, metaVariant.id);
+  const activatedVariant = activated.variants.find(v => v.id === metaVariant.id);
+  assert.strictEqual(activatedVariant?.status, "active");
+});
+
+test("Campaign Orchestrator - applyCreativeMedia attaches generated image/video to variants lacking one", async () => {
+  const strategyId = `strat_test_${Date.now()}`;
+  const businessId = "biz_test_1";
+  await seedTestStrategy(strategyId, businessId);
+
+  const campaignDraft = await buildCampaignFromStrategy(strategyId, "Media Test Campaign", 10000);
+  const updated = await applyCreativeMedia(campaignDraft.id, { imageUrl: "/objects/demo/hero.png" });
+
+  assert.ok(updated.variants.every(v => v.creative.imageUrl === "/objects/demo/hero.png"));
 });

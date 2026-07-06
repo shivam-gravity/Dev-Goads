@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ClockIcon, GlobeIcon, BellIcon } from "./icons.js";
+import { ClockIcon, GlobeIcon, BellIcon, UserIcon, CreditCardIcon, LinkIcon, LogOutIcon } from "./icons.js";
 import { useAuth } from "../context/AuthContext.js";
 
 export default function AdsGoHeader({ breadcrumb }: { breadcrumb: string[] }) {
@@ -27,6 +27,11 @@ export default function AdsGoHeader({ breadcrumb }: { breadcrumb: string[] }) {
     setProfileOpen(false);
     logout();
     navigate("/login");
+  }
+
+  function goTo(path: string) {
+    setProfileOpen(false);
+    navigate(path);
   }
 
   return (
@@ -61,8 +66,29 @@ export default function AdsGoHeader({ breadcrumb }: { breadcrumb: string[] }) {
           </div>
           {profileOpen && (
             <div className="header-profile-menu">
-              <button type="button" className="header-profile-menu-item" onClick={handleLogout}>
-                Log out
+              <div className="header-profile-menu-section-label">Subscription</div>
+              <button type="button" className="header-profile-plan-badge" onClick={() => goTo("/profile/subscribe")}>
+                <span>Free</span>
+                <span className="header-profile-plan-status">
+                  <span className="live-dot" /> Free
+                </span>
+              </button>
+
+              <div className="header-profile-menu-section-label">Manage My Adsgo</div>
+              <button type="button" className="header-profile-menu-item" onClick={() => goTo("/profile/your-profile")}>
+                <UserIcon /> User Profile
+              </button>
+              <button type="button" className="header-profile-menu-item" onClick={() => goTo("/profile/subscribe")}>
+                <CreditCardIcon /> Subscription
+              </button>
+
+              <div className="header-profile-menu-divider" />
+              <div className="header-profile-menu-section-label">Setting</div>
+              <button type="button" className="header-profile-menu-item" onClick={() => goTo("/profile/ad-platform-connection")}>
+                <LinkIcon /> Ad Account Connect
+              </button>
+              <button type="button" className="header-profile-menu-item danger" onClick={handleLogout}>
+                <LogOutIcon /> Log out
               </button>
             </div>
           )}

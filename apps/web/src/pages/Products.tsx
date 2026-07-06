@@ -317,7 +317,7 @@ export default function Products() {
                   <div className="gen-modal-empty">
                     <span className="gen-modal-empty-icon">{activeSyncMethod.icon}</span>
                     <p>Connect {activeSyncMethod.title.replace("Sync from ", "").replace("Sync From ", "")} to import products automatically.</p>
-                    <button type="button" className="btn btn-primary gen-modal-connect-btn" onClick={() => navigate("/integrations")}>
+                    <button type="button" className="btn btn-primary gen-modal-connect-btn" onClick={() => navigate("/profile/ad-platform-connection")}>
                       <PlusIcon />
                       Connect product data source
                     </button>

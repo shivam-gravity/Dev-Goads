@@ -98,6 +98,30 @@ export const tiktokAdapter: AdAdapter = {
     }
   },
 
+  async activateVariant(externalId: string): Promise<void> {
+    logger.info(`Initializing activateVariant on TikTok for resource: ${externalId}`);
+    if (!hasLiveCredentials) {
+      logger.info("Offline mode. Mock activating TikTok ad variant.");
+      return;
+    }
+
+    try {
+      const url = "https://business-api.tiktok.com/open_api/v1.3/ad/status/update/";
+      await fetchWithRetry(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Token": TIKTOK_ACCESS_TOKEN!,
+        },
+        body: JSON.stringify({ advertiser_id: TIKTOK_ADVERTISER_ID, ad_ids: [externalId], status: "ENABLE" }),
+      });
+      logger.info(`TikTok ad variant activated successfully: ${externalId}`);
+    } catch (err) {
+      logger.error("Failed to activate TikTok campaign ad variant", err);
+      throw err;
+    }
+  },
+
   async setBudget(input: SetBudgetInput): Promise<void> {
     logger.info(`Updating daily budget for TikTok Ads resource: ${input.externalId} to ${input.dailyBudgetCents} cents`);
     if (!hasLiveCredentials) {

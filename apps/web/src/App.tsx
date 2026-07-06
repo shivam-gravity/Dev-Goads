@@ -34,7 +34,6 @@ import AdsManager from "./pages/AdsManager.js";
 import Drafts from "./pages/Drafts.js";
 import AIInsights from "./pages/AIInsights.js";
 import AssetLibrary from "./pages/AssetLibrary.js";
-import Integrations from "./pages/Integrations.js";
 import Notifications from "./pages/Notifications.js";
 import HelpCenter from "./pages/HelpCenter.js";
 import Admin from "./pages/Admin/index.js";
@@ -43,9 +42,11 @@ import MediaPlan from "./pages/MediaPlan.js";
 import OptimizeGoal from "./pages/OptimizeGoal.js";
 import BrandProfile from "./pages/BrandProfile.js";
 import Products from "./pages/Products.js";
+import UserCenter from "./pages/UserCenter/index.js";
 import { CopilotProvider, useCopilot } from "./providers/CopilotProvider.js";
 import CopilotDrawer from "./components/Copilot/Drawer.js";
 import ErrorBoundary from "./components/ErrorBoundary.js";
+import HelpWidget from "./components/HelpWidget.js";
 
 const MARKETING_ROUTES: Record<string, JSX.Element> = {
   "/features": <Features />,
@@ -70,6 +71,8 @@ function AuthenticatedApp() {
   const [brands, setBrands] = useState([{ id: "default", name: "Default Brand" }]);
   const [selectedBrandId, setSelectedBrandId] = useState("default");
   const brandMenuRef = useRef<HTMLDivElement>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const helpPanelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!brandMenuOpen) return;
@@ -81,6 +84,18 @@ function AuthenticatedApp() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [brandMenuOpen]);
+
+  useEffect(() => {
+    if (!helpOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      const target = e.target as Node;
+      if (helpPanelRef.current && !helpPanelRef.current.contains(target) && !(e.target as HTMLElement).closest(".help-widget-trigger")) {
+        setHelpOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [helpOpen]);
 
   const selectedBrand = brands.find((b) => b.id === selectedBrandId) ?? brands[0];
   const filteredBrands = brands.filter((b) => b.name.toLowerCase().includes(brandQuery.toLowerCase()));
@@ -158,6 +173,7 @@ function AuthenticatedApp() {
         </div>
 
         {businessId && (
+          <>
           <nav className="sidebar-nav adsgo-nav" style={{ overflowY: "auto", paddingBottom: "24px" }}>
             <NavLink to="/dashboard" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
@@ -248,13 +264,21 @@ function AuthenticatedApp() {
               </span>
             </NavLink>
 
-            <NavLink to="/help" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} style={{ marginTop: 'auto' }} onClick={() => setSidebarOpen(false)}>
+          </nav>
+          <div className="sidebar-footer adsgo-footer">
+            <button
+              type="button"
+              className={`sidebar-link adsgo-link help-widget-trigger ${helpOpen ? "active" : ""}`}
+              onClick={() => setHelpOpen((o) => !o)}
+            >
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01" /></svg>
                 <span className="sidebar-link-label">Help Center</span>
               </span>
-            </NavLink>
-          </nav>
+            </button>
+            {helpOpen && <HelpWidget onClose={() => setHelpOpen(false)} panelRef={helpPanelRef} />}
+          </div>
+          </>
         )}
       </aside>
 
@@ -341,9 +365,10 @@ function AuthenticatedApp() {
               path="/assets"
               element={businessId ? <AssetLibrary businessId={businessId} /> : <Navigate to="/login" replace />}
             />
+            <Route path="/integrations" element={<Navigate to="/profile/ad-platform-connection" replace />} />
             <Route
-              path="/integrations"
-              element={businessId ? <Integrations businessId={businessId} /> : <Navigate to="/login" replace />}
+              path="/profile/*"
+              element={businessId ? <UserCenter businessId={businessId} /> : <Navigate to="/login" replace />}
             />
             <Route
               path="/notifications"

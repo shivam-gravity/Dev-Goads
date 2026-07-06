@@ -11,6 +11,8 @@ import {
   listCampaignsForBusiness,
   getCampaign,
   pauseVariant,
+  activateVariant,
+  applyCreativeMedia,
   updateCampaign,
 } from "../../api/src/modules/orchestrator/campaignOrchestrator.js";
 import { ingestCampaignMetrics, normalizePerformance } from "../../api/src/modules/pipeline/performancePipeline.js";
@@ -74,13 +76,28 @@ app.patch("/campaigns/:id", asyncHandler(async (req, res) => {
 }));
 
 app.post("/campaigns/:id/launch", asyncHandler(async (req, res) => {
-  try { res.json(await launchCampaign(req.params.id)); }
+  const workspaceId = typeof req.body?.workspaceId === "string" ? req.body.workspaceId : "demo";
+  try { res.json(await launchCampaign(req.params.id, workspaceId)); }
   catch (err) { sendError(res, err, 400, "Launch failed"); }
 }));
 
 app.post("/campaigns/:id/variants/:variantId/pause", asyncHandler(async (req, res) => {
   try { res.json(await pauseVariant(req.params.id, req.params.variantId)); }
   catch (err) { sendError(res, err, 400, "Pause failed"); }
+}));
+
+app.post("/campaigns/:id/variants/:variantId/activate", asyncHandler(async (req, res) => {
+  try { res.json(await activateVariant(req.params.id, req.params.variantId)); }
+  catch (err) { sendError(res, err, 400, "Activate failed"); }
+}));
+
+app.post("/campaigns/:id/apply-creative-media", asyncHandler(async (req, res) => {
+  // Not z.string().url() — objectStorage.put() returns relative paths ("/objects/...") in
+  // local dev (LocalFileObjectStorage doesn't know its own public origin).
+  const parsed = z.object({ imageUrl: z.string().min(1).optional(), videoUrl: z.string().min(1).optional() }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try { res.json(await applyCreativeMedia(req.params.id, parsed.data)); }
+  catch (err) { sendError(res, err, 400, "Failed to apply creative media"); }
 }));
 
 app.post("/campaigns/:id/ingest", asyncHandler(async (req, res) => {

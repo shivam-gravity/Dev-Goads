@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, CatalogSourceResult, Draft, ProductAnalysis, ProductCatalogItem } from "../api/client.js";
+import { api, CatalogSourceResult, Draft, GenerationJob, ProductAnalysis, ProductCatalogItem } from "../api/client.js";
 import {
   ChevronDownIcon,
   ClockIcon as HistoryIcon,
@@ -174,7 +174,9 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
 
+  const [dailyBudget, setDailyBudget] = useState("50");
   const [generating, setGenerating] = useState(false);
+  const [generationStage, setGenerationStage] = useState<string | null>(null);
   const [generateError, setGenerateError] = useState<string | null>(null);
 
   const headerRef = useRef<HTMLElement>(null);
@@ -319,7 +321,17 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
 
   function goConnectDataSource() {
     setProductsModalOpen(false);
-    navigate("/integrations");
+    navigate("/profile/ad-platform-connection");
+  }
+
+  async function pollGenerationJob(jobId: string, timeoutMs = 120000): Promise<GenerationJob> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const job = await api.getGenerationJob(jobId);
+      if (job.status === "done" || job.status === "failed") return job;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    throw new Error("Creative generation timed out — check /studio for its status");
   }
 
   async function handleGenerate() {
@@ -328,26 +340,57 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
       setGenerateError("Choose at least one placement channel.");
       return;
     }
+    if (products.length === 0) {
+      setGenerateError("Add at least one product to promote.");
+      return;
+    }
+    const dailyBudgetCents = Math.round(parseFloat(dailyBudget) * 100);
+    if (!dailyBudgetCents || dailyBudgetCents <= 0) {
+      setGenerateError("Enter a valid daily budget.");
+      return;
+    }
+
     setGenerating(true);
     try {
-      await api.createDraft(workspaceId, {
-        name: `Campaign Generator - ${(objective[0] ?? "sales").toUpperCase()}`,
-        type: "campaign",
-        data: {
-          goal: objective[0] ?? "sales",
-          platforms: channels,
-          conversionEvent: conversionEvent[0] ?? null,
-          targeting: { locations: countries.map((c) => COUNTRY_OPTIONS.find((o) => o.value === c)?.label ?? c) },
-          products,
-        },
-        aiRecommendation: "Generated through Campaign Generator. Ready to review in Drafts.",
-        score: 90,
+      setGenerationStage("Generating AI strategy…");
+      const strategy = await api.generateStrategy(businessId);
+
+      setGenerationStage("Generating AI creative (image + copy)…");
+      const primaryProduct = products[0];
+      const job = await api.createGenerationJob(workspaceId, {
+        businessId,
+        productUrl: primaryProduct.url,
+        prompt: primaryProduct.url ? undefined : primaryProduct.summary,
+        wantVideo: false,
       });
-      navigate("/drafts");
+      const completedJob = await pollGenerationJob(job.id);
+      if (completedJob.status === "failed") {
+        throw new Error(completedJob.error ?? "Creative generation failed");
+      }
+
+      setGenerationStage("Building campaign…");
+      const campaign = await api.createCampaign({
+        strategyId: strategy.id,
+        name: `Campaign Generator - ${(objective[0] ?? "sales").toUpperCase()}`,
+        dailyBudgetCents,
+      });
+
+      if (completedJob.result) {
+        await api.applyCreativeMedia(campaign.id, {
+          imageUrl: completedJob.result.imageUrl,
+          videoUrl: completedJob.result.videoUrl,
+        });
+      }
+
+      setGenerationStage("Launching on Meta (starts paused for your review)…");
+      await api.launchCampaign(campaign.id, workspaceId);
+
+      navigate(`/campaigns/${campaign.id}`);
     } catch (err) {
       setGenerateError(err instanceof Error ? err.message : "Failed to generate campaign");
     } finally {
       setGenerating(false);
+      setGenerationStage(null);
     }
   }
 
@@ -426,6 +469,17 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
             selected={conversionEvent}
             onChange={setConversionEvent}
           />
+          <div className="gen-field">
+            <span className="gen-field-label">Daily budget (USD)</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              className="gen-field-control"
+              value={dailyBudget}
+              onChange={(e) => setDailyBudget(e.target.value)}
+            />
+          </div>
         </div>
       </section>
 
@@ -506,6 +560,7 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
       {generateError && <p className="error mb-2">{generateError}</p>}
 
       <div className="gen-footer-actions">
+        {generationStage && <span className="muted-text mr-2">{generationStage}</span>}
         <button type="button" className="btn btn-primary" onClick={handleGenerate} disabled={generating}>
           {generating ? "Generating..." : "Generate Campaign"}
         </button>

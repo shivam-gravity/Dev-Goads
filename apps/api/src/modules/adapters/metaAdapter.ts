@@ -1,12 +1,56 @@
-import type { AdAdapter, LaunchVariantInput, LaunchVariantResult, SetBudgetInput } from "./AdAdapter.js";
+import type {
+  AdAdapter,
+  HierarchyCapableAdapter,
+  LaunchVariantInput,
+  LaunchVariantResult,
+  SetBudgetInput,
+  MetaCredentials,
+  CampaignContainerInput,
+  AdSetContainerInput,
+  CreativeUploadInput,
+  CreativeUploadResult,
+  HierarchyAdInput,
+} from "./AdAdapter.js";
 import { logger } from "../logger/logger.js";
 
-const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
-const META_AD_ACCOUNT_ID = process.env.META_AD_ACCOUNT_ID;
-const hasLiveCredentials = Boolean(META_ACCESS_TOKEN && META_AD_ACCOUNT_ID);
+const GRAPH_VERSION = "v22.0";
+const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
+
+const ENV_META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
+const ENV_META_AD_ACCOUNT_ID = process.env.META_AD_ACCOUNT_ID;
+const hasLiveCredentials = Boolean(ENV_META_ACCESS_TOKEN && ENV_META_AD_ACCOUNT_ID);
 
 function mockId(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Three-tier fallback, same shape as every other adapter in this file: explicit
+ * per-workspace OAuth credentials (Phase B) > global env-var credentials (legacy,
+ * still supported for single-tenant/local setups) > null (mock mode).
+ */
+function resolveCredentials(explicit?: MetaCredentials): MetaCredentials | null {
+  if (explicit) return explicit;
+  if (hasLiveCredentials) return { accessToken: ENV_META_ACCESS_TOKEN!, adAccountId: ENV_META_AD_ACCOUNT_ID!, currency: "USD" };
+  return null;
+}
+
+/**
+ * Meta's minor-unit rules aren't a flat "always cents": zero-decimal currencies (JPY,
+ * KRW, ...) have no minor unit at all, and a few (KWD, BHD, ...) use three decimal
+ * places. `dailyBudgetCents` in this app is always `wholeUnits * 100` (the UI takes a
+ * dollar-style amount), so recovering wholeUnits and reapplying the account's real
+ * divisor keeps USD/EUR/INR-style accounts unchanged while fixing the outliers.
+ */
+const META_MINOR_UNIT_DIVISORS: Record<string, number> = {
+  JPY: 1, KRW: 1, VND: 1, CLP: 1, HUF: 1, ISK: 1, TWD: 1, IDR: 1, MMK: 1, UGX: 1, GNF: 1, MGA: 1, PYG: 1, RWF: 1, XAF: 1, XOF: 1,
+  KWD: 1000, BHD: 1000, OMR: 1000, JOD: 1000,
+};
+
+function toMetaMinorUnits(dailyBudgetCents: number, currency: string): number {
+  const wholeUnits = dailyBudgetCents / 100;
+  const divisor = META_MINOR_UNIT_DIVISORS[currency.toUpperCase()] ?? 100;
+  return Math.round(wholeUnits * divisor);
 }
 
 // Exponential Backoff Retry Helper
@@ -31,19 +75,70 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 3, de
   throw new Error("Meta Ads HTTP request failed after maximum retries");
 }
 
-export const metaAdapter: AdAdapter = {
+async function graphPost(path: string, accessToken: string, body: Record<string, unknown>): Promise<any> {
+  const url = `${GRAPH_BASE}${path}?access_token=${accessToken}`;
+  const res = await fetchWithRetry(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+const VIDEO_POLL_INTERVAL_MS = 3000;
+const VIDEO_POLL_MAX_ATTEMPTS = 40; // ~2 minutes
+
+/**
+ * Meta processes an uploaded video asynchronously — referencing its video_id in an ad
+ * creative before processing finishes can fail. Polls status until ready/error/timeout
+ * instead of trusting the upload response the way a naive integration would.
+ */
+async function waitForVideoProcessing(videoId: string, accessToken: string): Promise<void> {
+  for (let attempt = 0; attempt < VIDEO_POLL_MAX_ATTEMPTS; attempt++) {
+    const url = `${GRAPH_BASE}/${videoId}?fields=status&access_token=${accessToken}`;
+    const res = await fetchWithRetry(url, { method: "GET" });
+    const json = (await res.json()) as { status?: { video_status?: string } };
+    const videoStatus = json.status?.video_status;
+    if (videoStatus === "ready") return;
+    if (videoStatus === "error") throw new Error(`Meta video ${videoId} failed processing`);
+    await new Promise((resolve) => setTimeout(resolve, VIDEO_POLL_INTERVAL_MS));
+  }
+  throw new Error(`Meta video ${videoId} did not finish processing in time`);
+}
+
+async function setStatus(externalId: string, status: "PAUSED" | "ACTIVE"): Promise<void> {
+  logger.info(`Setting Meta resource ${externalId} status to ${status}`);
+  if (!hasLiveCredentials) {
+    logger.info(`Offline mode. Mock ${status === "ACTIVE" ? "activating" : "pausing"} Meta ad variant.`);
+    return;
+  }
+  try {
+    const url = `${GRAPH_BASE}/${externalId}?access_token=${ENV_META_ACCESS_TOKEN}`;
+    await fetchWithRetry(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    logger.info(`Meta resource ${externalId} status set to ${status}`);
+  } catch (err) {
+    logger.error(`Failed to set Meta resource ${externalId} status to ${status}`, err);
+    throw err;
+  }
+}
+
+export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
   network: "meta",
 
   async launchVariant(input: LaunchVariantInput): Promise<LaunchVariantResult> {
     logger.info(`Initializing launchVariant on Meta Marketing network for campaign: ${input.campaignId}`);
-    
+
     if (!hasLiveCredentials) {
       logger.info("Credentials absent. Falling back to Meta Ads mock placement.");
       return { externalId: mockId("meta_ad"), status: "active" };
     }
 
     try {
-      const url = `https://graph.facebook.com/v19.0/act_${META_AD_ACCOUNT_ID}/ads?access_token=${META_ACCESS_TOKEN}`;
+      const url = `${GRAPH_BASE}/act_${ENV_META_AD_ACCOUNT_ID}/ads?access_token=${ENV_META_ACCESS_TOKEN}`;
       const res = await fetchWithRetry(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -55,8 +150,7 @@ export const metaAdapter: AdAdapter = {
       });
 
       const json = (await res.json()) as any;
-      
-      // Response validation
+
       if (!json || !json.id) {
         throw new Error("Malformed Meta Marketing API response payload. Missing 'id' parameter.");
       }
@@ -70,24 +164,11 @@ export const metaAdapter: AdAdapter = {
   },
 
   async pauseVariant(externalId: string): Promise<void> {
-    logger.info(`Initializing pauseVariant on Meta for resource: ${externalId}`);
-    if (!hasLiveCredentials) {
-      logger.info("Offline mode. Mock pausing Meta ad variant.");
-      return;
-    }
+    return setStatus(externalId, "PAUSED");
+  },
 
-    try {
-      const url = `https://graph.facebook.com/v19.0/${externalId}?access_token=${META_ACCESS_TOKEN}`;
-      await fetchWithRetry(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "PAUSED" }),
-      });
-      logger.info(`Meta ad variant paused successfully: ${externalId}`);
-    } catch (err) {
-      logger.error("Failed to pause Meta campaign ad variant", err);
-      throw err;
-    }
+  async activateVariant(externalId: string): Promise<void> {
+    return setStatus(externalId, "ACTIVE");
   },
 
   async setBudget(input: SetBudgetInput): Promise<void> {
@@ -98,11 +179,15 @@ export const metaAdapter: AdAdapter = {
     }
 
     try {
-      const url = `https://graph.facebook.com/v19.0/${input.externalId}?access_token=${META_ACCESS_TOKEN}`;
+      // SetBudgetInput carries no credentials/currency (unlike the hierarchy methods below),
+      // so this assumes a standard 100-divisor currency — correct for USD/EUR/INR/GBP etc.,
+      // wrong for the handful of zero/three-decimal currencies toMetaMinorUnits() knows about.
+      // Fully fixing this means threading currency through SetBudgetInput/reallocateBudget.
+      const url = `${GRAPH_BASE}/${input.externalId}?access_token=${ENV_META_ACCESS_TOKEN}`;
       await fetchWithRetry(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ daily_budget: input.dailyBudgetCents }),
+        body: JSON.stringify({ daily_budget: toMetaMinorUnits(input.dailyBudgetCents, "USD") }),
       });
       logger.info("Meta daily campaign budget successfully modified.");
     } catch (err) {
@@ -113,7 +198,7 @@ export const metaAdapter: AdAdapter = {
 
   async fetchInsights(externalId: string) {
     logger.info(`Fetching performance insights for Meta Ads resource: ${externalId}`);
-    
+
     if (!hasLiveCredentials) {
       const impressions = Math.floor(2000 + Math.random() * 8000);
       const clicks = Math.floor(impressions * (0.01 + Math.random() * 0.04));
@@ -124,11 +209,10 @@ export const metaAdapter: AdAdapter = {
     }
 
     try {
-      const url = `https://graph.facebook.com/v19.0/${externalId}/insights?fields=impressions,clicks,actions,spend&access_token=${META_ACCESS_TOKEN}`;
+      const url = `${GRAPH_BASE}/${externalId}/insights?fields=impressions,clicks,actions,spend&access_token=${ENV_META_ACCESS_TOKEN}`;
       const res = await fetchWithRetry(url, { method: "GET" });
       const json = (await res.json()) as any;
-      
-      // Response validation
+
       if (!json || !json.data) {
         logger.warn(`No stats returned in data array for Meta Ads resource: ${externalId}. Returning zero metrics.`);
         return { impressions: 0, clicks: 0, conversions: 0, spendCents: 0 };
@@ -136,19 +220,120 @@ export const metaAdapter: AdAdapter = {
 
       const row = json.data[0] || {};
       const conversions = (row.actions || []).find((a: any) => a.action_type === "offsite_conversion")?.value ?? 0;
-      
+
       const stats = {
         impressions: Number(row.impressions ?? 0),
         clicks: Number(row.clicks ?? 0),
         conversions: Number(conversions),
         spendCents: Math.round(Number(row.spend ?? 0) * 100),
       };
-      
+
       logger.info(`Meta Ads insights fetched: Clicks: ${stats.clicks}, Spend: ${stats.spendCents} cents`);
       return stats;
     } catch (err) {
       logger.error("Failed to query Meta Marketing campaign performance metrics", err);
       throw err;
     }
+  },
+
+  /* ─── Hierarchy path: real Campaign -> Ad Set -> Creative -> Ad object graph ─── */
+
+  async createCampaignContainer(input: CampaignContainerInput, explicit?: MetaCredentials): Promise<{ externalId: string }> {
+    const credentials = resolveCredentials(explicit);
+    if (!credentials) return { externalId: mockId("meta_campaign") };
+
+    const json = await graphPost(`/act_${credentials.adAccountId}/campaigns`, credentials.accessToken, {
+      name: input.name,
+      objective: input.objective,
+      status: "PAUSED",
+      special_ad_categories: [],
+    });
+    if (!json?.id) throw new Error(`Meta campaign creation failed: ${JSON.stringify(json)}`);
+    return { externalId: json.id };
+  },
+
+  async createAdSetContainer(input: AdSetContainerInput, explicit?: MetaCredentials): Promise<{ externalId: string }> {
+    const credentials = resolveCredentials(explicit);
+    if (!credentials) return { externalId: mockId("meta_adset") };
+
+    const json = await graphPost(`/act_${credentials.adAccountId}/adsets`, credentials.accessToken, {
+      name: input.name,
+      campaign_id: input.campaignExternalId,
+      daily_budget: toMetaMinorUnits(input.dailyBudgetCents, credentials.currency),
+      billing_event: "IMPRESSIONS",
+      optimization_goal: "LINK_CLICKS",
+      targeting: input.targeting,
+      status: "PAUSED",
+    });
+    if (!json?.id) throw new Error(`Meta ad set creation failed: ${JSON.stringify(json)}`);
+    return { externalId: json.id };
+  },
+
+  async uploadCreativeAsset(input: CreativeUploadInput, explicit?: MetaCredentials): Promise<CreativeUploadResult> {
+    const credentials = resolveCredentials(explicit);
+    if (!credentials) return input.videoUrl ? { videoId: mockId("meta_video") } : { imageHash: mockId("meta_imghash") };
+
+    if (input.videoUrl) {
+      const json = await graphPost(`/act_${credentials.adAccountId}/advideos`, credentials.accessToken, {
+        file_url: input.videoUrl,
+      });
+      if (!json?.id) throw new Error(`Meta video upload failed: ${JSON.stringify(json)}`);
+      await waitForVideoProcessing(json.id, credentials.accessToken);
+      return { videoId: json.id };
+    }
+
+    if (input.imageUrl) {
+      const json = await graphPost(`/act_${credentials.adAccountId}/adimages`, credentials.accessToken, {
+        url: input.imageUrl,
+      });
+      const firstImage = json?.images ? Object.values(json.images)[0] as { hash?: string } | undefined : undefined;
+      if (!firstImage?.hash) throw new Error(`Meta image upload failed: ${JSON.stringify(json)}`);
+      return { imageHash: firstImage.hash };
+    }
+
+    // No image/video on this creative yet (e.g. a strategy-generated text-only variant
+    // that hasn't been through AI image generation) — the ad still gets created, just
+    // without image_hash/video_id, same graceful-degradation shape as the mock branches above.
+    return {};
+  },
+
+  async createHierarchyAd(input: HierarchyAdInput, explicit?: MetaCredentials): Promise<LaunchVariantResult> {
+    const credentials = resolveCredentials(explicit);
+    if (!credentials) return { externalId: mockId("meta_ad"), status: "paused" };
+
+    const linkData: Record<string, unknown> = {
+      message: input.creative.body,
+      link: input.landingPageUrl,
+      name: input.creative.headline,
+      call_to_action: { type: "LEARN_MORE", value: { link: input.landingPageUrl } },
+    };
+    if (input.imageHash) linkData.image_hash = input.imageHash;
+
+    const objectStorySpec: Record<string, unknown> = { page_id: credentials.pageId };
+    if (input.videoId) {
+      objectStorySpec.video_data = {
+        video_id: input.videoId,
+        message: input.creative.body,
+        call_to_action: { type: "LEARN_MORE", value: { link: input.landingPageUrl } },
+      };
+    } else {
+      objectStorySpec.link_data = linkData;
+    }
+
+    const creativeJson = await graphPost(`/act_${credentials.adAccountId}/adcreatives`, credentials.accessToken, {
+      name: `${input.name}-creative`,
+      object_story_spec: objectStorySpec,
+    });
+    if (!creativeJson?.id) throw new Error(`Meta ad creative creation failed: ${JSON.stringify(creativeJson)}`);
+
+    const adJson = await graphPost(`/act_${credentials.adAccountId}/ads`, credentials.accessToken, {
+      name: input.name,
+      adset_id: input.adSetExternalId,
+      creative: { creative_id: creativeJson.id },
+      status: "PAUSED",
+    });
+    if (!adJson?.id) throw new Error(`Meta ad creation failed: ${JSON.stringify(adJson)}`);
+
+    return { externalId: adJson.id, status: "paused" };
   },
 };

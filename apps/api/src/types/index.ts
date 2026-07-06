@@ -56,6 +56,7 @@ export interface AdCreative {
   body: string;
   callToAction: string;
   imageUrl?: string;
+  videoUrl?: string;
 }
 
 export interface AdStrategy {
@@ -79,6 +80,8 @@ export interface CampaignVariant {
   status: CampaignStatus;
   audienceName?: string;
   landingPageUrl?: string;
+  /** Ad Set-level external id for hierarchy-launched variants (see metaAdapter.createAdSetContainer) — budget lives here, not on the leaf ad. */
+  adSetExternalId?: string;
 }
 
 export interface Campaign {
@@ -147,6 +150,10 @@ export interface CreativeAsset {
   format: "text" | "image" | "video";
   tags: string[];
   createdAt: string;
+  imageAssetId?: string;
+  imageUrl?: string;
+  videoAssetId?: string;
+  videoUrl?: string;
 }
 
 export interface TrendPoint {

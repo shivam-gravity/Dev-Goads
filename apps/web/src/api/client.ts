@@ -93,6 +93,11 @@ export interface Notification { id: string; workspaceId: string; type: string; t
 export interface Asset { id: string; workspaceId: string; name: string; type: "image" | "video" | "logo" | "font" | "template"; url: string; thumbnailUrl?: string; size: number; mimeType: string; tags: string[]; usageCount: number; width?: number; height?: number; createdAt: string; }
 export interface Insight { id: string; workspaceId: string; type: "anomaly" | "recommendation" | "trend" | "opportunity"; title: string; description: string; metric?: string; change?: number; severity: "low" | "medium" | "high"; actionLabel?: string; actionUrl?: string; dismissed: boolean; createdAt: string; }
 export interface Integration { id: string; workspaceId: string; platform: "meta" | "google" | "tiktok" | "shopify" | "pixel"; status: "connected" | "disconnected" | "error" | "pending"; accountName?: string; accountId?: string; permissions: string[]; settings: Record<string, unknown>; connectedAt?: string; errorMessage?: string; updatedAt: string; }
+export interface SavedAudience { id: string; workspaceId: string; name: string; ageMin: number; ageMax: number; gender: "all" | "male" | "female"; locations: string[]; interests: string[]; exclusions: string[]; estimatedReach?: string; createdAt: string; }
+export interface ReachEstimate { usersLowerBound: number; usersUpperBound: number; source: "meta" | "heuristic"; }
+export interface GenerationJobInput { businessId: string; productUrl?: string; prompt?: string; wantVideo: boolean; }
+export interface GenerationJobResult { headline: string; body: string; callToAction: string; creativeId: string; imageAssetId: string; imageUrl: string; videoAssetId?: string; videoUrl?: string; }
+export interface GenerationJob { id: string; workspaceId: string; businessId: string; type: "image" | "video" | "full_creative"; status: "queued" | "running" | "done" | "failed"; input: GenerationJobInput; result?: GenerationJobResult; error?: string; createdAt: string; updatedAt: string; }
 export type ProductCatalogSource = "shopify" | "facebook" | "google";
 export interface ProductCatalogItem { id: string; source: ProductCatalogSource; name: string; category: string; priceCents: number; imageUrl: string; url: string; }
 export interface CatalogSourceResult { source: ProductCatalogSource; connected: boolean; accountName?: string; items: ProductCatalogItem[]; }
@@ -157,6 +162,8 @@ export const api = {
   dismissInsight: (id: string) => request<Insight>(`/insights/${id}/dismiss`, { method: "PATCH" }),
 
   // Integrations
+  startMetaOAuth: (workspaceId: string) => `${BASE_URL}/integrations/meta/oauth/start?workspaceId=${encodeURIComponent(workspaceId)}`,
+  startGoogleOAuth: (workspaceId: string) => `${BASE_URL}/integrations/google/oauth/start?workspaceId=${encodeURIComponent(workspaceId)}`,
   listIntegrations: (workspaceId: string) => request<Integration[]>(`/workspaces/${workspaceId}/integrations`),
   connectIntegration: (workspaceId: string, platform: Integration["platform"], accountName: string) =>
     request<Integration>(`/workspaces/${workspaceId}/integrations/${platform}/connect`, { method: "POST", body: JSON.stringify({ accountName }) }),
@@ -166,6 +173,19 @@ export const api = {
     request<Integration>(`/workspaces/${workspaceId}/integrations/${platform}/settings`, { method: "PATCH", body: JSON.stringify(settings) }),
   listProductCatalog: (workspaceId: string, source: ProductCatalogSource | "all") =>
     request<CatalogSourceResult[]>(`/workspaces/${workspaceId}/products?source=${source}`),
+
+  // Saved audiences
+  listAudiences: (workspaceId: string) => request<SavedAudience[]>(`/workspaces/${workspaceId}/audiences`),
+  createAudience: (workspaceId: string, input: Omit<SavedAudience, "id" | "workspaceId" | "createdAt" | "estimatedReach">) =>
+    request<SavedAudience>(`/workspaces/${workspaceId}/audiences`, { method: "POST", body: JSON.stringify(input) }),
+  deleteAudience: (id: string) => request<void>(`/audiences/${id}`, { method: "DELETE" }),
+  getReachEstimate: (workspaceId: string, audienceId: string) =>
+    request<ReachEstimate>(`/workspaces/${workspaceId}/audiences/${audienceId}/reach-estimate`, { method: "POST" }),
+
+  // AI creative generation
+  createGenerationJob: (workspaceId: string, input: GenerationJobInput) =>
+    request<GenerationJob>(`/workspaces/${workspaceId}/generation-jobs`, { method: "POST", body: JSON.stringify(input) }),
+  getGenerationJob: (id: string) => request<GenerationJob>(`/generation-jobs/${id}`),
 
   // Drafts
   listDrafts: (workspaceId: string) => request<Draft[]>(`/workspaces/${workspaceId}/drafts`),
@@ -215,9 +235,14 @@ export const api = {
   getCampaign: (id: string) => request<Campaign>(`/campaigns/${id}`),
   updateCampaign: (id: string, patch: { name?: string; dailyBudgetCents?: number }) =>
     request<Campaign>(`/campaigns/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
-  launchCampaign: (id: string) => request<Campaign>(`/campaigns/${id}/launch`, { method: "POST" }),
+  launchCampaign: (id: string, workspaceId: string = localStorage.getItem("adgo_workspace_id") ?? "demo") =>
+    request<Campaign>(`/campaigns/${id}/launch`, { method: "POST", body: JSON.stringify({ workspaceId }) }),
   pauseVariant: (campaignId: string, variantId: string) =>
     request<Campaign>(`/campaigns/${campaignId}/variants/${variantId}/pause`, { method: "POST" }),
+  activateVariant: (campaignId: string, variantId: string) =>
+    request<Campaign>(`/campaigns/${campaignId}/variants/${variantId}/activate`, { method: "POST" }),
+  applyCreativeMedia: (campaignId: string, media: { imageUrl?: string; videoUrl?: string }) =>
+    request<Campaign>(`/campaigns/${campaignId}/apply-creative-media`, { method: "POST", body: JSON.stringify(media) }),
   ingestMetrics: (id: string) => request<unknown[]>(`/campaigns/${id}/ingest`, { method: "POST" }),
   getPerformance: (id: string) => request<NormalizedPerformance[]>(`/campaigns/${id}/performance`),
   getCampaignTrend: (id: string) => request<TrendPoint[]>(`/campaigns/${id}/trend`),

@@ -1,16 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Reveal from "../components/Reveal.js";
+import { api, SavedAudience } from "../api/client.js";
 
-interface SavedAudience {
-  id: string;
-  name: string;
-  reach: string;
-  interests: string[];
-  locations: string[];
-  age: string;
+function formatReach(estimate: { usersLowerBound: number; usersUpperBound: number; source: "meta" | "heuristic" }): string {
+  const fmt = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}K`);
+  const suffix = estimate.source === "heuristic" ? " (estimate)" : "";
+  return `${fmt(estimate.usersLowerBound)} - ${fmt(estimate.usersUpperBound)}${suffix}`;
 }
 
 export default function AudienceBuilder({ businessId }: { businessId: string }) {
+  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
   const [audienceName, setAudienceName] = useState("");
   
   // Demographics
@@ -34,6 +33,19 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
 
   // Saved segments
   const [savedAudiences, setSavedAudiences] = useState<SavedAudience[]>([]);
+  const [reachByAudience, setReachByAudience] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.listAudiences(wsId).then((list) => {
+      setSavedAudiences(list);
+      for (const aud of list) {
+        api.getReachEstimate(wsId, aud.id)
+          .then((estimate) => setReachByAudience((prev) => ({ ...prev, [aud.id]: formatReach(estimate) })))
+          .catch(() => {});
+      }
+    }).catch(() => {});
+  }, [wsId]);
 
   function addLocation() {
     if (locationInput.trim() && !locations.includes(locationInput.trim())) {
@@ -56,22 +68,37 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
     }
   }
 
-  function handleSaveAudience() {
+  async function handleSaveAudience() {
     if (!audienceName.trim()) {
       alert("Please name your audience segment.");
       return;
     }
-    const newAud: SavedAudience = {
-      id: Math.random().toString(36).substring(7),
-      name: audienceName,
-      reach: `${(Math.floor(Math.random() * 8) + 1).toFixed(1)}M - ${(Math.floor(Math.random() * 12) + 9).toFixed(1)}M`,
-      interests,
-      locations,
-      age: `${ageMin}-${ageMax === 65 ? "65+" : ageMax}`
-    };
-    setSavedAudiences([...savedAudiences, newAud]);
-    setAudienceName("");
-    alert("Audience saved successfully!");
+    setSaving(true);
+    try {
+      const saved = await api.createAudience(wsId, {
+        name: audienceName,
+        ageMin,
+        ageMax,
+        gender: gender as "all" | "male" | "female",
+        locations,
+        interests,
+        exclusions,
+      });
+      setSavedAudiences((prev) => [saved, ...prev]);
+      setAudienceName("");
+      api.getReachEstimate(wsId, saved.id)
+        .then((estimate) => setReachByAudience((prev) => ({ ...prev, [saved.id]: formatReach(estimate) })))
+        .catch(() => {});
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to save audience.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteAudience(id: string) {
+    await api.deleteAudience(id).catch(() => {});
+    setSavedAudiences((prev) => prev.filter((a) => a.id !== id));
   }
 
   // Calculate reach estimation meter
@@ -269,8 +296,8 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
               </div>
             </div>
 
-            <button className="btn btn-primary btn-full mt-4" onClick={handleSaveAudience}>
-              Save Target Segment
+            <button className="btn btn-primary btn-full mt-4" onClick={handleSaveAudience} disabled={saving}>
+              {saving ? "Saving…" : "Save Target Segment"}
             </button>
           </section>
 
@@ -286,12 +313,13 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
                     <div key={aud.id} className="audience-library-item">
                       <div className="audience-lib-header">
                         <strong>{aud.name}</strong>
-                        <span>{aud.reach} reach</span>
+                        <span>{reachByAudience[aud.id] ?? "Estimating…"} reach</span>
+                        <button type="button" className="audience-pill-remove" onClick={() => handleDeleteAudience(aud.id)} title="Delete">×</button>
                       </div>
                       <div className="audience-lib-details mt-2">
                         <p><strong>Locations:</strong> {aud.locations.join(", ")}</p>
                         <p><strong>Interests:</strong> {aud.interests.join(", ")}</p>
-                        <p><strong>Age:</strong> {aud.age}</p>
+                        <p><strong>Age:</strong> {aud.ageMin}-{aud.ageMax === 65 ? "65+" : aud.ageMax}</p>
                       </div>
                     </div>
                   ))}

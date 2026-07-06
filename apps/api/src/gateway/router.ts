@@ -35,8 +35,18 @@ const SCRAPER_SERVICE_URL = process.env.SCRAPER_SERVICE_URL ?? "http://localhost
 import { listNotifications, markRead, markAllRead, unreadCount, seedDemoNotifications, createNotification } from "../modules/notifications/notificationService.js";
 import { listAssets, createAsset, deleteAsset, updateAssetTags, seedDemoAssets } from "../modules/assets/assetService.js";
 import { listInsights, dismissInsight, generateInsights, seedDemoInsights } from "../modules/insights/insightService.js";
-import { getOrCreateIntegrations, connectIntegration, disconnectIntegration, updateIntegrationSettings } from "../modules/integrations/integrationService.js";
+import { getOrCreateIntegrations, connectIntegration, disconnectIntegration, updateIntegrationSettings, getMetaCredentials } from "../modules/integrations/integrationService.js";
 import { getProductCatalog } from "../modules/integrations/productCatalogService.js";
+import { createGenerationJob, getGenerationJob } from "../modules/generation/generationJobService.js";
+import { creativeGenerationQueue } from "../infra/queue.js";
+import {
+  listSavedAudiences,
+  createSavedAudience,
+  updateSavedAudience,
+  deleteSavedAudience,
+  getSavedAudience,
+} from "../modules/audience/savedAudienceService.js";
+import { buildMetaTargetingSpec, fetchMetaReachEstimate, estimateReachHeuristic } from "../modules/adapters/metaTargetingMapper.js";
 import {
   listDrafts, createDraft, updateDraft, publishDraft, deleteDraft, scheduleDraft,
   listAdSets, createAdSet, listAds, createAd, updateAd, seedDemoDrafts,
@@ -219,6 +229,79 @@ router.post("/workspaces/:id/integrations/:platform/disconnect", asyncHandler(as
 router.patch("/workspaces/:id/integrations/:platform/settings", asyncHandler(async (req, res) => {
   try { res.json(await updateIntegrationSettings(req.params.id, req.params.platform as any, req.body ?? {})); }
   catch (err) { sendError(res, err, 400, "Settings update failed"); }
+}));
+
+/* ═══════════════════════════════════════════════
+   SAVED AUDIENCES / DEMOGRAPHIC TARGETING
+   ═══════════════════════════════════════════════ */
+
+const savedAudienceSchema = z.object({
+  name: z.string().trim().min(1),
+  ageMin: z.number().int().min(13).max(65),
+  ageMax: z.number().int().min(13).max(65),
+  gender: z.enum(["all", "male", "female"]).default("all"),
+  locations: z.array(z.string()).default([]),
+  interests: z.array(z.string()).default([]),
+  exclusions: z.array(z.string()).default([]),
+});
+
+router.get("/workspaces/:id/audiences", asyncHandler(async (req, res) => res.json(await listSavedAudiences(req.params.id))));
+
+router.post("/workspaces/:id/audiences", asyncHandler(async (req, res) => {
+  const parsed = savedAudienceSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  res.status(201).json(await createSavedAudience(req.params.id, parsed.data));
+}));
+
+router.patch("/audiences/:id", asyncHandler(async (req, res) => {
+  try { res.json(await updateSavedAudience(req.params.id, savedAudienceSchema.partial().parse(req.body))); }
+  catch (err) { sendError(res, err, 404, "Not found"); }
+}));
+
+router.delete("/audiences/:id", asyncHandler(async (req, res) => {
+  const deleted = await deleteSavedAudience(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "Not found" });
+  res.status(204).send();
+}));
+
+router.post("/workspaces/:id/audiences/:audienceId/reach-estimate", asyncHandler(async (req, res) => {
+  const audience = await getSavedAudience(req.params.audienceId);
+  if (!audience) return res.status(404).json({ error: "Not found" });
+
+  const credentials = await getMetaCredentials(req.params.id);
+  if (!credentials) return res.json(estimateReachHeuristic(audience));
+
+  try {
+    const targeting = await buildMetaTargetingSpec(credentials.accessToken, audience);
+    res.json(await fetchMetaReachEstimate(credentials.accessToken, credentials.adAccountId, targeting));
+  } catch (err) {
+    sendError(res, err, 502, "Meta reach estimate failed");
+  }
+}));
+
+/* ═══════════════════════════════════════════════
+   AI CREATIVE GENERATION
+   ═══════════════════════════════════════════════ */
+
+const generationJobSchema = z.object({
+  businessId: z.string().min(1),
+  productUrl: z.string().trim().min(1).optional(),
+  prompt: z.string().trim().min(1).optional(),
+  wantVideo: z.boolean().default(false),
+}).refine((v) => v.productUrl || v.prompt, { message: "Either productUrl or prompt is required" });
+
+router.post("/workspaces/:id/generation-jobs", asyncHandler(async (req, res) => {
+  const parsed = generationJobSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const job = await createGenerationJob(req.params.id, parsed.data);
+  await creativeGenerationQueue.add("generate", { jobId: job.id });
+  res.status(202).json(job);
+}));
+
+router.get("/generation-jobs/:id", asyncHandler(async (req, res) => {
+  const job = await getGenerationJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Not found" });
+  res.json(job);
 }));
 
 const catalogSourceSchema = z.enum(["all", "shopify", "facebook", "google", "woocommerce"]);
@@ -445,6 +528,8 @@ router.get("/campaigns/:id", campaignProxy);
 router.patch("/campaigns/:id", campaignProxy);
 router.post("/campaigns/:id/launch", campaignProxy);
 router.post("/campaigns/:id/variants/:variantId/pause", campaignProxy);
+router.post("/campaigns/:id/variants/:variantId/activate", campaignProxy);
+router.post("/campaigns/:id/apply-creative-media", campaignProxy);
 router.post("/campaigns/:id/ingest", campaignProxy);
 router.get("/campaigns/:id/performance", campaignProxy);
 router.get("/campaigns/:id/trend", asyncHandler(async (req, res) => res.json(await getCampaignTrend(req.params.id))));

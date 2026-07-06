@@ -208,3 +208,20 @@ model SavedAudience {
   @@index([workspaceId])
   @@map("saved_audiences")
 }
+
+model GenerationJob {
+  id          String   @id
+  workspaceId String
+  businessId  String
+  type        String
+  status      String   @default("queued")
+  input       Json
+  result      Json?
+  error       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([businessId])
+  @@map("generation_jobs")
+}

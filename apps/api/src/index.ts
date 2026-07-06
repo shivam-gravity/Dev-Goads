@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import { router } from "./gateway/router.js";
+import { metaOAuthRoutes } from "./gateway/metaOAuthRoutes.js";
+import { googleOAuthRoutes } from "./gateway/googleOAuthRoutes.js";
 import { apiRateLimiter } from "./gateway/middleware/rateLimit.js";
 import { requireAuth } from "./gateway/middleware/auth.js";
 import { registerEventHandlers } from "./infra/eventHandlers.js";
@@ -23,6 +25,10 @@ app.get("/health", (_req, res) => res.json({ status: "ok" }));
 // Serves blobs written via LocalFileObjectStorage (src/infra/objectStorage.ts) — a real
 // S3/GCS/R2-backed implementation drops this static route in favor of signed URLs.
 app.use("/objects", express.static(path.resolve(__dirname, "../data/objects")));
+
+// Unauthenticated — Facebook's/Google's OAuth redirects carry no bearer token (see the respective routes files).
+app.use("/api/integrations/meta/oauth", metaOAuthRoutes);
+app.use("/api/integrations/google/oauth", googleOAuthRoutes);
 
 app.use("/api", requireAuth, router);
 

@@ -43,7 +43,17 @@ export async function getCreative(id: string): Promise<CreativeAsset | null> {
 
 export async function createCreative(
   businessId: string,
-  input: { headline: string; body: string; callToAction: string; format?: "text" | "image" | "video"; tags?: string[] }
+  input: {
+    headline: string;
+    body: string;
+    callToAction: string;
+    format?: "text" | "image" | "video";
+    tags?: string[];
+    imageAssetId?: string;
+    imageUrl?: string;
+    videoAssetId?: string;
+    videoUrl?: string;
+  }
 ): Promise<CreativeAsset> {
   const creative: CreativeAsset = {
     id: randomUUID(),
@@ -54,6 +64,10 @@ export async function createCreative(
     format: input.format ?? "text",
     tags: input.tags ?? [],
     createdAt: new Date().toISOString(),
+    imageAssetId: input.imageAssetId,
+    imageUrl: input.imageUrl,
+    videoAssetId: input.videoAssetId,
+    videoUrl: input.videoUrl,
   };
 
   await prisma.creative.create({

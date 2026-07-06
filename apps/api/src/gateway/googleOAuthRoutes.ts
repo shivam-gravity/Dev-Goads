@@ -1,0 +1,40 @@
+import { Router } from "express";
+import { startGoogleConnect, handleGoogleOAuthCallback } from "../modules/integrations/googleOAuth.js";
+import { logger } from "../modules/logger/logger.js";
+
+/**
+ * Unauthenticated by design — same reasoning as metaOAuthRoutes.ts: Google's OAuth
+ * redirect is a plain browser navigation with no Authorization header. Workspace
+ * identity travels through the signed `state` param instead of a bearer token.
+ */
+const WEB_APP_URL = process.env.WEB_APP_URL ?? "http://localhost:5173";
+
+export const googleOAuthRoutes = Router();
+
+googleOAuthRoutes.get("/start", async (req, res) => {
+  const workspaceId = typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined;
+  if (!workspaceId) return res.status(400).json({ error: "workspaceId query param required" });
+  try {
+    const result = await startGoogleConnect(workspaceId);
+    if ("redirectUrl" in result) return res.redirect(result.redirectUrl);
+    res.redirect(`${WEB_APP_URL}/profile/ad-platform-connection?connected=google`);
+  } catch (err) {
+    logger.error("Google OAuth start failed", err);
+    res.redirect(`${WEB_APP_URL}/profile/ad-platform-connection?error=google_oauth_failed`);
+  }
+});
+
+googleOAuthRoutes.get("/callback", async (req, res) => {
+  const code = typeof req.query.code === "string" ? req.query.code : undefined;
+  const state = typeof req.query.state === "string" ? req.query.state : undefined;
+  if (!code || !state) {
+    return res.redirect(`${WEB_APP_URL}/profile/ad-platform-connection?error=missing_code_or_state`);
+  }
+  try {
+    await handleGoogleOAuthCallback(code, state);
+    res.redirect(`${WEB_APP_URL}/profile/ad-platform-connection?connected=google`);
+  } catch (err) {
+    logger.error("Google OAuth callback failed", err);
+    res.redirect(`${WEB_APP_URL}/profile/ad-platform-connection?error=google_oauth_failed`);
+  }
+});
