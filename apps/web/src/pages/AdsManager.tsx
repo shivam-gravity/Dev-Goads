@@ -370,7 +370,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                     {brief.stats.map((s) => (
                       <div className="adsgo-stat-tile" key={s.label}>
                         <div className="adsgo-stat-tile-head">
-                          <span>{s.label}</span>
+                          <span title={s.label}>{s.label}</span>
                           <span className={`adsgo-trend-badge ${s.trend} ${s.sentiment}`}>
                             {trendArrow(s.trend)} {s.delta}
                           </span>
@@ -408,7 +408,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                   </div>
 
                   <div className="adsgo-opt-rule-pill">
-                    <span className="adsgo-opt-rule-icon">◎</span> Budget $500, PURCHASE, CPA ≤ –
+                    <span className="adsgo-opt-rule-icon">◎</span> Budget $500 · Goal: Purchases
                   </div>
 
                   <div className="adsgo-opt-summary-title">Summary</div>
@@ -456,7 +456,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                     >
                       <span className="adsgo-opt-mode-icon">⟲</span>
                       <span>Recommended only</span>
-                      <span className="adsgo-opt-mode-status">Paused</span>
+                      <span className="adsgo-opt-mode-status">{applyMode === "recommended" ? "Selected" : "Off"}</span>
                     </div>
                     <div
                       className={`adsgo-opt-mode-card ${applyMode === "auto" ? "selected" : ""}`}
@@ -465,7 +465,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                       {applyMode === "auto" && <span className="adsgo-best-choice-tag">Best choice</span>}
                       <span className="adsgo-opt-mode-icon">∞</span>
                       <span>Auto-apply</span>
-                      <span className="adsgo-opt-mode-status">Paused</span>
+                      <span className="adsgo-opt-mode-status">{applyMode === "auto" ? "Selected" : "Off"}</span>
                     </div>
                   </div>
 
@@ -484,9 +484,11 @@ export default function AdsManager({ businessId }: { businessId: string }) {
 
             {campaigns.length === 0 && !loading && (
               <div className="adsgo-demo-banner">
-                <span className="adsgo-demo-banner-icon">ⓘ</span>
-                <span className="adsgo-demo-banner-text">Demo data only. Create your first campaign to view performance data.</span>
-                <Link to="/campaigns/new" className="btn btn-primary adsgo-demo-banner-btn">✨ Create campaign</Link>
+                <div className="adsgo-demo-banner-inner">
+                  <span className="adsgo-demo-banner-icon">ⓘ</span>
+                  <span className="adsgo-demo-banner-text">Demo data only. Create your first campaign to view performance data.</span>
+                  <Link to="/campaigns/new" className="btn btn-primary adsgo-demo-banner-btn">✨ Create campaign</Link>
+                </div>
               </div>
             )}
           </div>

@@ -2,6 +2,7 @@
  * Seeds the demo user/workspaces used for the demo auth bypass — replaces the
  * seed block that used to run on every import of src/db/db.ts. Idempotent.
  */
+import "dotenv/config";
 import { prisma } from "../src/db/prisma.js";
 
 async function main() {

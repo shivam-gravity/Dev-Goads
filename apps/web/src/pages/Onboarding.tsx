@@ -60,13 +60,20 @@ export default function Onboarding({ onOnboarded }: { onOnboarded: (businessId: 
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+
+    const trimmedName = name.trim();
+    const trimmedIndustry = industry.trim();
+    if (!trimmedName) { setError("Enter a business name."); return; }
+    if (!trimmedIndustry) { setError("Enter an industry."); return; }
+    if (!(monthlyBudget > 0)) { setError("Enter a monthly budget greater than 0."); return; }
+
     setSubmitting(true);
     setError(null);
     try {
       const business = await api.createBusiness({
-        name,
+        name: trimmedName,
         website: website || undefined,
-        industry,
+        industry: trimmedIndustry,
         monthlyBudgetCents: Math.round(monthlyBudget * 100),
         goals: goals.split(",").map((g) => g.trim()).filter(Boolean),
         targetAudience: targetAudience || undefined,

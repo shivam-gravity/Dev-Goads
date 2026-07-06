@@ -7282,6 +7282,7 @@ td {
 .media-plan-chat-header-actions {
   display: flex;
   gap: 8px;
+  position: relative;
 }
 
 .media-plan-icon-btn {
@@ -7312,6 +7313,12 @@ td {
   overflow-y: auto;
   padding: 20px;
   min-height: 220px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.media-plan-chat-body::-webkit-scrollbar {
+  display: none;
 }
 
 .media-plan-chat-empty {
@@ -7354,6 +7361,28 @@ td {
   border-bottom-left-radius: 4px;
 }
 
+.media-plan-chat-bubble p {
+  margin: 0 0 8px;
+}
+
+.media-plan-chat-bubble p:last-child {
+  margin-bottom: 0;
+}
+
+.media-plan-chat-bubble ul,
+.media-plan-chat-bubble ol {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+}
+
+.media-plan-chat-bubble li {
+  margin-bottom: 4px;
+}
+
+.media-plan-chat-bubble li:last-child {
+  margin-bottom: 0;
+}
+
 .media-plan-chat-bubble.typing {
   display: flex;
   align-items: center;
@@ -7379,6 +7408,10 @@ td {
 
 .media-plan-chat-error {
   align-self: flex-start;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   background: #fef2f2;
   color: #b91c1c;
   border: 1px solid #fecaca;
@@ -7386,6 +7419,84 @@ td {
   border-radius: 12px;
   font-size: 13px;
   max-width: 85%;
+}
+
+.media-plan-retry-btn {
+  background: none !important;
+  border: 1px solid #b91c1c !important;
+  box-shadow: none !important;
+  transform: none !important;
+  color: #b91c1c;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+
+.media-plan-retry-btn:hover {
+  background: #fee2e2 !important;
+}
+
+.media-plan-chat-history-dropdown {
+  position: absolute;
+  top: 40px;
+  right: 0;
+  width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  padding: 8px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.media-plan-chat-history-empty {
+  padding: 16px 12px;
+  font-size: 13px;
+  color: #9ca3af;
+  text-align: center;
+}
+
+.media-plan-chat-history-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  transform: none !important;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.media-plan-chat-history-item:hover {
+  background: #f9fafb !important;
+}
+
+.media-plan-chat-history-item-text {
+  font-size: 13px;
+  color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.media-plan-chat-history-item-time {
+  font-size: 11px;
+  color: #9ca3af;
 }
 
 .media-plan-chat-tabs {
@@ -7521,10 +7632,30 @@ td {
     flex-direction: column;
   }
 
+  .media-plan-hero-card {
+    padding: 32px 24px;
+  }
+
   .media-plan-chat-panel {
     min-width: 0;
     width: 100%;
     height: 520px;
+  }
+}
+
+/* On desktop, `.media-plan-chat-panel` previously had no bounded height —
+   stretched via the row's `align-items`, it just grew with the conversation
+   instead of the chat body's `overflow-y: auto` (above) ever engaging, so a
+   long conversation ballooned the whole page rather than scrolling in place.
+   Bounding the panel's height here (and letting the hero card size to its
+   own content instead of being stretched to match) fixes that. */
+@media (min-width: 901px) {
+  .media-plan-layout {
+    align-items: flex-start;
+  }
+
+  .media-plan-chat-panel {
+    height: min(720px, calc(100vh - 180px));
   }
 }
 
@@ -8021,12 +8152,18 @@ td {
 
 .adsgo-stat-tile-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   font-size: 12px;
   color: #6b7280;
   margin-bottom: 8px;
   gap: 6px;
+}
+
+.adsgo-stat-tile-head > span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .adsgo-trend-badge {
@@ -8334,9 +8471,17 @@ td {
 .adsgo-demo-banner {
   position: absolute;
   inset: 0;
-  margin: auto;
-  top: 40%;
-  height: fit-content;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(4px);
+  border-radius: 20px;
+}
+
+.adsgo-demo-banner-inner {
   display: flex;
   align-items: center;
   gap: 14px;
@@ -8344,7 +8489,7 @@ td {
   border: 1px solid #e5e7eb;
   border-radius: 16px;
   padding: 16px 20px;
-  box-shadow: 0 12px 32px rgba(13, 3, 31, 0.12);
+  box-shadow: 0 12px 32px rgba(13, 3, 31, 0.16);
   max-width: 720px;
 }
 

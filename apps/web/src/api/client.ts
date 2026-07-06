@@ -23,6 +23,28 @@ async function getOrFetchDemoToken(): Promise<string> {
   return data.token;
 }
 
+// Defense-in-depth: the backend should never send internals in an error message
+// (see docs/architecture-roadmap.md and the 2026-07-06 QA report), but if it ever
+// does — a misconfigured environment, a new endpoint that forgot the pattern —
+// this stops a raw stack trace from ending up on someone's screen.
+const LOOKS_INTERNAL = /prisma|stacktrace|\.(ts|js):\d+|at\s+\w+\s*\(/i;
+const GENERIC_ERROR = "Something went wrong. Please try again.";
+
+function firstFieldError(fieldErrors: Record<string, string[]>): string | null {
+  const firstKey = Object.keys(fieldErrors)[0];
+  return firstKey ? fieldErrors[firstKey][0] : null;
+}
+
+function extractErrorMessage(error: unknown): string {
+  if (typeof error === "string") {
+    return error.length > 300 || LOOKS_INTERNAL.test(error) ? GENERIC_ERROR : error;
+  }
+  if (error && typeof error === "object" && "fieldErrors" in error) {
+    return firstFieldError((error as { fieldErrors: Record<string, string[]> }).fieldErrors) ?? GENERIC_ERROR;
+  }
+  return GENERIC_ERROR;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = _token ?? await getOrFetchDemoToken();
 
@@ -37,7 +59,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ? (typeof body.error === "string" ? body.error : JSON.stringify(body.error)) : `Request failed: ${res.status}`);
+    throw new Error(body.error ? extractErrorMessage(body.error) : `Request failed: ${res.status}`);
   }
   if (res.status === 204) return undefined as T;
   return res.json();

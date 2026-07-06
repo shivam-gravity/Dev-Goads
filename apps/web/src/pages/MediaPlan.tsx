@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import AdsGoHeader from "../components/AdsGoHeader.js";
+import FormattedMessage from "../components/FormattedMessage.js";
 import { api } from "../api/client.js";
 import type { StrategistChatMessage } from "../api/client.js";
 
@@ -37,6 +38,46 @@ interface ChatMessage {
   text: string;
 }
 
+interface ChatSession {
+  id: string;
+  startedAt: number;
+  preview: string;
+  messages: ChatMessage[];
+}
+
+const HISTORY_KEY_PREFIX = "adgo-strategist-history:";
+const MAX_HISTORY_SESSIONS = 20;
+
+function loadSessions(businessId: string): ChatSession[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY_PREFIX + businessId);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSessions(businessId: string, sessions: ChatSession[]) {
+  try {
+    localStorage.setItem(HISTORY_KEY_PREFIX + businessId, JSON.stringify(sessions.slice(0, MAX_HISTORY_SESSIONS)));
+  } catch {
+    // Storage full/unavailable (e.g. private browsing) — history just won't persist.
+  }
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const minutes = Math.round((Date.now() - timestamp) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function toHistory(messages: ChatMessage[]): StrategistChatMessage[] {
+  return messages.map((m) => ({ role: m.sender === "user" ? ("user" as const) : ("assistant" as const), content: m.text }));
+}
+
 export default function MediaPlan({ businessId }: { businessId: string }) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<Tab>("Performance");
@@ -44,12 +85,31 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
   const [inputValue, setInputValue] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [failedHistory, setFailedHistory] = useState<StrategistChatMessage[] | null>(null);
+  const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions(businessId));
+  const [showHistory, setShowHistory] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setSessions(loadSessions(businessId));
+  }, [businessId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isSending]);
+
+  useEffect(() => {
+    if (!showHistory) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (historyRef.current && !historyRef.current.contains(e.target as Node)) {
+        setShowHistory(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showHistory]);
 
   function resizeTextarea() {
     const el = textareaRef.current;
@@ -58,29 +118,58 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
     el.style.height = `${el.scrollHeight}px`;
   }
 
+  async function sendToStrategist(history: StrategistChatMessage[]) {
+    setError(null);
+    setIsSending(true);
+    try {
+      const { reply } = await api.chatWithStrategist(businessId, history);
+      setMessages((prev) => [...prev, { id: `msg-${prev.length}-s`, sender: "strategist", text: reply }]);
+      setFailedHistory(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong reaching the strategist.");
+      setFailedHistory(history);
+    } finally {
+      setIsSending(false);
+    }
+  }
+
   async function handleSend(text: string) {
     const trimmed = text.trim();
     if (!trimmed || isSending) return;
 
-    const history: StrategistChatMessage[] = [
-      ...messages.map((m) => ({ role: m.sender === "user" ? ("user" as const) : ("assistant" as const), content: m.text })),
-      { role: "user", content: trimmed }
-    ];
-
+    const history = [...toHistory(messages), { role: "user" as const, content: trimmed }];
     setMessages((prev) => [...prev, { id: `msg-${prev.length}-u`, sender: "user", text: trimmed }]);
     setInputValue("");
-    setError(null);
-    setIsSending(true);
     requestAnimationFrame(resizeTextarea);
+    await sendToStrategist(history);
+  }
 
-    try {
-      const { reply } = await api.chatWithStrategist(businessId, history);
-      setMessages((prev) => [...prev, { id: `msg-${prev.length}-s`, sender: "strategist", text: reply }]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong reaching the strategist.");
-    } finally {
-      setIsSending(false);
+  function handleRetry() {
+    if (failedHistory) sendToStrategist(failedHistory);
+  }
+
+  function handleNewChat() {
+    if (messages.length > 0) {
+      const archived: ChatSession = {
+        id: `session-${Date.now()}`,
+        startedAt: Date.now(),
+        preview: messages[0].text.slice(0, 60),
+        messages
+      };
+      const next = [archived, ...sessions].slice(0, MAX_HISTORY_SESSIONS);
+      setSessions(next);
+      saveSessions(businessId, next);
     }
+    setMessages([]);
+    setError(null);
+    setFailedHistory(null);
+  }
+
+  function handleLoadSession(session: ChatSession) {
+    setMessages(session.messages);
+    setError(null);
+    setFailedHistory(null);
+    setShowHistory(false);
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -172,32 +261,39 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
         <aside className="media-plan-chat-panel">
           <div className="media-plan-chat-header">
             <span className="media-plan-chat-title">Chat with Strategist</span>
-            <div className="media-plan-chat-header-actions">
-              <button
-                className="media-plan-icon-btn"
-                aria-label="New chat"
-                onClick={() => {
-                  setMessages([]);
-                  setError(null);
-                }}
-              >
+            <div className="media-plan-chat-header-actions" ref={historyRef}>
+              <button className="media-plan-icon-btn" aria-label="New chat" onClick={handleNewChat}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="12" y1="5" x2="12" y2="19" />
                   <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
               </button>
-              <button className="media-plan-icon-btn" aria-label="Chat history">
+              <button
+                className="media-plan-icon-btn"
+                aria-label="Chat history"
+                aria-expanded={showHistory}
+                onClick={() => setShowHistory((v) => !v)}
+              >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="9" />
                   <polyline points="12 7 12 12 15.5 14" />
                 </svg>
               </button>
-              <button className="media-plan-icon-btn" aria-label="Chat settings">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
-              </button>
+
+              {showHistory && (
+                <div className="media-plan-chat-history-dropdown">
+                  {sessions.length === 0 ? (
+                    <div className="media-plan-chat-history-empty">No past conversations yet.</div>
+                  ) : (
+                    sessions.map((s) => (
+                      <button key={s.id} className="media-plan-chat-history-item" onClick={() => handleLoadSession(s)}>
+                        <span className="media-plan-chat-history-item-text">{s.preview || "Conversation"}</span>
+                        <span className="media-plan-chat-history-item-time">{formatRelativeTime(s.startedAt)}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -217,7 +313,7 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
               <div className="media-plan-chat-messages">
                 {messages.map((m) => (
                   <div key={m.id} className={`media-plan-chat-bubble ${m.sender}`}>
-                    {m.text}
+                    {m.sender === "strategist" ? <FormattedMessage text={m.text} /> : m.text}
                   </div>
                 ))}
                 {isSending && (
@@ -227,7 +323,16 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
                     <span className="media-plan-typing-dot" />
                   </div>
                 )}
-                {error && <div className="media-plan-chat-error">{error}</div>}
+                {error && (
+                  <div className="media-plan-chat-error">
+                    <span>{error}</span>
+                    {failedHistory && (
+                      <button className="media-plan-retry-btn" onClick={handleRetry}>
+                        Retry
+                      </button>
+                    )}
+                  </div>
+                )}
                 <div ref={messagesEndRef} />
               </div>
             )}

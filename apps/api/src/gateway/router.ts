@@ -2,8 +2,14 @@ import { Router } from "express";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { asyncHandler } from "./asyncHandler.js";
+import { sendError } from "./errorResponse.js";
 import { objectStorage } from "../infra/objectStorage.js";
 import { proxyTo } from "./proxy.js";
+import { logger } from "../modules/logger/logger.js";
+
+// Generic ceiling for ad-spend fields — prevents an obviously-wrong value (e.g. a
+// misplaced decimal) from being accepted with no upper bound. Adjust per business need.
+const MAX_BUDGET_CENTS = 100_000_000; // $1,000,000
 import { createBusiness, getBusiness, listBusinesses, updateBusiness } from "../modules/business/businessService.js";
 import { generateStrategy, getStrategy, listStrategiesForBusiness } from "../modules/strategy/strategyEngine.js";
 import { getCampaignTrend } from "../modules/analytics/analyticsService.js";
@@ -24,6 +30,7 @@ import { chatWithStrategist } from "../modules/strategist/strategistService.js";
 // Extracted services (roadmap Phase 2) — routes below are proxied, not handled locally.
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL ?? "http://localhost:4001";
 const CAMPAIGN_SERVICE_URL = process.env.CAMPAIGN_SERVICE_URL ?? "http://localhost:4002";
+const SCRAPER_SERVICE_URL = process.env.SCRAPER_SERVICE_URL ?? "http://localhost:4003";
 
 import { listNotifications, markRead, markAllRead, unreadCount, seedDemoNotifications, createNotification } from "../modules/notifications/notificationService.js";
 import { listAssets, createAsset, deleteAsset, updateAssetTags, seedDemoAssets } from "../modules/assets/assetService.js";
@@ -80,7 +87,7 @@ router.get("/workspaces/:id/notifications/count", asyncHandler(async (req, res) 
 
 router.patch("/notifications/:id/read", asyncHandler(async (req, res) => {
   try { res.json(await markRead(req.params.id)); }
-  catch (err) { res.status(404).json({ error: err instanceof Error ? err.message : "Not found" }); }
+  catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
 router.post("/workspaces/:id/notifications/read-all", asyncHandler(async (req, res) => {
@@ -100,7 +107,7 @@ router.get("/workspaces/:id/assets", asyncHandler(async (req, res) => {
 
 router.post("/workspaces/:id/assets", asyncHandler(async (req, res) => {
   const parsed = z.object({
-    name: z.string().min(1),
+    name: z.string().trim().min(1),
     type: z.enum(["image", "video", "logo", "font", "template"]),
     url: z.string().url(),
     thumbnailUrl: z.string().url().optional(),
@@ -124,11 +131,11 @@ router.patch("/assets/:id/tags", asyncHandler(async (req, res) => {
   const parsed = z.object({ tags: z.array(z.string()) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await updateAssetTags(req.params.id, parsed.data.tags)); }
-  catch (err) { res.status(404).json({ error: err instanceof Error ? err.message : "Not found" }); }
+  catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
 const assetUploadSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().trim().min(1),
   type: z.enum(["image", "video", "logo", "font", "template"]),
   mimeType: z.string().min(1),
   dataBase64: z.string().min(1),
@@ -159,7 +166,8 @@ router.post("/workspaces/:id/assets/upload", asyncHandler(async (req, res) => {
     });
     res.status(201).json(asset);
   } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : "Upload failed" });
+    logger.error("Asset upload failed", err);
+    res.status(500).json({ error: "Upload failed" });
   }
 }));
 
@@ -178,13 +186,13 @@ router.post("/workspaces/:workspaceId/insights/generate", asyncHandler(async (re
   try {
     res.json(await generateInsights(req.params.workspaceId, businessId));
   } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : "Insight generation failed" });
+    sendError(res, err, 502, "Insight generation failed");
   }
 }));
 
 router.patch("/insights/:id/dismiss", asyncHandler(async (req, res) => {
   try { res.json(await dismissInsight(req.params.id)); }
-  catch (err) { res.status(404).json({ error: err instanceof Error ? err.message : "Not found" }); }
+  catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
 /* ═══════════════════════════════════════════════
@@ -199,18 +207,18 @@ router.post("/workspaces/:id/integrations/:platform/connect", asyncHandler(async
   try {
     res.json(await connectIntegration(req.params.id, platform, accountName ?? "My Ad Account"));
   } catch (err) {
-    res.status(400).json({ error: err instanceof Error ? err.message : "Connect failed" });
+    sendError(res, err, 400, "Connect failed");
   }
 }));
 
 router.post("/workspaces/:id/integrations/:platform/disconnect", asyncHandler(async (req, res) => {
   try { res.json(await disconnectIntegration(req.params.id, req.params.platform as any)); }
-  catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : "Disconnect failed" }); }
+  catch (err) { sendError(res, err, 400, "Disconnect failed"); }
 }));
 
 router.patch("/workspaces/:id/integrations/:platform/settings", asyncHandler(async (req, res) => {
   try { res.json(await updateIntegrationSettings(req.params.id, req.params.platform as any, req.body ?? {})); }
-  catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : "Settings update failed" }); }
+  catch (err) { sendError(res, err, 400, "Settings update failed"); }
 }));
 
 const catalogSourceSchema = z.enum(["all", "shopify", "facebook", "google", "woocommerce"]);
@@ -231,7 +239,7 @@ router.get("/workspaces/:id/drafts", asyncHandler(async (req, res) => {
 
 router.post("/workspaces/:id/drafts", asyncHandler(async (req, res) => {
   const parsed = z.object({
-    name: z.string().min(1),
+    name: z.string().trim().min(1),
     type: z.enum(["campaign", "ad_set", "ad"]),
     data: z.record(z.unknown()),
     aiRecommendation: z.string().optional(),
@@ -244,19 +252,19 @@ router.post("/workspaces/:id/drafts", asyncHandler(async (req, res) => {
 
 router.patch("/drafts/:id", asyncHandler(async (req, res) => {
   try { res.json(await updateDraft(req.params.id, req.body)); }
-  catch (err) { res.status(404).json({ error: err instanceof Error ? err.message : "Not found" }); }
+  catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
 router.post("/drafts/:id/publish", asyncHandler(async (req, res) => {
   try { res.json(await publishDraft(req.params.id)); }
-  catch (err) { res.status(404).json({ error: err instanceof Error ? err.message : "Not found" }); }
+  catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
 router.post("/drafts/:id/schedule", asyncHandler(async (req, res) => {
   const { scheduledAt } = req.body;
   if (!scheduledAt) return res.status(400).json({ error: "scheduledAt required" });
   try { res.json(await scheduleDraft(req.params.id, scheduledAt)); }
-  catch (err) { res.status(404).json({ error: err instanceof Error ? err.message : "Not found" }); }
+  catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
 router.delete("/drafts/:id", asyncHandler(async (req, res) => {
@@ -273,9 +281,9 @@ router.get("/campaigns/:id/ad-sets", asyncHandler(async (req, res) => res.json(a
 
 router.post("/campaigns/:id/ad-sets", asyncHandler(async (req, res) => {
   const parsed = z.object({
-    name: z.string().min(1),
+    name: z.string().trim().min(1),
     status: z.enum(["active", "paused", "draft"]).default("draft"),
-    dailyBudgetCents: z.number().int().positive(),
+    dailyBudgetCents: z.number().int().positive().max(MAX_BUDGET_CENTS),
     targeting: z.record(z.unknown()).default({}),
     placements: z.array(z.string()).default([]),
     bidStrategy: z.string().default("lowest_cost"),
@@ -290,7 +298,7 @@ router.get("/ad-sets/:id/ads", asyncHandler(async (req, res) => res.json(await l
 
 router.post("/ad-sets/:id/ads", asyncHandler(async (req, res) => {
   const parsed = z.object({
-    name: z.string().min(1),
+    name: z.string().trim().min(1),
     status: z.enum(["active", "paused", "draft", "rejected"]).default("draft"),
     creative: z.object({
       headline: z.string(),
@@ -306,7 +314,7 @@ router.post("/ad-sets/:id/ads", asyncHandler(async (req, res) => {
 
 router.patch("/ads/:id", asyncHandler(async (req, res) => {
   try { res.json(await updateAd(req.params.id, req.body)); }
-  catch (err) { res.status(404).json({ error: err instanceof Error ? err.message : "Not found" }); }
+  catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
 /* ═══════════════════════════════════════════════
@@ -314,10 +322,10 @@ router.patch("/ads/:id", asyncHandler(async (req, res) => {
    ═══════════════════════════════════════════════ */
 
 const businessSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().trim().min(1),
   website: z.string().url().optional(),
-  industry: z.string().min(1),
-  monthlyBudgetCents: z.number().int().positive(),
+  industry: z.string().trim().min(1),
+  monthlyBudgetCents: z.number().int().positive().max(MAX_BUDGET_CENTS),
   goals: z.array(z.string()).min(1),
   targetAudience: z.string().optional(),
 });
@@ -351,7 +359,7 @@ router.post("/businesses/:id/strategies", asyncHandler(async (req, res) => {
     const strategy = await generateStrategy(business);
     res.status(201).json(strategy);
   } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : "Strategy generation failed" });
+    sendError(res, err, 502, "Strategy generation failed");
   }
 }));
 
@@ -370,7 +378,7 @@ router.get("/businesses/:id/analytics/summary", asyncHandler(async (req, res) =>
 
 router.get("/businesses/:id/audience-suggestions", asyncHandler(async (req, res) => {
   try { res.json(await getAudienceSuggestions(req.params.id)); }
-  catch (err) { res.status(502).json({ error: err instanceof Error ? err.message : "Audience suggestion failed" }); }
+  catch (err) { sendError(res, err, 502, "Audience suggestion failed"); }
 }));
 
 router.get("/businesses/:id/ad-insights", asyncHandler(async (req, res) => {
@@ -391,15 +399,15 @@ router.post("/businesses/:id/strategist/chat", asyncHandler(async (req, res) => 
     const reply = await chatWithStrategist(req.params.id, parsed.data.messages);
     res.json({ reply });
   } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : "Strategist chat failed" });
+    sendError(res, err, 502, "Strategist chat failed");
   }
 }));
 
 // Creatives
 const creativeSchema = z.object({
-  headline: z.string().min(1).max(100),
-  body: z.string().min(1).max(500),
-  callToAction: z.string().min(1).max(50),
+  headline: z.string().trim().min(1).max(100),
+  body: z.string().trim().min(1).max(500),
+  callToAction: z.string().trim().min(1).max(50),
   format: z.enum(["text", "image", "video"]).optional(),
   tags: z.array(z.string()).optional(),
 });
@@ -424,7 +432,7 @@ router.post("/creatives/variations", asyncHandler(async (req, res) => {
   const parsed = z.object({ headline: z.string(), body: z.string(), callToAction: z.string() }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await generateCreativeVariations(parsed.data)); }
-  catch (err) { res.status(502).json({ error: err instanceof Error ? err.message : "Variation generation failed" }); }
+  catch (err) { sendError(res, err, 502, "Variation generation failed"); }
 }));
 
 // Campaigns — extracted to campaign-service (roadmap Phase 2). /campaigns/:id/trend
@@ -452,7 +460,7 @@ router.post("/onboarding/scrape", asyncHandler(async (req, res) => {
   const parsed = scrapeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await scrapeUrl(parsed.data.url)); }
-  catch (err) { res.status(422).json({ error: err instanceof Error ? err.message : "Failed to scrape URL" }); }
+  catch (err) { sendError(res, err, 422, "Failed to scrape URL"); }
 }));
 
 const productAnalysisSchema = z.object({
@@ -467,7 +475,7 @@ router.post("/onboarding/analyze-product", asyncHandler(async (req, res) => {
   const parsed = productAnalysisSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await analyzeProduct(parsed.data)); }
-  catch (err) { res.status(502).json({ error: err instanceof Error ? err.message : "Product analysis failed" }); }
+  catch (err) { sendError(res, err, 502, "Product analysis failed"); }
 }));
 
 const audienceAnalysisSchema = z.object({
@@ -478,12 +486,28 @@ router.post("/onboarding/analyze-audience", asyncHandler(async (req, res) => {
   const parsed = audienceAnalysisSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await analyzeAudience(parsed.data.site, parsed.data.product)); }
-  catch (err) { res.status(502).json({ error: err instanceof Error ? err.message : "Audience analysis failed" }); }
+  catch (err) { sendError(res, err, 502, "Audience analysis failed"); }
 }));
 
 router.post("/onboarding/deep-research", asyncHandler(async (req, res) => {
   const parsed = scrapeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await runDeepResearch(parsed.data.url)); }
-  catch (err) { res.status(422).json({ error: err instanceof Error ? err.message : "Deep research failed" }); }
+  catch (err) { sendError(res, err, 422, "Deep research failed"); }
 }));
+
+/* ═══════════════════════════════════════════════
+   PRODUCT IMPORT — extracted to scraper-service. Product URL -> Playwright ->
+   images/metadata -> LLM, distinct from the onboarding scraper above (which
+   crawls a whole business site with fetch+cheerio rather than a single
+   JS-rendered product page).
+   ═══════════════════════════════════════════════ */
+const scraperProxy = proxyTo(SCRAPER_SERVICE_URL);
+router.post("/products/scrape", scraperProxy);
+router.post("/products/import", scraperProxy);
+
+// Consistent JSON 404 for anything under /api that didn't match a route above,
+// instead of Express's default HTML error page.
+router.use((_req, res) => {
+  res.status(404).json({ error: "Not found" });
+});

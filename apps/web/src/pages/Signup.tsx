@@ -20,9 +20,16 @@ export default function Signup() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!agreed) { setError("Please agree to the Terms of Service"); return; }
+
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim();
+    if (!trimmedName) { setError("Enter your full name."); return; }
+    if (!trimmedEmail) { setError("Enter your work email."); return; }
+    if (password.trim().length < 8) { setError("Password must be at least 8 characters (not just spaces)."); return; }
+
     setError(null);
     try {
-      await signup(name, email, password);
+      await signup(trimmedName, trimmedEmail, password);
       navigate("/get-started");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
