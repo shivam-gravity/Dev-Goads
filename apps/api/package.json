@@ -16,7 +16,9 @@
     "db:migrate-from-sqlite": "tsx prisma/migrate-from-sqlite.ts",
     "dev:worker": "tsx watch src/workers/creativeGenerationWorker.ts",
     "start:worker": "node dist/workers/creativeGenerationWorker.js",
-    "test": "tsx --test src/test/googleAdapter.test.ts src/test/googleAdapter.live.test.ts src/test/metaAdapter.test.ts src/test/metaAdapter.live.test.ts src/test/tiktokAdapter.test.ts src/test/tiktokAdapter.live.test.ts src/test/shopifyCatalogAdapter.live.test.ts src/test/wooCommerceCatalogAdapter.live.test.ts src/test/infra.test.ts src/test/campaignOrchestrator.test.ts src/test/crypto.test.ts src/test/imageProvider.test.ts src/test/imageProvider.live.test.ts src/test/videoProvider.test.ts src/test/videoProvider.live.test.ts src/test/metaTargetingMapper.test.ts src/test/metaOAuth.test.ts src/test/googleOAuth.test.ts src/test/googleTargetingMapper.test.ts"
+    "dev:lead-worker": "tsx watch src/workers/leadIngestionWorker.ts",
+    "start:lead-worker": "node dist/workers/leadIngestionWorker.js",
+    "test": "tsx --test src/test/googleAdapter.test.ts src/test/googleAdapter.live.test.ts src/test/metaAdapter.test.ts src/test/metaAdapter.live.test.ts src/test/tiktokAdapter.test.ts src/test/tiktokAdapter.live.test.ts src/test/shopifyCatalogAdapter.live.test.ts src/test/wooCommerceCatalogAdapter.live.test.ts src/test/infra.test.ts src/test/campaignOrchestrator.test.ts src/test/crypto.test.ts src/test/imageProvider.test.ts src/test/imageProvider.live.test.ts src/test/videoProvider.test.ts src/test/videoProvider.live.test.ts src/test/metaTargetingMapper.test.ts src/test/metaOAuth.test.ts src/test/googleOAuth.test.ts src/test/googleTargetingMapper.test.ts src/test/leadIngestion.test.ts src/test/metaLeadWebhook.test.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

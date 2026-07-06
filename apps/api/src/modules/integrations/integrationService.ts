@@ -85,6 +85,8 @@ export interface MetaOAuthConnectionInput {
   adAccountId: string;
   adAccountName: string;
   currency: string;
+  timezoneName?: string;
+  accountStatus?: string;
   pageId?: string;
   pageName?: string;
 }
@@ -109,6 +111,8 @@ export async function setMetaOAuthConnection(workspaceId: string, input: MetaOAu
       accessTokenEncrypted: encryptToken(input.accessToken),
       tokenExpiresAt: new Date(Date.now() + input.expiresInSeconds * 1000).toISOString(),
       currency: input.currency,
+      timezoneName: input.timezoneName,
+      accountStatus: input.accountStatus,
       pageId: input.pageId,
       pageName: input.pageName,
     },
@@ -122,23 +126,68 @@ export interface MetaCredentials {
   accessToken: string;
   adAccountId: string;
   pageId?: string;
+  /** Page-scoped token for leadgen_forms/leads calls, distinct from the ad-account token above — Meta's Graph API often requires a Page access token (not a user/ad-account token) for Page-permission-gated endpoints. Falls back to `accessToken` when not set (the OAuth-connect path only ever stores one token today). */
+  pageAccessToken?: string;
   /** Ad account's billing currency (e.g. "USD", "JPY") — Meta's minor-unit conversion varies by currency (see metaAdapter's currency divisor table). */
   currency: string;
 }
 
-/** Decrypts and returns the connected Meta ad account's live token, or null if not connected via real OAuth. */
+/** Decrypts and returns the connected Meta ad account's live token, or null if not connected via real OAuth or manual connect. */
 export async function getMetaCredentials(workspaceId: string): Promise<MetaCredentials | null> {
   const row = await prisma.integration.findFirst({ where: { workspaceId, platform: "meta" } });
   if (!row) return null;
   const integration = row.data as unknown as Integration;
   const tokenEncrypted = integration.settings?.accessTokenEncrypted as string | undefined;
   if (integration.status !== "connected" || !tokenEncrypted || !integration.accountId) return null;
+  const pageAccessTokenEncrypted = integration.settings?.pageAccessTokenEncrypted as string | undefined;
   return {
     accessToken: decryptToken(tokenEncrypted),
     adAccountId: integration.accountId,
     pageId: integration.settings?.pageId as string | undefined,
+    pageAccessToken: pageAccessTokenEncrypted ? decryptToken(pageAccessTokenEncrypted) : undefined,
     currency: (integration.settings?.currency as string | undefined) ?? "USD",
   };
+}
+
+export interface MetaManualConnectionInput {
+  accessToken: string;
+  adAccountId: string;
+  pageId?: string;
+  pageAccessToken?: string;
+}
+
+/**
+ * "Manual Connect (Testing)" path — lets a developer paste tokens copied from Meta's
+ * Graph API Explorer directly, bypassing the OAuth redirect (useful before META_APP_ID/
+ * META_APP_SECRET are registered, or to point at a specific ad account/page without
+ * going through the picker). Mirrors setMetaOAuthConnection's persistence shape so
+ * getMetaCredentials/metaAdapter/metaLeadSync work identically either way.
+ */
+export async function setMetaManualConnection(workspaceId: string, input: MetaManualConnectionInput): Promise<Integration> {
+  const row = await prisma.integration.findFirst({ where: { workspaceId, platform: "meta" } });
+  const existing = row ? (row.data as unknown as Integration) : DEFAULT_INTEGRATIONS.find((d) => d.platform === "meta")!;
+
+  const updated: Integration = {
+    ...existing,
+    id: row?.id ?? randomUUID(),
+    workspaceId,
+    platform: "meta",
+    status: "connected",
+    accountName: existing.accountName ?? `Ad Account ${input.adAccountId}`,
+    accountId: input.adAccountId,
+    connectedAt: new Date().toISOString(),
+    errorMessage: undefined,
+    settings: {
+      ...existing.settings,
+      accessTokenEncrypted: encryptToken(input.accessToken),
+      pageId: input.pageId ?? existing.settings?.pageId,
+      pageAccessTokenEncrypted: input.pageAccessToken ? encryptToken(input.pageAccessToken) : existing.settings?.pageAccessTokenEncrypted,
+      connectionMethod: "manual",
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  await save(updated);
+  return updated;
 }
 
 export interface GoogleOAuthConnectionInput {
@@ -177,10 +226,16 @@ export async function setGoogleOAuthConnection(workspaceId: string, input: Googl
 }
 
 export interface RawGoogleTokenData {
+  /** Empty when manually connected without a refresh token — see setGoogleManualConnection. Callers must treat "" as "cannot refresh, use accessToken as-is." */
   refreshToken: string;
   accessToken: string;
   tokenExpiresAt: string;
   customerId: string;
+  /** Per-workspace developer token from a manual connect, if one was provided — takes precedence over the global GOOGLE_ADS_DEVELOPER_TOKEN env var when set. */
+  developerToken?: string;
+  /** Per-workspace OAuth client credentials from a manual connect, used to refresh this integration's token instead of the global GOOGLE_OAUTH_CLIENT_ID/SECRET. */
+  clientId?: string;
+  clientSecret?: string;
 }
 
 /**
@@ -188,21 +243,76 @@ export interface RawGoogleTokenData {
  * tokens expire hourly and refreshing requires calling Google's token endpoint, which
  * would create a circular import if it lived here (googleOAuth.ts already imports this
  * module to persist connections). See googleOAuth.getGoogleAdsCredentials for the
- * refresh-aware wrapper that callers should actually use.
+ * refresh-aware wrapper that callers should actually use. refreshTokenEncrypted is NOT
+ * required (unlike accessTokenEncrypted) — a manual connect may not have one, in which
+ * case refreshToken comes back as "" and the caller skips refreshing entirely.
  */
 export async function getRawGoogleTokenData(workspaceId: string): Promise<RawGoogleTokenData | null> {
   const row = await prisma.integration.findFirst({ where: { workspaceId, platform: "google" } });
   if (!row) return null;
   const integration = row.data as unknown as Integration;
-  const refreshTokenEncrypted = integration.settings?.refreshTokenEncrypted as string | undefined;
   const accessTokenEncrypted = integration.settings?.accessTokenEncrypted as string | undefined;
-  if (integration.status !== "connected" || !refreshTokenEncrypted || !accessTokenEncrypted || !integration.accountId) return null;
+  if (integration.status !== "connected" || !accessTokenEncrypted || !integration.accountId) return null;
+  const refreshTokenEncrypted = integration.settings?.refreshTokenEncrypted as string | undefined;
+  const developerTokenEncrypted = integration.settings?.developerTokenEncrypted as string | undefined;
+  const clientSecretEncrypted = integration.settings?.clientSecretEncrypted as string | undefined;
   return {
-    refreshToken: decryptToken(refreshTokenEncrypted),
+    refreshToken: refreshTokenEncrypted ? decryptToken(refreshTokenEncrypted) : "",
     accessToken: decryptToken(accessTokenEncrypted),
     tokenExpiresAt: integration.settings?.tokenExpiresAt as string,
     customerId: integration.accountId,
+    developerToken: developerTokenEncrypted ? decryptToken(developerTokenEncrypted) : undefined,
+    clientId: integration.settings?.clientId as string | undefined,
+    clientSecret: clientSecretEncrypted ? decryptToken(clientSecretEncrypted) : undefined,
   };
+}
+
+export interface GoogleManualConnectionInput {
+  customerId: string;
+  developerToken: string;
+  accessToken: string;
+  clientId?: string;
+  clientSecret?: string;
+  refreshToken?: string;
+}
+
+/**
+ * "Manual Connect (Testing)" path — lets a developer paste a customer ID + developer
+ * token + access token (optionally with OAuth client credentials + refresh token) copied
+ * from the Google Ads API Center, bypassing the consent-screen redirect. Without a refresh
+ * token, the connection works until the pasted access token expires (~1hr) and then needs
+ * reconnecting — that tradeoff is inherent to skipping the OAuth flow, not a bug.
+ */
+export async function setGoogleManualConnection(workspaceId: string, input: GoogleManualConnectionInput): Promise<Integration> {
+  const row = await prisma.integration.findFirst({ where: { workspaceId, platform: "google" } });
+  const existing = row ? (row.data as unknown as Integration) : DEFAULT_INTEGRATIONS.find((d) => d.platform === "google")!;
+
+  const updated: Integration = {
+    ...existing,
+    id: row?.id ?? randomUUID(),
+    workspaceId,
+    platform: "google",
+    status: "connected",
+    accountName: existing.accountName ?? `Customer ${input.customerId}`,
+    accountId: input.customerId,
+    connectedAt: new Date().toISOString(),
+    errorMessage: undefined,
+    settings: {
+      ...existing.settings,
+      accessTokenEncrypted: encryptToken(input.accessToken),
+      refreshTokenEncrypted: input.refreshToken ? encryptToken(input.refreshToken) : undefined,
+      developerTokenEncrypted: encryptToken(input.developerToken),
+      clientId: input.clientId,
+      clientSecretEncrypted: input.clientSecret ? encryptToken(input.clientSecret) : undefined,
+      // No refresh token means we can't know a real expiry — assume Google's typical 1hr
+      // access-token lifetime so getGoogleAdsCredentials treats it as fresh until then.
+      tokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      connectionMethod: "manual",
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  await save(updated);
+  return updated;
 }
 
 /** Updates just the access token + expiry after a refresh — refreshToken/customerId are untouched. */
@@ -220,4 +330,18 @@ export async function updateGoogleAccessToken(workspaceId: string, accessToken: 
     updatedAt: new Date().toISOString(),
   };
   await save(updated);
+}
+
+const SECRET_SETTINGS_KEYS = ["accessTokenEncrypted", "refreshTokenEncrypted", "pageAccessTokenEncrypted", "developerTokenEncrypted", "clientSecretEncrypted"] as const;
+
+/**
+ * Strips encrypted OAuth tokens out of `settings` before an Integration is sent to the
+ * browser — the frontend only ever needs the display fields (pageId/pageName/currency/
+ * timezoneName/accountStatus/lastLeadSyncAt etc.), never the ciphertext itself. Every
+ * route that returns an Integration to the client should go through this.
+ */
+export function sanitizeIntegration(i: Integration): Integration {
+  const settings = { ...i.settings };
+  for (const key of SECRET_SETTINGS_KEYS) delete settings[key];
+  return { ...i, settings };
 }

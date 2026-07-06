@@ -16,7 +16,7 @@ export function getMetaAuthUrl(workspaceId: string): string {
   const params = new URLSearchParams({
     client_id: META_APP_ID ?? "",
     redirect_uri: META_OAUTH_REDIRECT_URI,
-    scope: "ads_management,ads_read,business_management,pages_show_list",
+    scope: "ads_management,ads_read,business_management,pages_show_list,leads_retrieval,pages_manage_ads,pages_read_engagement",
     response_type: "code",
     state,
   });
@@ -70,10 +70,19 @@ async function exchangeForLongLivedToken(shortLivedToken: string): Promise<{ acc
   return { accessToken: json.access_token, expiresIn: json.expires_in ?? 60 * 60 * 24 * 60 };
 }
 
-async function fetchFirstAdAccount(accessToken: string): Promise<{ id: string; name: string; currency: string } | null> {
-  const json = await graphGet("/me/adaccounts", { fields: "id,name,currency", access_token: accessToken });
+const ACCOUNT_STATUS_LABELS: Record<number, string> = { 1: "ACTIVE", 2: "DISABLED", 3: "UNSETTLED", 7: "PENDING_RISK_REVIEW", 8: "PENDING_SETTLEMENT", 9: "IN_GRACE_PERIOD", 100: "PENDING_CLOSURE", 101: "CLOSED", 201: "ANY_ACTIVE", 202: "ANY_CLOSED" };
+
+async function fetchFirstAdAccount(accessToken: string): Promise<{ id: string; name: string; currency: string; timezoneName?: string; accountStatus?: string } | null> {
+  const json = await graphGet("/me/adaccounts", { fields: "id,name,currency,timezone_name,account_status", access_token: accessToken });
   const first = (json.data ?? [])[0];
-  return first ? { id: first.id, name: first.name, currency: first.currency ?? "USD" } : null;
+  if (!first) return null;
+  return {
+    id: first.id,
+    name: first.name,
+    currency: first.currency ?? "USD",
+    timezoneName: first.timezone_name,
+    accountStatus: ACCOUNT_STATUS_LABELS[first.account_status] ?? undefined,
+  };
 }
 
 async function fetchFirstPage(accessToken: string): Promise<{ id: string; name: string } | null> {
@@ -113,6 +122,8 @@ export async function handleMetaOAuthCallback(code: string, state: string): Prom
     adAccountId: adAccount.id,
     adAccountName: adAccount.name,
     currency: adAccount.currency,
+    timezoneName: adAccount.timezoneName,
+    accountStatus: adAccount.accountStatus,
     pageId: page?.id,
     pageName: page?.name,
   });

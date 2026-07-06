@@ -225,3 +225,57 @@ model GenerationJob {
   @@index([businessId])
   @@map("generation_jobs")
 }
+
+// Lead-gen forms synced from Meta (leadgen_forms) or Google (LEAD_FORM assets).
+// `data` carries the raw, dynamic-per-form shape (questions/fields/CTA) since
+// that varies form-to-form; only what the CRM tab needs to list/link is a column.
+model LeadForm {
+  id          String   @id
+  workspaceId String
+  platform    String
+  externalId  String
+  campaignId  String?
+  name        String
+  status      String   @default("active")
+  data        Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
+  leads       Lead[]
+
+  @@unique([workspaceId, platform, externalId])
+  @@index([workspaceId])
+  @@index([workspaceId, platform])
+  @@map("lead_forms")
+}
+
+// Individual lead submissions. email/phone/fullName/submittedAt are pulled out
+// of the raw field_data so the CRM tab can paginate/sort/search server-side;
+// `data` keeps the full lossless field_data for display (custom questions vary
+// per form). Unique on (workspaceId, platform, externalId) so both the Meta
+// webhook (which redelivers) and the backfill/poll jobs can safely upsert.
+model Lead {
+  id          String    @id
+  workspaceId String
+  platform    String
+  externalId  String
+  leadFormId  String?
+  leadForm    LeadForm? @relation(fields: [leadFormId], references: [id])
+  campaignId  String?
+  adId        String?
+  fullName    String?
+  email       String?
+  phone       String?
+  companyName String?
+  status      String    @default("new")
+  submittedAt DateTime
+  data        Json
+  createdAt   DateTime  @default(now())
+
+  @@unique([workspaceId, platform, externalId])
+  @@index([workspaceId, submittedAt])
+  @@index([workspaceId, platform])
+  @@index([leadFormId])
+  @@index([campaignId])
+  @@index([email])
+  @@map("leads")
+}

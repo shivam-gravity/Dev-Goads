@@ -70,14 +70,15 @@ async function exchangeCodeForTokens(code: string): Promise<{ accessToken: strin
   return { accessToken: json.access_token, refreshToken: json.refresh_token, expiresIn: json.expires_in ?? 3600 };
 }
 
-async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: string; expiresIn: number }> {
+/** clientId/clientSecret default to the global OAuth app's credentials, but a manually-connected integration can supply its own (see setGoogleManualConnection) — those take precedence since the refresh token was issued against that client, not necessarily AdGo's registered app. */
+async function refreshAccessToken(refreshToken: string, clientId?: string, clientSecret?: string): Promise<{ accessToken: string; expiresIn: number }> {
   const res = await fetch(TOKEN_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       refresh_token: refreshToken,
-      client_id: GOOGLE_OAUTH_CLIENT_ID ?? "",
-      client_secret: GOOGLE_OAUTH_CLIENT_SECRET ?? "",
+      client_id: clientId ?? GOOGLE_OAUTH_CLIENT_ID ?? "",
+      client_secret: clientSecret ?? GOOGLE_OAUTH_CLIENT_SECRET ?? "",
       grant_type: "refresh_token",
     }),
   });
@@ -133,21 +134,31 @@ export interface GoogleAdsCredentials {
 
 /**
  * Returns a valid (refreshed if needed) access token for the workspace's connected Google
- * Ads customer, or null if not connected via real OAuth. Unlike Meta's long-lived tokens,
- * Google access tokens expire hourly, so every call here may transparently refresh and
- * persist a new one before returning.
+ * Ads customer, or null if not connected via real OAuth or manual connect. Unlike Meta's
+ * long-lived tokens, Google access tokens expire hourly, so every call here may
+ * transparently refresh and persist a new one before returning — unless the integration
+ * was manually connected without a refresh token, in which case refreshing is impossible
+ * and the stored access token is returned as-is (it'll fail upstream once it expires).
+ * The developer token prefers a per-workspace one from a manual connect, falling back to
+ * the global GOOGLE_ADS_DEVELOPER_TOKEN env var used by the OAuth-connect path.
  */
 export async function getGoogleAdsCredentials(workspaceId: string): Promise<GoogleAdsCredentials | null> {
-  if (!GOOGLE_ADS_DEVELOPER_TOKEN) return null;
   const raw = await getRawGoogleTokenData(workspaceId);
   if (!raw) return null;
 
-  const expiresAt = new Date(raw.tokenExpiresAt).getTime();
-  if (Number.isFinite(expiresAt) && expiresAt - Date.now() > REFRESH_SKEW_MS) {
-    return { accessToken: raw.accessToken, customerId: raw.customerId, developerToken: GOOGLE_ADS_DEVELOPER_TOKEN };
+  const developerToken = raw.developerToken ?? GOOGLE_ADS_DEVELOPER_TOKEN;
+  if (!developerToken) return null;
+
+  if (!raw.refreshToken) {
+    return { accessToken: raw.accessToken, customerId: raw.customerId, developerToken };
   }
 
-  const refreshed = await refreshAccessToken(raw.refreshToken);
+  const expiresAt = new Date(raw.tokenExpiresAt).getTime();
+  if (Number.isFinite(expiresAt) && expiresAt - Date.now() > REFRESH_SKEW_MS) {
+    return { accessToken: raw.accessToken, customerId: raw.customerId, developerToken };
+  }
+
+  const refreshed = await refreshAccessToken(raw.refreshToken, raw.clientId, raw.clientSecret);
   await updateGoogleAccessToken(workspaceId, refreshed.accessToken, refreshed.expiresIn);
-  return { accessToken: refreshed.accessToken, customerId: raw.customerId, developerToken: GOOGLE_ADS_DEVELOPER_TOKEN };
+  return { accessToken: refreshed.accessToken, customerId: raw.customerId, developerToken };
 }

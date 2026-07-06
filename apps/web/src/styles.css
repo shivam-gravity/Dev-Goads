@@ -4588,11 +4588,14 @@ td {
   color: #374151;
 }
 
-.adsgo-modal-field input {
+.adsgo-modal-field input,
+.adsgo-modal-field textarea {
   padding: 14px 16px;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
 }
 
 .adsgo-modal-submit {
@@ -6452,6 +6455,104 @@ td {
 
 .platform-connect-btn.danger:hover {
   background: #fef2f2 !important;
+}
+
+.platform-connect-details {
+  width: 100%;
+  max-width: 360px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+  margin-top: 4px;
+  text-align: left;
+}
+
+.platform-connect-details-header {
+  padding: 10px 16px;
+  background: #f3f4f6;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #6b7280;
+}
+
+.platform-connect-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid #f3f4f6;
+  font-size: 13px;
+}
+
+.platform-connect-detail-row span:first-child {
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.platform-connect-detail-row span:last-child {
+  color: #111827;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.platform-connect-empty-wide {
+  max-width: 440px;
+}
+
+.platform-connect-lead {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.platform-connect-feature-list {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.platform-connect-feature-list li {
+  position: relative;
+  padding-left: 22px;
+  font-size: 13px;
+  color: #374151;
+}
+
+.platform-connect-feature-list li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: #7033f5;
+  font-weight: 700;
+}
+
+.platform-connect-manual-link {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #9ca3af;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+
+.platform-connect-manual-link:hover {
+  color: #6b7280;
+  text-decoration-color: #6b7280;
 }
 
 .subscribe-plan-badge {

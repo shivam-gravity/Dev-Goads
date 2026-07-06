@@ -33,3 +33,22 @@ export const creativeGenerationQueue = new Queue(CREATIVE_GENERATION_QUEUE, {
     removeOnFail: { age: 7 * 24 * 60 * 60 },
   },
 });
+
+/**
+ * Handles both single-lead ingestion (job name "ingest-one", enqueued by the Meta
+ * webhook so it can ack Meta within its short timeout) and full syncs (job name
+ * "backfill", enqueued by the manual "Sync Recent Leads" trigger or a repeatable
+ * poll) — one queue, distinguished by job name, since both are the same kind of
+ * work (talk to Meta/Google, upsert leads) at different granularity.
+ */
+export const LEAD_INGESTION_QUEUE = "lead-ingestion";
+
+export const leadIngestionQueue = new Queue(LEAD_INGESTION_QUEUE, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: "exponential", delay: 5000 },
+    removeOnComplete: { age: 24 * 60 * 60 },
+    removeOnFail: { age: 7 * 24 * 60 * 60 },
+  },
+});

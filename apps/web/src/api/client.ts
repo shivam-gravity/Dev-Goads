@@ -171,6 +171,10 @@ export const api = {
     request<Integration>(`/workspaces/${workspaceId}/integrations/${platform}/disconnect`, { method: "POST" }),
   updateIntegrationSettings: (workspaceId: string, platform: Integration["platform"], settings: Record<string, unknown>) =>
     request<Integration>(`/workspaces/${workspaceId}/integrations/${platform}/settings`, { method: "PATCH", body: JSON.stringify(settings) }),
+  connectMetaManual: (workspaceId: string, input: { accessToken: string; adAccountId: string; pageId?: string; pageAccessToken?: string }) =>
+    request<Integration>(`/workspaces/${workspaceId}/integrations/meta/connect-manual`, { method: "POST", body: JSON.stringify(input) }),
+  connectGoogleManual: (workspaceId: string, input: { customerId: string; developerToken: string; accessToken: string; clientId?: string; clientSecret?: string; refreshToken?: string }) =>
+    request<Integration>(`/workspaces/${workspaceId}/integrations/google/connect-manual`, { method: "POST", body: JSON.stringify(input) }),
   listProductCatalog: (workspaceId: string, source: ProductCatalogSource | "all") =>
     request<CatalogSourceResult[]>(`/workspaces/${workspaceId}/products?source=${source}`),
 

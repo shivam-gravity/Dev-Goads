@@ -35,7 +35,7 @@ const SCRAPER_SERVICE_URL = process.env.SCRAPER_SERVICE_URL ?? "http://localhost
 import { listNotifications, markRead, markAllRead, unreadCount, seedDemoNotifications, createNotification } from "../modules/notifications/notificationService.js";
 import { listAssets, createAsset, deleteAsset, updateAssetTags, seedDemoAssets } from "../modules/assets/assetService.js";
 import { listInsights, dismissInsight, generateInsights, seedDemoInsights } from "../modules/insights/insightService.js";
-import { getOrCreateIntegrations, connectIntegration, disconnectIntegration, updateIntegrationSettings, getMetaCredentials } from "../modules/integrations/integrationService.js";
+import { getOrCreateIntegrations, connectIntegration, disconnectIntegration, updateIntegrationSettings, getMetaCredentials, sanitizeIntegration, setMetaManualConnection, setGoogleManualConnection } from "../modules/integrations/integrationService.js";
 import { getProductCatalog } from "../modules/integrations/productCatalogService.js";
 import { createGenerationJob, getGenerationJob } from "../modules/generation/generationJobService.js";
 import { creativeGenerationQueue } from "../infra/queue.js";
@@ -209,26 +209,62 @@ router.patch("/insights/:id/dismiss", asyncHandler(async (req, res) => {
    INTEGRATIONS
    ═══════════════════════════════════════════════ */
 
-router.get("/workspaces/:id/integrations", asyncHandler(async (req, res) => res.json(await getOrCreateIntegrations(req.params.id))));
+router.get("/workspaces/:id/integrations", asyncHandler(async (req, res) => res.json((await getOrCreateIntegrations(req.params.id)).map(sanitizeIntegration))));
 
 router.post("/workspaces/:id/integrations/:platform/connect", asyncHandler(async (req, res) => {
   const platform = req.params.platform as any;
   const { accountName } = req.body;
   try {
-    res.json(await connectIntegration(req.params.id, platform, accountName ?? "My Ad Account"));
+    res.json(sanitizeIntegration(await connectIntegration(req.params.id, platform, accountName ?? "My Ad Account")));
   } catch (err) {
     sendError(res, err, 400, "Connect failed");
   }
 }));
 
 router.post("/workspaces/:id/integrations/:platform/disconnect", asyncHandler(async (req, res) => {
-  try { res.json(await disconnectIntegration(req.params.id, req.params.platform as any)); }
+  try { res.json(sanitizeIntegration(await disconnectIntegration(req.params.id, req.params.platform as any))); }
   catch (err) { sendError(res, err, 400, "Disconnect failed"); }
 }));
 
 router.patch("/workspaces/:id/integrations/:platform/settings", asyncHandler(async (req, res) => {
-  try { res.json(await updateIntegrationSettings(req.params.id, req.params.platform as any, req.body ?? {})); }
+  try { res.json(sanitizeIntegration(await updateIntegrationSettings(req.params.id, req.params.platform as any, req.body ?? {}))); }
   catch (err) { sendError(res, err, 400, "Settings update failed"); }
+}));
+
+const metaManualConnectSchema = z.object({
+  accessToken: z.string().trim().min(1),
+  adAccountId: z.string().trim().min(1),
+  pageId: z.string().trim().min(1).optional(),
+  pageAccessToken: z.string().trim().min(1).optional(),
+});
+
+router.post("/workspaces/:id/integrations/meta/connect-manual", asyncHandler(async (req, res) => {
+  const parsed = metaManualConnectSchema.safeParse(req.body);
+  if (!parsed.success) return sendError(res, parsed.error, 400, "Invalid manual connect payload");
+  try {
+    res.json(sanitizeIntegration(await setMetaManualConnection(req.params.id, parsed.data)));
+  } catch (err) {
+    sendError(res, err, 400, "Manual connect failed");
+  }
+}));
+
+const googleManualConnectSchema = z.object({
+  customerId: z.string().trim().min(1),
+  developerToken: z.string().trim().min(1),
+  accessToken: z.string().trim().min(1),
+  clientId: z.string().trim().min(1).optional(),
+  clientSecret: z.string().trim().min(1).optional(),
+  refreshToken: z.string().trim().min(1).optional(),
+});
+
+router.post("/workspaces/:id/integrations/google/connect-manual", asyncHandler(async (req, res) => {
+  const parsed = googleManualConnectSchema.safeParse(req.body);
+  if (!parsed.success) return sendError(res, parsed.error, 400, "Invalid manual connect payload");
+  try {
+    res.json(sanitizeIntegration(await setGoogleManualConnection(req.params.id, parsed.data)));
+  } catch (err) {
+    sendError(res, err, 400, "Manual connect failed");
+  }
 }));
 
 /* ═══════════════════════════════════════════════
