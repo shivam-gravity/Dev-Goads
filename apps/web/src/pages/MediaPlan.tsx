@@ -196,7 +196,7 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
 
           <h2 className="media-plan-hero-title">Launch your first campaign</h2>
           <p className="media-plan-hero-desc">
-            Your Media Plan will come to life once your ads are running. Create and publish a campaign — AdsGo will
+            Your Media Plan will come to life once your ads are running. Create and publish a campaign — CRM Ads will
             take it from there.
           </p>
 
@@ -232,7 +232,7 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
                   <path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8.8-2z" />
                 </svg>
               </span>
-              <span>AdsGo starts syncing performance data every hour</span>
+              <span>CRM Ads starts syncing performance data every hour</span>
             </div>
 
             <div className="media-plan-step">

@@ -387,7 +387,7 @@ export default function AIInsights({ businessId }: { businessId: string }) {
                     className="brand-modal-input"
                     value={brandUrl}
                     onChange={(e) => setBrandUrl(e.target.value)}
-                    placeholder="e.g. https://www.adsgo.ai"
+                    placeholder="e.g. https://www.yourbrand.com"
                     required
                   />
 

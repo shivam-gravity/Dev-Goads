@@ -11,10 +11,11 @@ import { logger } from "../modules/logger/logger.js";
 // misplaced decimal) from being accepted with no upper bound. Adjust per business need.
 const MAX_BUDGET_CENTS = 100_000_000; // $1,000,000
 import { createBusiness, getBusiness, listBusinesses, updateBusiness } from "../modules/business/businessService.js";
-import { generateStrategy, getStrategy, listStrategiesForBusiness } from "../modules/strategy/strategyEngine.js";
+import { generateStrategy, getStrategy, listStrategiesForBusiness, createStrategyFromResearch } from "../modules/strategy/strategyEngine.js";
 import { getCampaignTrend } from "../modules/analytics/analyticsService.js";
 import { scrapeUrl } from "../modules/onboarding/scraper.js";
 import { analyzeAudience, analyzeProduct, runDeepResearch } from "../modules/onboarding/analysis.js";
+import { findCachedSession, cloneSessionFromCache, createResearchSession, getResearchSession } from "../modules/onboarding/researchSessionService.js";
 import { issueDemoToken } from "./middleware/auth.js";
 import {
   listCreatives,
@@ -38,7 +39,7 @@ import { listInsights, dismissInsight, generateInsights, seedDemoInsights } from
 import { getOrCreateIntegrations, connectIntegration, disconnectIntegration, updateIntegrationSettings, getMetaCredentials, sanitizeIntegration, setMetaManualConnection, setGoogleManualConnection } from "../modules/integrations/integrationService.js";
 import { getProductCatalog } from "../modules/integrations/productCatalogService.js";
 import { createGenerationJob, getGenerationJob } from "../modules/generation/generationJobService.js";
-import { creativeGenerationQueue } from "../infra/queue.js";
+import { creativeGenerationQueue, researchSessionQueue } from "../infra/queue.js";
 import {
   listSavedAudiences,
   createSavedAudience,
@@ -447,6 +448,8 @@ const businessSchema = z.object({
   monthlyBudgetCents: z.number().int().positive().max(MAX_BUDGET_CENTS),
   goals: z.array(z.string()).min(1),
   targetAudience: z.string().optional(),
+  brandName: z.string().trim().min(1).optional(),
+  logoUrls: z.array(z.string()).max(5).optional(),
 });
 
 router.post("/businesses", asyncHandler(async (req, res) => {
@@ -479,6 +482,25 @@ router.post("/businesses/:id/strategies", asyncHandler(async (req, res) => {
     res.status(201).json(strategy);
   } catch (err) {
     sendError(res, err, 502, "Strategy generation failed");
+  }
+}));
+
+router.post("/businesses/:id/strategies/from-research", asyncHandler(async (req, res) => {
+  const business = await getBusiness(req.params.id);
+  if (!business) return res.status(404).json({ error: "Business not found" });
+  const researchSessionId = typeof req.body?.researchSessionId === "string" ? req.body.researchSessionId : undefined;
+  if (!researchSessionId) return res.status(400).json({ error: "researchSessionId is required" });
+
+  const session = await getResearchSession(researchSessionId);
+  if (!session || session.status !== "done" || !session.result) {
+    return res.status(409).json({ error: "Research session is not complete" });
+  }
+
+  try {
+    const strategy = await createStrategyFromResearch(business.id, session.result as any);
+    res.status(201).json(strategy);
+  } catch (err) {
+    sendError(res, err, 502, "Failed to build strategy from research");
   }
 }));
 
@@ -615,6 +637,42 @@ router.post("/onboarding/deep-research", asyncHandler(async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await runDeepResearch(parsed.data.url)); }
   catch (err) { sendError(res, err, 422, "Deep research failed"); }
+}));
+
+// Deep research sessions — the job/polling replacement for /onboarding/deep-research
+// above, needed because the richer web-search-backed pipeline (marketResearch.ts) is
+// too slow for one blocking request. A recently-completed session for the same URL is
+// cloned instead of re-run unless ?force=true, so resubmitting doesn't re-spend real
+// web searches.
+const researchSessionSchema = z.object({ url: z.string().min(1), businessId: z.string().optional() });
+router.post("/workspaces/:id/research-sessions", asyncHandler(async (req, res) => {
+  const parsed = researchSessionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { url, businessId } = parsed.data;
+  const workspaceId = req.params.id;
+  const force = req.query.force === "true";
+
+  try {
+    if (!force) {
+      const cached = await findCachedSession(workspaceId, url);
+      if (cached) {
+        const cloned = await cloneSessionFromCache(workspaceId, url, cached, businessId);
+        return res.status(201).json(cloned);
+      }
+    }
+
+    const session = await createResearchSession(workspaceId, url, businessId);
+    await researchSessionQueue.add("research", { sessionId: session.id, url });
+    res.status(202).json(session);
+  } catch (err) {
+    sendError(res, err, 422, "Failed to start research session");
+  }
+}));
+
+router.get("/research-sessions/:id", asyncHandler(async (req, res) => {
+  const session = await getResearchSession(req.params.id);
+  if (!session) return res.status(404).json({ error: "Research session not found" });
+  res.json(session);
 }));
 
 /* ═══════════════════════════════════════════════

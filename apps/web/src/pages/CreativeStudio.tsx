@@ -224,7 +224,7 @@ export default function CreativeStudio({ businessId }: { businessId: string }) {
                   <SparkleIcon />
                 </span>
                 <div className="ai-generate-result-meta">
-                  <strong>AdsGo Creative Expert</strong>
+                  <strong>CRM Ads Creative Expert</strong>
                   <span>{job.status === "done" ? job.result?.headline : job.status}</span>
                 </div>
                 <span className="ai-generate-result-timestamp">{formatTimestamp(new Date(job.createdAt).getTime())}</span>

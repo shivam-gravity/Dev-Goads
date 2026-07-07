@@ -52,3 +52,15 @@ export const leadIngestionQueue = new Queue(LEAD_INGESTION_QUEUE, {
     removeOnFail: { age: 7 * 24 * 60 * 60 },
   },
 });
+
+/** Deep web-search-backed research on a promotional URL — its own queue since it's an unrelated feature area from creative generation/lead ingestion, not a variant of either. No retries: a failed run can involve several real (billed) web searches already spent, so silently re-running it would double-spend rather than help. */
+export const RESEARCH_SESSION_QUEUE = "research-session";
+
+export const researchSessionQueue = new Queue(RESEARCH_SESSION_QUEUE, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 1,
+    removeOnComplete: { age: 24 * 60 * 60 },
+    removeOnFail: { age: 7 * 24 * 60 * 60 },
+  },
+});

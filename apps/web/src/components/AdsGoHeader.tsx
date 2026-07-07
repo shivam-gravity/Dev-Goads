@@ -74,7 +74,7 @@ export default function AdsGoHeader({ breadcrumb }: { breadcrumb: string[] }) {
                 </span>
               </button>
 
-              <div className="header-profile-menu-section-label">Manage My Adsgo</div>
+              <div className="header-profile-menu-section-label">Manage My CRM Ads</div>
               <button type="button" className="header-profile-menu-item" onClick={() => goTo("/profile/your-profile")}>
                 <UserIcon /> User Profile
               </button>

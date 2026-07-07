@@ -38,7 +38,7 @@ export default function CopilotDrawer() {
       <div className="copilot-header">
         <span className="copilot-header-title">
           <span className="copilot-header-icon">✨</span>
-          AdsGo AI Copilot
+          CRM Ads AI Copilot
         </span>
         <div style={{ display: "flex", gap: "8px" }}>
           <button className="btn btn-sm btn-secondary" style={{ fontSize: "10px", padding: "4px 8px" }} onClick={clearChat}>

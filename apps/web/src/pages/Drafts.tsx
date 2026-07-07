@@ -301,7 +301,7 @@ export default function Drafts({ businessId }: { businessId: string }) {
           <p className="dap-info-text">
             <strong>24 hours</strong> after your first campaign is published, We&apos;ll recommend new campaigns based on performance.
             <br />
-            Turn on <strong>Auto-publish ↗</strong> AdsGo.ai will launch them automatically at the best time.
+            Turn on <strong>Auto-publish ↗</strong> CRM Ads will launch them automatically at the best time.
           </p>
         </div>
       </div>

@@ -7,6 +7,8 @@ export interface ScrapedSite {
   excerpt: string;
   images: string[];
   crawledPages: string[];
+  /** Above-the-fold JPEG screenshot (data URI) from the Playwright-backed scraper-service, when reachable — undefined if that service is down or the page failed to render. */
+  screenshot?: string;
 }
 
 export interface ProductAnalysis {
@@ -15,6 +17,12 @@ export interface ProductAnalysis {
   summary: string;
   valueProposition: string;
   keyFeatures: string[];
+  /** Fields below are only populated by the deep-research pipeline (marketResearch.ts) — undefined from the plain analyzeProduct() path. */
+  businessType?: string;
+  pricingModel?: string;
+  pricingRange?: string;
+  /** Human-readable source citation for the "💡 Data Source" line — real citation titles when web search found sources, an honest "AI estimate" label otherwise (never a fabricated report name). */
+  dataSource?: string;
 }
 
 export interface AudienceSegment {
@@ -27,6 +35,51 @@ export interface AudienceAnalysis {
   segments: AudienceSegment[];
   painPoints: string[];
   buyingMotivations: string[];
+  demographics?: { ageDistribution: string; genderRatio: string; occupation: string };
+  consumerCharacteristics?: string;
+  interestTags?: string[];
+  recommendedObjective?: string;
+  recommendedPerformanceGoal?: string;
+  dataSource?: string;
+}
+
+export interface Citation {
+  url: string;
+  title: string;
+}
+
+export interface DeepResearchBlock<T = unknown> {
+  key: string;
+  label: string;
+  citations: Citation[];
+  data: T;
+}
+
+export interface CompetitorBudgetAnalysis {
+  competitors: string[];
+  competitionIntensity: string;
+  differentiators: string[];
+  budgetReasoning: string[];
+  recommendedDailyBudgetCents: number;
+  dataSource: string;
+}
+
+export interface MarketLocationAnalysis {
+  recommendedRegion: string;
+  alternativeRegions: string[];
+  marketTrends: string;
+  competitionLevel: string;
+  recommendedPlatform: AdNetwork;
+  placementRationale: string;
+  dataSource: string;
+}
+
+export interface AudiencePersona {
+  name: string;
+  ageRange: string;
+  genderSplit: string;
+  details: string;
+  interests: string[];
 }
 
 export type ProductCatalogSource = "shopify" | "facebook" | "google" | "woocommerce";
@@ -49,6 +102,9 @@ export interface BusinessProfile {
   monthlyBudgetCents: number;
   goals: string[];
   targetAudience?: string;
+  /** Set via the deep-research "Brand Info" confirm card — distinct from `name` since a business record may predate branding being confirmed. */
+  brandName?: string;
+  logoUrls?: string[];
 }
 
 export interface AdCreative {

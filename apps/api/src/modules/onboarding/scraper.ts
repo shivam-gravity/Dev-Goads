@@ -1,10 +1,46 @@
 import * as cheerio from "cheerio";
 import type { ScrapedSite } from "../../types/index.js";
+import { logger } from "../logger/logger.js";
 
 const MAX_EXCERPT_LENGTH = 6000;
 const FETCH_TIMEOUT_MS = 8000;
+const SCREENSHOT_TIMEOUT_MS = 12000; // Playwright cold-starting a browser is slower than a plain fetch
 const MAX_IMAGES = 8;
 const MAX_CRAWL_PAGES = 3; // the entry page + up to 2 same-site links worth following
+
+const SCRAPER_SERVICE_URL = process.env.SCRAPER_SERVICE_URL ?? "http://localhost:4003";
+const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY;
+
+/**
+ * Real above-the-fold screenshot via the Playwright-backed scraper-service (already used
+ * for product-catalog import) — reused here rather than adding a second headless-browser
+ * dependency to apps/api. Best-effort: returns undefined (never throws) if that service is
+ * unreachable, times out, or fails to render the page, so a screenshot outage never sinks
+ * the rest of the onboarding crawl.
+ */
+async function captureScreenshot(url: string): Promise<string | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SCREENSHOT_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${SCRAPER_SERVICE_URL}/products/scrape`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(INTERNAL_SERVICE_KEY ? { "X-Internal-Service-Key": INTERNAL_SERVICE_KEY } : {}),
+      },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) return undefined;
+    const json = (await res.json()) as { screenshot?: string };
+    return json.screenshot;
+  } catch (err) {
+    logger.warn(`captureScreenshot: scraper-service unreachable or failed for ${url} — continuing without a screenshot`, err);
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 // Link text/paths that tend to carry the richest product/brand context beyond the homepage.
 const FOLLOW_HINTS = /\b(product|products|shop|store|about|features|pricing|collections?)\b/i;
@@ -127,6 +163,11 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
     throw new Error("Only http/https URLs are supported");
   }
 
+  // Screenshot capture (a separate service round-trip) runs alongside the cheerio crawl
+  // below rather than after it, since the two are independent and Playwright cold-start
+  // is the slower of the two — no reason to pay for them sequentially.
+  const screenshotPromise = captureScreenshot(url);
+
   const entry = await fetchPage(url);
   const entryText = extractText(entry.$);
   const images = extractImages(entry.$, url);
@@ -155,6 +196,8 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
     throw new Error("Couldn't extract any readable text from that page");
   }
 
+  const screenshot = await screenshotPromise;
+
   return {
     url,
     title,
@@ -162,5 +205,6 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
     excerpt,
     images: [...new Set(images)].slice(0, MAX_IMAGES),
     crawledPages,
+    screenshot,
   };
 }

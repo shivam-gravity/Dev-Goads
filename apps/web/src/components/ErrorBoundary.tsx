@@ -57,7 +57,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             <span style={{ fontSize: "48px", display: "block" }}>⚠️</span>
             <h1 style={{ fontSize: "22px", marginTop: "16px", fontWeight: 700 }}>Something went wrong</h1>
             <p style={{ color: "#a78bfa", fontSize: "14px", marginTop: "8px", lineHeight: "1.5" }}>
-              AdsGo.ai encountered a client-side execution exception. We have captured details of this issue for our engineers.
+              CRM Ads encountered a client-side execution exception. We have captured details of this issue for our engineers.
             </p>
 
             <button

@@ -279,3 +279,29 @@ model Lead {
   @@index([email])
   @@map("leads")
 }
+
+// Deep web-search-backed research on a promotional URL (product positioning, audience,
+// competitors/budget, market/location, audience personas) — deliberately its own model
+// rather than reusing GenerationJob, since this is an unrelated feature area with its
+// own cost-tracking needs (searchCount, cacheHit). `blocks` accumulates one entry per
+// research block as the worker completes it, so polling clients see the transcript grow.
+model ResearchSession {
+  id          String   @id
+  workspaceId String
+  businessId  String?
+  url         String
+  status      String   @default("queued") // queued | running | done | failed
+  currentStep String?
+  blocks      Json     @default("[]")
+  personas    Json?
+  result      Json?
+  error       String?
+  searchCount Int      @default(0)
+  cacheHit    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([url])
+  @@map("research_sessions")
+}

@@ -36,7 +36,7 @@ export function CopilotProvider({ children }: { children: ReactNode }) {
     {
       id: "init-1",
       sender: "copilot",
-      text: "Hi ssrivastava! I'm your AdsGo Copilot. How can I help optimize your campaigns or branding today?",
+      text: "Hi ssrivastava! I'm your CRM Ads Copilot. How can I help optimize your campaigns or branding today?",
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     }
   ]);
@@ -56,7 +56,7 @@ export function CopilotProvider({ children }: { children: ReactNode }) {
       {
         id: `init-${Date.now()}`,
         sender: "copilot",
-        text: "Hi ssrivastava! I'm your AdsGo Copilot. How can I help optimize your campaigns or branding today?",
+        text: "Hi ssrivastava! I'm your CRM Ads Copilot. How can I help optimize your campaigns or branding today?",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }
     ]);
@@ -94,7 +94,7 @@ export function CopilotProvider({ children }: { children: ReactNode }) {
     } else if (cleanText.includes("poor performers") || cleanText.includes("poor")) {
       reply = "Here are your low-performing assets based on last 7 days metrics:\n\n* **Summer Retargeting** (Meta): 1.1x ROAS (Target: 2.5x)\n* **Ad variant Headline 3** (Google): 0.5% CTR (Target: 1.5%)\n\nI recommend redistributing $25/day from these assets to your high-performing Search campaign.";
     } else if (cleanText.includes("headlines") || cleanText.includes("headline")) {
-      reply = "Here are 5 high-converting headlines tailored to your Brand Kit specifications:\n\n1. *'Scale Your Lead Gen in 15 Mins'* (Direct)\n2. *'The Smarter Way to Automate Ads'* (Benefit)\n3. *'Double Your ROAS with AdsGo.ai'* (Proof)\n4. *'Stop Wasting 6 Hours a Week'* (Pain-point)\n5. *'Try AdsGo Free — Launch Today'* (CTA)";
+      reply = "Here are 5 high-converting headlines tailored to your Brand Kit specifications:\n\n1. *'Scale Your Lead Gen in 15 Mins'* (Direct)\n2. *'The Smarter Way to Automate Ads'* (Benefit)\n3. *'Double Your ROAS with CRM Ads'* (Proof)\n4. *'Stop Wasting 6 Hours a Week'* (Pain-point)\n5. *'Try CRM Ads Free — Launch Today'* (CTA)";
     } else if (cleanText.includes("meta") || cleanText.includes("pause")) {
       reply = "I've prepared a draft action to pause all active Meta campaigns (3 running). Should I submit this to the approval workflow?";
     } else if (cleanText.includes("compare")) {

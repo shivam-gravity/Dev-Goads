@@ -112,13 +112,8 @@ function AuthenticatedApp() {
       <aside className={`sidebar adsgo-sidebar ${sidebarOpen ? "sidebar-open" : ""} ${brandMenuOpen ? "sidebar-pinned" : ""}`}>
         <div className="sidebar-brand adsgo-brand">
           <NavLink to="/dashboard" className="brand-lockup-adsgo" onClick={() => setSidebarOpen(false)}>
-            <svg className="brand-logo-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              {/* Overlapping geometric sparkle shape for the purple logo */}
-              <path d="M12 2C12 2 13 8 18 12C13 16 12 22 12 22C12 22 11 16 6 12C11 8 12 2 12 2Z" fill="#7033f5" />
-              <path d="M12 6C12 6 12.5 9 15 11C12.5 13 12 18 12 18C12 18 11.5 13 9 11C11.5 9 12 6 12 6Z" fill="#a78bfa" />
-              <circle cx="12" cy="12" r="2.5" fill="#ffffff" />
-            </svg>
-            <span className="brand-text-adsgo">AdsGo<span>.ai</span></span>
+            <span className="brand-logo-badge"><img src="/logo-icon.png" alt="CRM Ads" /></span>
+            <span className="brand-text-adsgo">CRM Ads</span>
           </NavLink>
         </div>
 

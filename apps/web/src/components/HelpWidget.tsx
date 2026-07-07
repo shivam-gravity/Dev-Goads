@@ -3,9 +3,9 @@ import type { RefObject } from "react";
 import { CloseIcon, SearchIcon, ChevronRightIcon, InboxIcon, ArrowLeftIcon, ClockIcon } from "./icons.js";
 
 const ARTICLES = [
-  "Getting Started with AdsGo — Launch Your First Campaign in 3 Simple Steps",
-  "How to Use AdsGo Drafts & Recommendations",
-  "How to Change Your AdsGo Account Password"
+  "Getting Started with CRM Ads — Launch Your First Campaign in 3 Simple Steps",
+  "How to Use CRM Ads Drafts & Recommendations",
+  "How to Change Your CRM Ads Account Password"
 ];
 
 const COLLECTIONS = [
@@ -118,7 +118,7 @@ export default function HelpWidget({ onClose, panelRef }: { onClose: () => void;
               <path d="M12 2C12 2 13 8 18 12C13 16 12 22 12 22C12 22 11 16 6 12C11 8 12 2 12 2Z" fill="#7033f5" />
             </svg>
             <div className="help-widget-compose-brand-text">
-              <strong>AdsGo.ai</strong>
+              <strong>CRM Ads</strong>
               <span className="help-widget-compose-reply-time">
                 <ClockIcon /> A few hours
               </span>
@@ -178,7 +178,7 @@ export default function HelpWidget({ onClose, panelRef }: { onClose: () => void;
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M12 2C12 2 13 8 18 12C13 16 12 22 12 22C12 22 11 16 6 12C11 8 12 2 12 2Z" fill="#ffffff" />
               </svg>
-              AdsGo.ai
+              CRM Ads
             </span>
             <button className="help-widget-close" onClick={onClose} aria-label="Close help">
               <CloseIcon />

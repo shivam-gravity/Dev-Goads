@@ -70,7 +70,7 @@ export interface User { id: string; email: string; name: string; avatar?: string
 export interface Workspace { id: string; name: string; ownerId: string; plan: "starter" | "pro" | "agency"; logoUrl?: string; timezone: string; createdAt: string; }
 export interface WorkspaceMember { id: string; workspaceId: string; userId: string; role: "owner" | "admin" | "member" | "viewer"; invitedAt: string; joinedAt?: string; user?: { name: string; email: string; avatar?: string }; }
 export interface AuthResult { user: User; token: string; workspaceId?: string; }
-export interface BusinessProfile { id: string; name: string; website?: string; industry: string; monthlyBudgetCents: number; goals: string[]; targetAudience?: string; }
+export interface BusinessProfile { id: string; name: string; website?: string; industry: string; monthlyBudgetCents: number; goals: string[]; targetAudience?: string; brandName?: string; logoUrls?: string[]; }
 export interface AdCreative { headline: string; body: string; callToAction: string; }
 export interface AdStrategy { id: string; businessId: string; summary: string; recommendedNetworks: ("meta" | "google")[]; budgetSplit: Record<string, number>; audiences: string[]; creatives: AdCreative[]; createdAt: string; }
 export interface CampaignVariant { id: string; creative: AdCreative; network: "meta" | "google"; externalId?: string; status: string; }
@@ -78,10 +78,36 @@ export interface Campaign { id: string; businessId: string; strategyId: string; 
 export interface NormalizedPerformance { campaignId: string; variantId: string; network: "meta" | "google"; impressions: number; clicks: number; conversions: number; spendCents: number; ctr: number; cpaCents: number | null; conversionRate: number; }
 export interface OptimizationDecision { campaignId: string; chosenVariantId: string; action: string; reason: string; decidedAt: string; }
 export interface Invoice { id: string; businessId: string; periodStart: string; periodEnd: string; adSpendCents: number; platformFeeCents: number; totalCents: number; createdAt: string; }
-export interface ScrapedSite { url: string; title: string; description: string; excerpt: string; images: string[]; crawledPages: string[]; }
-export interface ProductAnalysis { productName: string; category: string; summary: string; valueProposition: string; keyFeatures: string[]; }
-export interface AudienceAnalysis { primaryAudience: string; segments: { name: string; description: string }[]; painPoints: string[]; buyingMotivations: string[]; }
+export interface ScrapedSite { url: string; title: string; description: string; excerpt: string; images: string[]; crawledPages: string[]; screenshot?: string; }
+export interface ProductAnalysis {
+  productName: string; category: string; summary: string; valueProposition: string; keyFeatures: string[];
+  businessType?: string; pricingModel?: string; pricingRange?: string; dataSource?: string;
+}
+export interface AudienceAnalysis {
+  primaryAudience: string; segments: { name: string; description: string }[]; painPoints: string[]; buyingMotivations: string[];
+  demographics?: { ageDistribution: string; genderRatio: string; occupation: string };
+  consumerCharacteristics?: string; interestTags?: string[]; recommendedObjective?: string; recommendedPerformanceGoal?: string; dataSource?: string;
+}
 export interface DeepResearchResult { site: ScrapedSite; product: ProductAnalysis; audience: AudienceAnalysis; }
+
+export interface Citation { url: string; title: string; }
+export interface DeepResearchBlock<T = unknown> { key: string; label: string; citations: Citation[]; data: T; }
+export interface CompetitorBudgetAnalysis { competitors: string[]; competitionIntensity: string; differentiators: string[]; budgetReasoning: string[]; recommendedDailyBudgetCents: number; dataSource: string; }
+export interface MarketLocationAnalysis { recommendedRegion: string; alternativeRegions: string[]; marketTrends: string; competitionLevel: string; recommendedPlatform: "meta" | "google" | "tiktok"; placementRationale: string; dataSource: string; }
+export interface AudiencePersona { name: string; ageRange: string; genderSplit: string; details: string; interests: string[]; }
+export interface ResearchSessionResult { site: ScrapedSite; product: ProductAnalysis; audience: AudienceAnalysis; competitorBudget: CompetitorBudgetAnalysis; marketLocation: MarketLocationAnalysis; personas: AudiencePersona[]; }
+export interface ResearchSession {
+  id: string; workspaceId: string; businessId?: string; url: string;
+  status: "queued" | "running" | "done" | "failed";
+  currentStep?: string;
+  blocks: DeepResearchBlock[];
+  personas?: AudiencePersona[];
+  result?: ResearchSessionResult;
+  error?: string;
+  searchCount: number;
+  cacheHit: boolean;
+  createdAt: string; updatedAt: string;
+}
 export interface CreativeAsset { id: string; businessId: string; headline: string; body: string; callToAction: string; format: "text" | "image" | "video"; tags: string[]; createdAt: string; }
 export interface CreativeVariation { headline: string; body: string; callToAction: string; angle: string; }
 export interface TrendPoint { date: string; impressions: number; clicks: number; conversions: number; spendCents: number; ctr: number; }
@@ -219,6 +245,9 @@ export const api = {
     request<AudienceAnalysis>("/onboarding/analyze-audience", { method: "POST", body: JSON.stringify({ site, product }) }),
   deepResearch: (url: string) =>
     request<DeepResearchResult>("/onboarding/deep-research", { method: "POST", body: JSON.stringify({ url }) }),
+  createResearchSession: (workspaceId: string, url: string, businessId?: string) =>
+    request<ResearchSession>(`/workspaces/${workspaceId}/research-sessions`, { method: "POST", body: JSON.stringify({ url, businessId }) }),
+  getResearchSession: (id: string) => request<ResearchSession>(`/research-sessions/${id}`),
 
   // Business
   createBusiness: (input: Omit<BusinessProfile, "id">) =>
@@ -230,6 +259,8 @@ export const api = {
   // Strategy
   generateStrategy: (businessId: string) =>
     request<AdStrategy>(`/businesses/${businessId}/strategies`, { method: "POST" }),
+  createStrategyFromResearch: (businessId: string, researchSessionId: string) =>
+    request<AdStrategy>(`/businesses/${businessId}/strategies/from-research`, { method: "POST", body: JSON.stringify({ researchSessionId }) }),
   listStrategies: (businessId: string) => request<AdStrategy[]>(`/businesses/${businessId}/strategies`),
 
   // Campaigns

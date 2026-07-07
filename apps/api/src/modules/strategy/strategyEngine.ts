@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../db/prisma.js";
-import type { AdStrategy, BusinessProfile } from "../../types/index.js";
+import type { AdCreative, AdNetwork, AdStrategy, AudienceAnalysis, AudiencePersona, BusinessProfile, CompetitorBudgetAnalysis, MarketLocationAnalysis, ProductAnalysis } from "../../types/index.js";
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
@@ -99,4 +99,51 @@ export async function getStrategy(id: string): Promise<AdStrategy | null> {
 export async function listStrategiesForBusiness(businessId: string): Promise<AdStrategy[]> {
   const rows = await prisma.strategy.findMany({ where: { businessId }, orderBy: { createdAt: "desc" } });
   return rows.map((r) => r.data as unknown as AdStrategy);
+}
+
+export interface ResearchStrategyInput {
+  product: ProductAnalysis;
+  audience: AudienceAnalysis;
+  competitorBudget: CompetitorBudgetAnalysis;
+  marketLocation: MarketLocationAnalysis;
+  personas: AudiencePersona[];
+}
+
+/**
+ * Builds and persists an AdStrategy directly from an already-completed deep-research
+ * session — deliberately skips generateStrategy's Claude call above, since re-deriving a
+ * strategy from scratch would throw away the much richer research (real competitor names,
+ * a calculated budget, named audience personas) already gathered for this exact business.
+ * Same Strategy shape/persistence as generateStrategy, so existing campaign-launch code
+ * reading budgetSplit/recommendedNetworks/creatives works identically either way.
+ */
+export async function createStrategyFromResearch(businessId: string, input: ResearchStrategyInput): Promise<AdStrategy> {
+  const { product, audience, marketLocation, personas } = input;
+
+  const creatives: AdCreative[] = [
+    { headline: product.valueProposition.slice(0, 90), body: product.summary, callToAction: "Learn More" },
+    {
+      headline: product.keyFeatures[0] ? `${product.keyFeatures[0]} — built for ${product.category}` : product.productName,
+      body: audience.primaryAudience,
+      callToAction: "Get Started",
+    },
+  ];
+
+  const network: AdNetwork = marketLocation.recommendedPlatform;
+  const strategy: AdStrategy = {
+    id: randomUUID(),
+    businessId,
+    createdAt: new Date().toISOString(),
+    summary: `${product.summary} Recommended platform: ${network} in ${marketLocation.recommendedRegion}. ${marketLocation.placementRationale}`,
+    recommendedNetworks: [network],
+    budgetSplit: { [network]: 1 } as Partial<Record<AdNetwork, number>>,
+    audiences: personas.length > 0 ? personas.map((p) => p.name) : [audience.primaryAudience],
+    creatives,
+  };
+
+  await prisma.strategy.create({
+    data: { id: strategy.id, businessId: strategy.businessId, data: strategy as any, createdAt: new Date(strategy.createdAt) },
+  });
+
+  return strategy;
 }

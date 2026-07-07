@@ -82,7 +82,7 @@ export default function BrandProfile() {
               <span><GlobeIcon /> Brand Url</span>
               <input
                 type="text"
-                placeholder="e.g. https://www.adsgo.ai"
+                placeholder="e.g. https://www.yourbrand.com"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleStartAnalysis()}
