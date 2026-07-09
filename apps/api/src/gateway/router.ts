@@ -26,6 +26,7 @@ import {
 import { getAnalyticsSummary, getAudienceSuggestions } from "../modules/analytics/analyticsService.js";
 import { getAdInsights } from "../modules/adInsights/adInsightsService.js";
 import { chatWithStrategist } from "../modules/strategist/strategistService.js";
+import { chatWithCopilot } from "../modules/copilot/copilotService.js";
 
 // Extracted services (roadmap Phase 2) — routes below are proxied, not handled locally.
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL ?? "http://localhost:4001";
@@ -41,7 +42,9 @@ import { listAccessibleCustomers as listGoogleCustomersApi, listConversionAction
 import { getProductCatalog } from "../modules/integrations/productCatalogService.js";
 import { createGenerationJob, getGenerationJob } from "../modules/generation/generationJobService.js";
 import { getCrmWebhookConfig, setCrmWebhookConfig, clearCrmWebhookConfig } from "../modules/crm/crmWebhookService.js";
-import { creativeGenerationQueue, researchSessionQueue } from "../infra/queue.js";
+import { creativeGenerationQueue, researchSessionQueue, researchOrchestratorQueue } from "../infra/queue.js";
+import { createResearchJob, getResearchJob as getResearchOrchestratorJob, getResearchJobWithExecutions } from "../research/research-orchestrator/index.js";
+import { toStrategyInput } from "../research/knowledge/toStrategyInput.js";
 import {
   listSavedAudiences,
   createSavedAudience,
@@ -631,14 +634,27 @@ router.post("/businesses/:id/strategies/from-research", asyncHandler(async (req,
   const business = await getBusiness(req.params.id);
   if (!business) return res.status(404).json({ error: "Business not found" });
   const researchSessionId = typeof req.body?.researchSessionId === "string" ? req.body.researchSessionId : undefined;
-  if (!researchSessionId) return res.status(400).json({ error: "researchSessionId is required" });
-
-  const session = await getResearchSession(researchSessionId);
-  if (!session || session.status !== "done" || !session.result) {
-    return res.status(409).json({ error: "Research session is not complete" });
-  }
+  const researchJobId = typeof req.body?.researchJobId === "string" ? req.body.researchJobId : undefined;
+  if (!researchSessionId && !researchJobId) return res.status(400).json({ error: "researchSessionId or researchJobId is required" });
 
   try {
+    if (researchJobId) {
+      // New parallel-provider pipeline: ResearchJob.context (a ResearchContext) is
+      // remapped into the same ResearchStrategyInput shape the legacy branch below
+      // already builds, so createStrategyFromResearch — the "AI Agents" step — stays
+      // the single implementation for both pipelines.
+      const job = await getResearchOrchestratorJob(researchJobId);
+      if (!job || job.status !== "completed" || !job.context) {
+        return res.status(409).json({ error: "Research job is not complete" });
+      }
+      const strategy = await createStrategyFromResearch(business.id, toStrategyInput(job.context));
+      return res.status(201).json(strategy);
+    }
+
+    const session = await getResearchSession(researchSessionId!);
+    if (!session || session.status !== "done" || !session.result) {
+      return res.status(409).json({ error: "Research session is not complete" });
+    }
     const strategy = await createStrategyFromResearch(business.id, session.result as any);
     res.status(201).json(strategy);
   } catch (err) {
@@ -684,6 +700,19 @@ router.post("/businesses/:id/strategist/chat", asyncHandler(async (req, res) => 
     res.json({ reply });
   } catch (err) {
     sendError(res, err, 502, "Strategist chat failed");
+  }
+}));
+
+router.post("/businesses/:id/copilot/chat", asyncHandler(async (req, res) => {
+  const business = await getBusiness(req.params.id);
+  if (!business) return res.status(404).json({ error: "Business not found" });
+  const parsed = strategistChatSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const reply = await chatWithCopilot(req.params.id, parsed.data.messages);
+    res.json({ reply });
+  } catch (err) {
+    sendError(res, err, 502, "Copilot chat failed");
   }
 }));
 
@@ -819,6 +848,55 @@ router.get("/research-sessions/:id", asyncHandler(async (req, res) => {
   const session = await getResearchSession(req.params.id);
   if (!session) return res.status(404).json({ error: "Research session not found" });
   res.json(session);
+}));
+
+/* ═══════════════════════════════════════════════
+   RESEARCH ORCHESTRATOR — Campaign -> Research Orchestrator -> Providers (9, run in
+   parallel) -> Knowledge Aggregator -> AI Agents -> Campaign. A separate pipeline from
+   the research-sessions block above (ResearchJob, not ResearchSession) rather than a
+   replacement of it — see apps/api/src/research for the orchestrator/providers/
+   aggregator implementation. `/businesses/:id/strategies/from-research` below accepts
+   either a legacy researchSessionId or a researchJobId so the existing "AI Agents" step
+   (createStrategyFromResearch) serves both pipelines without a second implementation.
+   ═══════════════════════════════════════════════ */
+
+const researchStartSchema = z.object({
+  workspaceId: z.string().min(1),
+  url: z.string().min(1),
+  businessId: z.string().optional(),
+});
+
+router.post("/research/start", asyncHandler(async (req, res) => {
+  const parsed = researchStartSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { workspaceId, url, businessId } = parsed.data;
+
+  try {
+    const job = await createResearchJob(workspaceId, url, businessId);
+    await researchOrchestratorQueue.add("research-orchestrate", { jobId: job.id });
+    res.status(202).json(job);
+  } catch (err) {
+    sendError(res, err, 422, "Failed to start research job");
+  }
+}));
+
+router.get("/research/:id", asyncHandler(async (req, res) => {
+  const job = await getResearchJobWithExecutions(req.params.id);
+  if (!job) return res.status(404).json({ error: "Research job not found" });
+  res.json(job);
+}));
+
+router.get("/research/:id/status", asyncHandler(async (req, res) => {
+  const job = await getResearchOrchestratorJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Research job not found" });
+  res.json({
+    id: job.id,
+    status: job.status,
+    error: job.error,
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+    updatedAt: job.updatedAt,
+  });
 }));
 
 /* ═══════════════════════════════════════════════

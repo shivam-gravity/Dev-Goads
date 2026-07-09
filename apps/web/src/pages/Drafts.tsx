@@ -48,6 +48,22 @@ function draftProduct(data: Record<string, unknown>, fallbackName: string): stri
   return fallbackName;
 }
 
+type BudgetKey = "dailyBudgetCents" | "dailyBudget" | "budget";
+
+/** Mirrors draftBudget's duck-typing, but returns the raw editable value + which
+ * key it came from, so saving writes back to the same field instead of adding a
+ * second, conflicting budget key alongside the one the draft's producer already uses. */
+function draftEditableFields(data: Record<string, unknown>): { budgetKey: BudgetKey; budgetDollars: string; audience: string; product: string } {
+  let budgetKey: BudgetKey = "dailyBudgetCents";
+  let budgetDollars = "";
+  if (typeof data.dailyBudgetCents === "number") { budgetKey = "dailyBudgetCents"; budgetDollars = String(data.dailyBudgetCents / 100); }
+  else if (typeof data.dailyBudget === "number") { budgetKey = "dailyBudget"; budgetDollars = String(data.dailyBudget); }
+  else if (typeof data.budget === "number") { budgetKey = "budget"; budgetDollars = String(data.budget); }
+  const audience = typeof data.audience === "string" ? data.audience : "";
+  const product = typeof data.product === "string" ? data.product : typeof data.goal === "string" ? data.goal : "";
+  return { budgetKey, budgetDollars, audience, product };
+}
+
 const ICON_ITEMS = [
   { key: "products", label: "Products", icon: "cart", cls: "dap-icon-products" },
   { key: "cta", label: "CTA", icon: "cursor", cls: "dap-icon-cta" },
@@ -212,6 +228,15 @@ export default function Drafts({ businessId }: { businessId: string }) {
   const [platform, setPlatform] = useState("meta");
   const [autoPublish, setAutoPublish] = useState(() => localStorage.getItem("adgo_auto_publish") === "1");
 
+  const [editingDraft, setEditingDraft] = useState<Draft | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editBudgetKey, setEditBudgetKey] = useState<BudgetKey>("dailyBudgetCents");
+  const [editBudget, setEditBudget] = useState("");
+  const [editAudience, setEditAudience] = useState("");
+  const [editProduct, setEditProduct] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
   const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
 
   async function loadDrafts() {
@@ -256,6 +281,45 @@ export default function Drafts({ businessId }: { businessId: string }) {
       setDrafts(prev => prev.filter(d => d.id !== id));
     } catch (err) {
       setError("Failed to delete draft.");
+    }
+  }
+
+  function handleOpenEdit(draft: Draft) {
+    const fields = draftEditableFields((draft.data ?? {}) as Record<string, unknown>);
+    setEditingDraft(draft);
+    setEditName(draft.name);
+    setEditBudgetKey(fields.budgetKey);
+    setEditBudget(fields.budgetDollars);
+    setEditAudience(fields.audience);
+    setEditProduct(fields.product);
+    setEditError(null);
+  }
+
+  function handleCloseEdit() {
+    setEditingDraft(null);
+    setEditError(null);
+  }
+
+  async function handleSaveEdit() {
+    if (!editingDraft) return;
+    if (!editName.trim()) { setEditError("Name is required."); return; }
+    const budgetValue = editBudget.trim() ? Number(editBudget) : NaN;
+    if (!Number.isFinite(budgetValue) || budgetValue < 0) { setEditError("Daily budget must be a positive number."); return; }
+
+    setSaving(true);
+    setEditError(null);
+    try {
+      const existingData = (editingDraft.data ?? {}) as Record<string, unknown>;
+      const data: Record<string, unknown> = { ...existingData, audience: editAudience, product: editProduct };
+      data[editBudgetKey] = editBudgetKey === "dailyBudgetCents" ? Math.round(budgetValue * 100) : budgetValue;
+
+      const updated = await api.updateDraft(editingDraft.id, { name: editName.trim(), data });
+      setDrafts(prev => prev.map(d => (d.id === updated.id ? updated : d)));
+      setEditingDraft(null);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "Failed to update draft.");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -395,6 +459,7 @@ export default function Drafts({ businessId }: { businessId: string }) {
                         <td>{draftProduct(data, d.name)}</td>
                         <td>{new Date(d.updatedAt).toLocaleString()}</td>
                         <td className="dap-row-actions">
+                          <button type="button" className="dap-row-btn" onClick={() => handleOpenEdit(d)}>Edit</button>
                           <button type="button" className="dap-row-btn" onClick={() => handlePublish(d.id)}>Publish</button>
                           <button type="button" className="dap-row-btn dap-row-btn-danger" onClick={() => handleDelete(d.id)}>Delete</button>
                         </td>
@@ -407,6 +472,40 @@ export default function Drafts({ businessId }: { businessId: string }) {
           </div>
         </div>
       </div>
+
+      {editingDraft && (
+        <div className="adsgo-modal-overlay" onClick={handleCloseEdit}>
+          <div className="adsgo-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="adsgo-modal-header">
+              <h2>Edit Draft</h2>
+              <button type="button" className="adsgo-modal-close" onClick={handleCloseEdit} aria-label="Close">×</button>
+            </div>
+
+            {editError && <p className="error">{editError}</p>}
+
+            <label className="adsgo-modal-field">
+              <span>Name</span>
+              <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} autoFocus />
+            </label>
+            <label className="adsgo-modal-field">
+              <span>Daily budget (USD)</span>
+              <input type="number" min="0" step="0.01" value={editBudget} onChange={(e) => setEditBudget(e.target.value)} />
+            </label>
+            <label className="adsgo-modal-field">
+              <span>Audience</span>
+              <input type="text" value={editAudience} onChange={(e) => setEditAudience(e.target.value)} placeholder="e.g. Lookalike — Purchasers" />
+            </label>
+            <label className="adsgo-modal-field">
+              <span>Product</span>
+              <input type="text" value={editProduct} onChange={(e) => setEditProduct(e.target.value)} placeholder="e.g. Aurora Wireless Earbuds" />
+            </label>
+
+            <button type="button" className="btn btn-primary adsgo-modal-submit" onClick={handleSaveEdit} disabled={saving}>
+              {saving ? "Saving..." : "Save Changes"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

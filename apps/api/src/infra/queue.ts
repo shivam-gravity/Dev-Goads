@@ -66,6 +66,28 @@ export const researchSessionQueue = new Queue(RESEARCH_SESSION_QUEUE, {
 });
 
 /**
+ * The new parallel-provider Research Orchestrator (Campaign -> Research Orchestrator ->
+ * Providers -> Knowledge Aggregator -> AI Agents -> Campaign) — its own queue, distinct
+ * from RESEARCH_SESSION_QUEUE above, since it's a separate pipeline (ResearchJob, not
+ * ResearchSession) rather than a variant of the existing one. attempts: 1 for the same
+ * reason as researchSessionQueue: a failed run has already paid for whatever real web
+ * searches its providers made before failing, so a BullMQ-level job retry would re-run
+ * every provider (including ones that already succeeded) and double-spend. Per-provider
+ * retries happen inside runResearchOrchestrator instead (see research/research-orchestrator),
+ * which only re-runs the specific provider that failed.
+ */
+export const RESEARCH_ORCHESTRATOR_QUEUE = "research-orchestrator";
+
+export const researchOrchestratorQueue = new Queue(RESEARCH_ORCHESTRATOR_QUEUE, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 1,
+    removeOnComplete: { age: 24 * 60 * 60 },
+    removeOnFail: { age: 7 * 24 * 60 * 60 },
+  },
+});
+
+/**
  * Powers the Live Insights Dashboard: a single repeatable job (registered once by
  * metricsIngestionWorker.ts at startup) fans out one ingest-metrics call per active
  * campaign on an interval, then runs the optimization pass on each so fresh data and

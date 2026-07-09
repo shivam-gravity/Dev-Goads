@@ -1,0 +1,192 @@
+import type { Citation } from "../../types/index.js";
+
+/**
+ * The new parallel-provider research pipeline's own type surface — deliberately
+ * separate from apps/api/src/types/index.ts's ProductAnalysis/AudienceAnalysis/etc,
+ * which belong to the existing sequential ResearchSession pipeline
+ * (modules/onboarding/marketResearch.ts) and keep working unchanged. `Citation` is
+ * the one type reused as-is since a {url, title} source pair means the same thing
+ * in both pipelines.
+ */
+
+export type ResearchProviderStatus = "success" | "partial" | "failed";
+
+export type ResearchJobStatus = "pending" | "running" | "aggregating" | "completed" | "failed";
+
+/** One evidence/source entry a provider surfaced — persisted 1:1 into ResearchEvidence rows. */
+export interface ResearchEvidenceItem {
+  url: string;
+  title?: string;
+  snippet?: string;
+}
+
+/** Everything a provider needs to run — deliberately minimal and derived only from
+ * the job itself, never from another provider's output, so providers stay independent
+ * and runnable in any order (or dropped/added) without a dependency graph to maintain. */
+export interface ResearchProviderInput {
+  jobId: string;
+  workspaceId: string;
+  businessId?: string;
+  url: string;
+  businessName?: string;
+  industry?: string;
+}
+
+/** Uniform envelope every provider returns, regardless of what T is — the orchestrator
+ * and knowledge aggregator only ever deal in ProviderResult<T>, never a provider's raw
+ * internals, so adding/removing providers never touches orchestration code. */
+export interface ProviderResult<T> {
+  provider: string;
+  status: ResearchProviderStatus;
+  data: T | null;
+  citations: Citation[];
+  evidence: ResearchEvidenceItem[];
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  attempt: number;
+  error?: string;
+  /** 0-1 — how much a downstream consumer (an AI Agent, a human reviewing the research)
+   * should trust this specific result. Computed once, generically, in runProviderStep
+   * (see providers/support.ts) from signals every provider already reports (status,
+   * evidence count, retry count, whether `data.dataSource` is a real citation vs. the
+   * two known no-live-data fallback strings) — never provider-specific logic, so adding
+   * a 10th provider gets confidence scoring for free. */
+  confidence: number;
+}
+
+/* ─────────────────────────────  Per-provider data shapes  ───────────────────────────── */
+
+export interface WebsiteData {
+  title: string;
+  description: string;
+  excerpt: string;
+  images: string[];
+  crawledPages: string[];
+  pagesDiscovered: number;
+  screenshot?: string;
+  dataSource: string;
+}
+
+export interface GeneralSearchData {
+  narrative: string;
+  searchesUsed: number;
+  dataSource: string;
+}
+
+export interface TechnologyData {
+  cms?: string;
+  ecommercePlatform?: string;
+  analyticsTools: string[];
+  frameworks: string[];
+  hostingProvider?: string;
+  detectedFrom: string[];
+  dataSource: string;
+}
+
+export interface CompanyData {
+  name: string;
+  summary: string;
+  foundedYear?: string;
+  headquarters?: string;
+  employeeRange?: string;
+  fundingStage?: string;
+  dataSource: string;
+}
+
+export interface MarketData {
+  marketSize?: string;
+  growthRate?: string;
+  trends: string[];
+  recommendedRegion?: string;
+  competitionLevel: string;
+  dataSource: string;
+}
+
+export interface CompetitorEntry {
+  name: string;
+  url?: string;
+  notes?: string;
+}
+
+export interface CompetitorData {
+  competitors: CompetitorEntry[];
+  competitionIntensity: string;
+  differentiators: string[];
+  dataSource: string;
+}
+
+export interface AudienceSegmentData {
+  name: string;
+  description: string;
+}
+
+export interface AudienceData {
+  primaryAudience: string;
+  segments: AudienceSegmentData[];
+  painPoints: string[];
+  interestTags: string[];
+  demographics?: { ageDistribution: string; genderRatio: string };
+  dataSource: string;
+}
+
+export interface SEOData {
+  primaryKeywords: string[];
+  metaTitle?: string;
+  metaDescription?: string;
+  headings: string[];
+  dataSource: string;
+}
+
+export interface NewsArticle {
+  title: string;
+  url: string;
+  snippet?: string;
+}
+
+export interface NewsData {
+  articles: NewsArticle[];
+  summary: string;
+  dataSource: string;
+}
+
+/* ─────────────────────────────  Aggregated context  ───────────────────────────── */
+
+export interface ResearchContextMetadata {
+  jobId: string;
+  generatedAt: string;
+  totalDurationMs: number;
+  providersSucceeded: string[];
+  providersPartial: string[];
+  providersFailed: string[];
+  generalSearch?: GeneralSearchData;
+  /** Per-provider confidence (0-1), keyed by provider name — lets a downstream AI Agent
+   * or the UI weight/flag low-confidence fields (e.g. an AI-estimate competitor list with
+   * no real citations) instead of treating every provider's output as equally trustworthy. */
+  confidenceByProvider: Record<string, number>;
+  /** Unweighted average of confidenceByProvider across every provider that ran (failed
+   * providers count as 0) — one number for "how much should I trust this research overall". */
+  overallConfidence: number;
+}
+
+/**
+ * The strongly-typed deliverable of the whole pipeline (Knowledge Aggregator's output,
+ * "AI Agents" input) — one field per provider except SearchProvider, whose output is a
+ * cross-cutting narrative folded into `metadata.generalSearch` rather than its own field,
+ * since it doesn't correspond to one of the named research dimensions the caller asked for.
+ */
+export interface ResearchContext {
+  jobId: string;
+  workspaceId: string;
+  businessId?: string;
+  url: string;
+  website: WebsiteData | null;
+  market: MarketData | null;
+  technology: TechnologyData | null;
+  competitors: CompetitorData | null;
+  keywords: SEOData | null;
+  audience: AudienceData | null;
+  company: CompanyData | null;
+  news: NewsData | null;
+  metadata: ResearchContextMetadata;
+}

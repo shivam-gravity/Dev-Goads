@@ -260,7 +260,16 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
 
         <aside className="media-plan-chat-panel">
           <div className="media-plan-chat-header">
-            <span className="media-plan-chat-title">Chat with Strategist</span>
+            <span className="media-plan-chat-title-group">
+              <span className="media-plan-chat-avatar">🧠</span>
+              <span className="media-plan-chat-title-text">
+                <span className="media-plan-chat-title">Chat with Strategist</span>
+                <span className="media-plan-chat-subtitle">
+                  <span className={`media-plan-status-dot ${isSending ? "busy" : ""}`} aria-hidden="true" />
+                  {isSending ? "Thinking..." : "Grounded in your account data"}
+                </span>
+              </span>
+            </span>
             <div className="media-plan-chat-header-actions" ref={historyRef}>
               <button className="media-plan-icon-btn" aria-label="New chat" onClick={handleNewChat}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -300,27 +309,35 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
           <div className="media-plan-chat-body">
             {messages.length === 0 ? (
               <div className="media-plan-chat-empty">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#c4c4d1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M22 12h-6l-2 3h-4l-2-3H2" />
-                  <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
-                </svg>
+                <span className="media-plan-chat-empty-icon">🧠</span>
                 <p>
                   Ask the strategist to generate, revise or evaluate a Media Plan, or set long-term brand
                   preferences.
                 </p>
+                <div className="media-plan-chat-empty-capabilities">
+                  <span className="media-plan-capability-chip">📊 Evaluate performance</span>
+                  <span className="media-plan-capability-chip">🗺️ Build a media plan</span>
+                  <span className="media-plan-capability-chip">🎯 Set brand preferences</span>
+                </div>
               </div>
             ) : (
               <div className="media-plan-chat-messages">
                 {messages.map((m) => (
-                  <div key={m.id} className={`media-plan-chat-bubble ${m.sender}`}>
-                    {m.sender === "strategist" ? <FormattedMessage text={m.text} /> : m.text}
+                  <div key={m.id} className={`media-plan-message-row ${m.sender}`}>
+                    {m.sender === "strategist" && <span className="media-plan-message-avatar" aria-hidden="true">🧠</span>}
+                    <div className={`media-plan-chat-bubble ${m.sender}`}>
+                      {m.sender === "strategist" ? <FormattedMessage text={m.text} /> : m.text}
+                    </div>
                   </div>
                 ))}
                 {isSending && (
-                  <div className="media-plan-chat-bubble strategist typing">
-                    <span className="media-plan-typing-dot" />
-                    <span className="media-plan-typing-dot" />
-                    <span className="media-plan-typing-dot" />
+                  <div className="media-plan-message-row strategist">
+                    <span className="media-plan-message-avatar" aria-hidden="true">🧠</span>
+                    <div className="media-plan-chat-bubble strategist typing">
+                      <span className="media-plan-typing-dot" />
+                      <span className="media-plan-typing-dot" />
+                      <span className="media-plan-typing-dot" />
+                    </div>
                   </div>
                 )}
                 {error && (
@@ -362,7 +379,7 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
             <textarea
               ref={textareaRef}
               className="media-plan-chat-input"
-              placeholder="Type a message. Enter to send · Shift+Enter for a new line"
+              placeholder="Ask the strategist..."
               value={inputValue}
               onChange={(e) => {
                 setInputValue(e.target.value);

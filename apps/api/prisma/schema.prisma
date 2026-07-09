@@ -397,6 +397,129 @@ model PaymentMethod {
   @@map("payment_methods")
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Research Orchestrator (Campaign -> Research Orchestrator -> Providers ->
+// Knowledge Aggregator -> AI Agents -> Campaign). Deliberately separate from
+// ResearchSession above rather than a rewrite of it: ResearchSession is the
+// existing sequential scraper->OpenAI deep-research pipeline and keeps working
+// unchanged for callers still on it; ResearchJob is the new parallel
+// multi-provider pipeline, additive to the schema. `context` holds the final
+// strongly-typed ResearchContext (see apps/api/src/research/types) once
+// aggregation completes; ProviderExecution/ResearchEvidence give per-provider
+// observability that ResearchSession's flat `blocks` array never needed
+// (single sequential worker, one row was enough).
+// ═══════════════════════════════════════════════════════════════════════
+
+model ResearchJob {
+  id           String   @id
+  workspaceId  String
+  businessId   String?
+  url          String
+  status       String   @default("pending") // pending | running | aggregating | completed | failed
+  context      Json?
+  error        String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  executions ProviderExecution[]
+  snapshots  ResearchSnapshot[]
+  evidence   ResearchEvidence[]
+
+  @@index([workspaceId])
+  @@index([businessId])
+  @@index([url])
+  @@map("research_jobs")
+}
+
+// One row per provider attempt (a retried provider gets multiple rows, one per
+// attempt) — kept even after the job completes as an audit trail of what each
+// of the 9 providers returned, how long it took, and whether it needed a retry.
+model ProviderExecution {
+  id            String    @id
+  researchJobId String
+  researchJob   ResearchJob @relation(fields: [researchJobId], references: [id])
+  provider      String
+  priority      Int
+  status        String    // success | partial | failed
+  attempt       Int       @default(1)
+  data          Json?
+  citations     Json      @default("[]")
+  // 0-1, computeConfidence() in research/providers/support.ts — see that function's doc
+  // comment for the exact formula. Persisted (not just returned in the live response) so
+  // low-confidence providers can be queried/audited after the fact, e.g. "which providers
+  // fell back to AI-estimate data most often this month".
+  confidence    Float?
+  error         String?
+  startedAt     DateTime
+  completedAt   DateTime?
+  durationMs    Int?
+  createdAt     DateTime  @default(now())
+
+  @@index([researchJobId])
+  @@index([researchJobId, provider])
+  @@map("provider_executions")
+}
+
+// Immutable point-in-time copy of the aggregated ResearchContext, written once
+// per successful aggregation pass. A job normally has exactly one (aggregation
+// runs once), but the model allows more so a future re-aggregation/re-run of
+// a subset of providers doesn't have to overwrite history.
+model ResearchSnapshot {
+  id            String   @id
+  researchJobId String
+  researchJob   ResearchJob @relation(fields: [researchJobId], references: [id])
+  version       Int      @default(1)
+  context       Json
+  createdAt     DateTime @default(now())
+
+  @@index([researchJobId])
+  @@map("research_snapshots")
+}
+
+// Flattened citation/source trail across all providers for this job — lets the
+// UI show "N sources" and link out to them without walking every
+// ProviderExecution.citations blob.
+model ResearchEvidence {
+  id            String   @id
+  researchJobId String
+  researchJob   ResearchJob @relation(fields: [researchJobId], references: [id])
+  provider      String
+  url           String
+  title         String?
+  snippet       String?
+  createdAt     DateTime @default(now())
+
+  @@index([researchJobId])
+  @@index([researchJobId, provider])
+  @@map("research_evidence")
+}
+
+// AI Evaluation harness (see src/eval/) — one row per golden-dataset run against either
+// the research providers or the AI agents layer. Deliberately one row per RUN, not one
+// row per case: `cases` holds the full per-case breakdown as Json, mirroring how
+// ResearchSnapshot stores its whole context as one Json blob rather than a child table —
+// a run's pass rate/avg score/regression-vs-baseline is what gets queried and charted,
+// individual case detail is drill-down data, not something joined across runs.
+model AiEvaluationRun {
+  id           String   @id
+  suite        String   // e.g. "research-providers", "ai-agents"
+  target       String?  // the specific provider/agent name this run covered, or null for "all"
+  totalCases   Int
+  passedCases  Int
+  avgScore     Float    // 0-1, mean of all cases' scores
+  avgConfidence Float?  // mean confidence the target(s) reported across all cases, if applicable
+  cases        Json     // per-case breakdown: input, expected, actual, score, pass/fail, notes
+  startedAt    DateTime
+  completedAt  DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([suite])
+  @@index([suite, target])
+  @@map("ai_evaluation_runs")
+}
+
 model AutomationRule {
   id          String   @id
   workspaceId String

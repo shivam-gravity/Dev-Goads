@@ -354,6 +354,8 @@ export const api = {
     request<AdInsightsResponse>(`/businesses/${businessId}/ad-insights?network=${network}`),
   chatWithStrategist: (businessId: string, messages: StrategistChatMessage[]) =>
     request<{ reply: string }>(`/businesses/${businessId}/strategist/chat`, { method: "POST", body: JSON.stringify({ messages }) }),
+  chatWithCopilot: (businessId: string, messages: StrategistChatMessage[]) =>
+    request<{ reply: string }>(`/businesses/${businessId}/copilot/chat`, { method: "POST", body: JSON.stringify({ messages }) }),
 
   // Creatives
   listCreatives: (businessId: string) => request<CreativeAsset[]>(`/businesses/${businessId}/creatives`),
