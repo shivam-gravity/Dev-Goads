@@ -6,4 +6,10 @@ build/
 .env.local
 apps/api/data/*.sqlite
 apps/api/data/*.sqlite-journal
+apps/api/data/*.sqlite-shm
+apps/api/data/*.sqlite-wal
+apps/api/data/objects/
+dump.rdb
+__pycache__/
+*.pyc
 .DS_Store
