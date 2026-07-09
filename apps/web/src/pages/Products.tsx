@@ -122,6 +122,11 @@ export default function Products() {
 
   function handleManualSubmit() {
     if (!manualName.trim()) return;
+    if (manualPrice.trim() && (!Number.isFinite(Number(manualPrice.trim())) || Number(manualPrice.trim()) < 0)) {
+      setError("Enter a valid, non-negative price");
+      return;
+    }
+    setError(null);
     const parts = [manualCategory.trim(), manualPrice.trim() ? `$${manualPrice.trim()}` : ""].filter(Boolean);
     setProducts((prev) => [
       {
@@ -286,6 +291,7 @@ export default function Products() {
 
             {step === "manual" && (
               <>
+                {error && <p className="error">{error}</p>}
                 <label className="adsgo-modal-field">
                   <span>Product name</span>
                   <input type="text" placeholder="e.g. Aurora Wireless Earbuds" value={manualName} onChange={(e) => setManualName(e.target.value)} autoFocus />
@@ -296,7 +302,7 @@ export default function Products() {
                 </label>
                 <label className="adsgo-modal-field">
                   <span>Price (USD)</span>
-                  <input type="number" placeholder="e.g. 49.99" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} />
+                  <input type="number" min="0" placeholder="e.g. 49.99" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} />
                 </label>
                 <label className="adsgo-modal-field">
                   <span>Product URL (optional)</span>

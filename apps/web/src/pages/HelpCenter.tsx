@@ -1,5 +1,6 @@
 import { useState } from "react";
 import Reveal from "../components/Reveal.js";
+import { api } from "../api/client.js";
 
 const FAQS = [
   { q: "How does the AI optimize budgets?", a: "AdGo uses multi-armed bandit algorithms to analyze variants with high Click-Through Rates (CTR) and low Cost Per Acquisition (CPA). It automatically sets budgets toward Meta or Google variants to capture higher Return on Ad Spend (ROAS)." },
@@ -11,20 +12,27 @@ export default function HelpCenter() {
   const [ticketSubject, setTicketSubject] = useState("");
   const [ticketBody, setTicketBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [ticketError, setTicketError] = useState<string | null>(null);
   const [faqSearch, setFaqSearch] = useState("");
 
   const [activeFaq, setActiveFaq] = useState<number | null>(null);
 
-  function handleSubmitTicket(e: React.FormEvent) {
+  async function handleSubmitTicket(e: React.FormEvent) {
     e.preventDefault();
     if (!ticketSubject.trim() || !ticketBody.trim()) return;
+    const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo";
     setSubmitting(true);
-    setTimeout(() => {
+    setTicketError(null);
+    try {
+      await api.createSupportTicket(workspaceId, { subject: ticketSubject, message: ticketBody });
       alert("Support ticket created. Our AI engineer or support agent will reply within 4 hours.");
       setTicketSubject("");
       setTicketBody("");
+    } catch (err) {
+      setTicketError(err instanceof Error ? err.message : "Failed to create support ticket.");
+    } finally {
       setSubmitting(false);
-    }, 1200);
+    }
   }
 
   const filteredFaqs = FAQS.filter(
@@ -124,6 +132,7 @@ export default function HelpCenter() {
                   required
                 />
               </label>
+              {ticketError && <p className="error mt-2">{ticketError}</p>}
               <button className="btn btn-primary btn-full mt-4" type="submit" disabled={submitting}>
                 {submitting ? "Submitting..." : "Submit Ticket"}
               </button>

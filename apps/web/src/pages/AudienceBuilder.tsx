@@ -74,6 +74,10 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
       setSaveError("Please name your audience segment.");
       return;
     }
+    if (ageMin > ageMax) {
+      setSaveError("Min Age must be less than or equal to Max Age.");
+      return;
+    }
     setSaveError(null);
     setSaving(true);
     try {

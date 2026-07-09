@@ -6,11 +6,13 @@ export default function Notifications({ businessId }: { businessId: string }) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
-  // Preferences checkbox state mocks
+
   const [emailAlerts, setEmailAlerts] = useState(true);
   const [slackAlerts, setSlackAlerts] = useState(false);
   const [dailyDigest, setDailyDigest] = useState(true);
+  const [savingPrefs, setSavingPrefs] = useState(false);
+  const [prefsSaved, setPrefsSaved] = useState(false);
+  const [prefsError, setPrefsError] = useState<string | null>(null);
 
   const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
 
@@ -30,6 +32,34 @@ export default function Notifications({ businessId }: { businessId: string }) {
   useEffect(() => {
     loadNotifications();
   }, [businessId]);
+
+  useEffect(() => {
+    api.getNotificationPreferences(wsId).then(prefs => {
+      setEmailAlerts(prefs.emailAlerts);
+      setSlackAlerts(prefs.slackAlerts);
+      setDailyDigest(prefs.digestAlerts);
+    }).catch(() => {
+      setPrefsError("Failed to load notification preferences.");
+    });
+  }, [wsId]);
+
+  async function handleSavePreferences() {
+    setSavingPrefs(true);
+    setPrefsError(null);
+    setPrefsSaved(false);
+    try {
+      await api.setNotificationPreferences(wsId, {
+        emailAlerts,
+        slackAlerts,
+        digestAlerts: dailyDigest,
+      });
+      setPrefsSaved(true);
+    } catch {
+      setPrefsError("Failed to save notification preferences.");
+    } finally {
+      setSavingPrefs(false);
+    }
+  }
 
   async function handleMarkRead(id: string) {
     try {
@@ -116,8 +146,14 @@ export default function Notifications({ businessId }: { businessId: string }) {
                 <input type="checkbox" checked={dailyDigest} onChange={(e) => setDailyDigest(e.target.checked)} />
                 <span>Daily digest strategy brief</span>
               </label>
-              <button className="btn btn-primary btn-full mt-4" onClick={() => alert("Preferences updated.")}>
-                Save Preferences
+              {prefsError && <p className="error mt-3">{prefsError}</p>}
+              {prefsSaved && <p className="muted-text mt-3">Preferences updated.</p>}
+              <button
+                className="btn btn-primary btn-full mt-4"
+                disabled={savingPrefs}
+                onClick={handleSavePreferences}
+              >
+                {savingPrefs ? "Saving..." : "Save Preferences"}
               </button>
             </div>
           </section>

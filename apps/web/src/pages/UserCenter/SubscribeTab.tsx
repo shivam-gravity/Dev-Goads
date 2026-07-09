@@ -5,10 +5,11 @@ import { api, Workspace } from "../../api/client.js";
 export default function SubscribeTab({ businessId }: { businessId: string }) {
   const navigate = useNavigate();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
 
   useEffect(() => {
-    api.getWorkspace(wsId).then(setWorkspace).catch(() => {});
+    api.getWorkspace(wsId).then(setWorkspace).catch(() => setError("Couldn't load your current plan."));
   }, [businessId]);
 
   const planLabel = workspace?.plan ? workspace.plan.charAt(0).toUpperCase() + workspace.plan.slice(1) : "Free";
@@ -17,6 +18,7 @@ export default function SubscribeTab({ businessId }: { businessId: string }) {
     <div className="subscribe-tab">
       <div className="card">
         <h2>Current Plan</h2>
+        {error && <p className="error">{error}</p>}
         <div className="header-profile-plan-badge subscribe-plan-badge">
           <span>{planLabel}</span>
           <span className="header-profile-plan-status">

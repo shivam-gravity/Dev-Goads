@@ -337,3 +337,82 @@ model ResearchSession {
   @@index([url])
   @@map("research_sessions")
 }
+
+model SupportTicket {
+  id          String   @id
+  workspaceId String
+  data        Json
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("support_tickets")
+}
+
+// One row per workspace — id is the workspaceId itself, upserted rather than created.
+model NotificationPreference {
+  id        String   @id
+  data      Json
+  updatedAt DateTime @updatedAt
+
+  @@map("notification_preferences")
+}
+
+// One row per workspace — id is the workspaceId itself, upserted rather than created.
+model RbacRoleMatrix {
+  id        String   @id
+  data      Json
+  updatedAt DateTime @updatedAt
+
+  @@map("rbac_role_matrices")
+}
+
+model DeveloperWebhook {
+  id          String   @id
+  workspaceId String
+  data        Json
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("developer_webhooks")
+}
+
+// One active key per workspace — id is the workspaceId itself, regenerating replaces the row.
+model DeveloperApiKey {
+  id        String   @id
+  key       String
+  createdAt DateTime @default(now())
+
+  @@map("developer_api_keys")
+}
+
+// data is masked display info only (brand, last4, expiry) — a card number/CVC must never
+// land here, mock billing or not; see billingService.ts for what's rejected before storage.
+model PaymentMethod {
+  id          String   @id
+  workspaceId String
+  data        Json
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("payment_methods")
+}
+
+model AutomationRule {
+  id          String   @id
+  workspaceId String
+  data        Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("automation_rules")
+}
+
+// One row per workspace — id is the workspaceId itself, upserted rather than created.
+model OptimizationGoal {
+  id        String   @id
+  data      Json
+  updatedAt DateTime @updatedAt
+
+  @@map("optimization_goals")
+}

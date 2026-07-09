@@ -69,6 +69,16 @@ export async function updateWorkspace(id: string, patch: Partial<Pick<Workspace,
   return toWorkspace(row);
 }
 
+export async function getMemberById(memberId: string): Promise<WorkspaceMember | null> {
+  const row = await prisma.workspaceMember.findUnique({ where: { id: memberId } });
+  return row ? toMember(row) : null;
+}
+
+export async function getMembership(workspaceId: string, userId: string): Promise<WorkspaceMember | null> {
+  const row = await prisma.workspaceMember.findFirst({ where: { workspaceId, userId } });
+  return row ? toMember(row) : null;
+}
+
 export async function listMembers(workspaceId: string): Promise<WorkspaceMember[]> {
   const rows = await prisma.workspaceMember.findMany({ where: { workspaceId }, orderBy: { invitedAt: "asc" } });
   const userIds = rows.map((m) => m.userId).filter((id) => !id.startsWith("pending:"));

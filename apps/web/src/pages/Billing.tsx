@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, Invoice, Workspace } from "../api/client.js";
+import { api, Invoice, PaymentMethod, Workspace } from "../api/client.js";
 import Reveal from "../components/Reveal.js";
 
 function firstOfMonthISO(): string {
@@ -22,22 +22,26 @@ export default function Billing({ businessId }: { businessId: string }) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
-  // Stripe form mockup states
+
+  const [paymentMethod, setPaymentMethodState] = useState<PaymentMethod | null>(null);
   const [ccNumber, setCcNumber] = useState("");
   const [ccExpiry, setCcExpiry] = useState("");
   const [ccCvc, setCcCvc] = useState("");
+  const [savingCard, setSavingCard] = useState(false);
+  const [cardError, setCardError] = useState<string | null>(null);
 
   const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
 
   async function refresh() {
     try {
-      const [ws, invs] = await Promise.all([
+      const [ws, invs, pm] = await Promise.all([
         api.getWorkspace(wsId),
-        api.listInvoices(businessId).catch(() => [])
+        api.listInvoices(businessId).catch(() => []),
+        api.getPaymentMethod(wsId).catch(() => null)
       ]);
       setWorkspace(ws);
       setInvoices(invs);
+      setPaymentMethodState(pm);
     } catch {
       setError("Failed to load workspace billing details.");
     }
@@ -74,10 +78,19 @@ export default function Billing({ businessId }: { businessId: string }) {
   async function handleUpdatePayment(e: React.FormEvent) {
     e.preventDefault();
     if (!ccNumber.trim() || !ccExpiry.trim() || !ccCvc.trim()) return;
-    alert("Payment method updated via Stripe integration.");
-    setCcNumber("");
-    setCcExpiry("");
-    setCcCvc("");
+    setSavingCard(true);
+    setCardError(null);
+    try {
+      const pm = await api.setPaymentMethod(wsId, { cardNumber: ccNumber, expiry: ccExpiry, cvc: ccCvc });
+      setPaymentMethodState(pm);
+      setCcNumber("");
+      setCcExpiry("");
+      setCcCvc("");
+    } catch (err) {
+      setCardError(err instanceof Error ? err.message : "Failed to update payment method.");
+    } finally {
+      setSavingCard(false);
+    }
   }
 
   return (
@@ -125,6 +138,12 @@ export default function Billing({ businessId }: { businessId: string }) {
         {/* Credit Card Form */}
         <section className="card">
           <h2>Payment Method</h2>
+          {paymentMethod && (
+            <p className="muted-text mt-3">
+              {paymentMethod.brand.charAt(0).toUpperCase() + paymentMethod.brand.slice(1)} ending in {paymentMethod.last4}, expires {paymentMethod.expiry}
+            </p>
+          )}
+          {cardError && <p className="error">{cardError}</p>}
           <form onSubmit={handleUpdatePayment} className="wizard-form mt-3">
             <label>
               Cardholder Number
@@ -158,8 +177,8 @@ export default function Billing({ businessId }: { businessId: string }) {
                 />
               </label>
             </div>
-            <button className="btn btn-primary mt-3" type="submit">
-              Update Credit Card
+            <button className="btn btn-primary mt-3" type="submit" disabled={savingCard}>
+              {savingCard ? "Updating..." : "Update Credit Card"}
             </button>
           </form>
         </section>

@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Request } from "express";
 import cors from "cors";
-import { router } from "./gateway/router.js";
+import { router, authEntryRouter } from "./gateway/router.js";
 import { metaOAuthRoutes } from "./gateway/metaOAuthRoutes.js";
 import { googleOAuthRoutes } from "./gateway/googleOAuthRoutes.js";
 import { metaLeadWebhookRoutes } from "./gateway/metaLeadWebhookRoutes.js";
@@ -44,6 +44,9 @@ app.use("/api/webhooks/meta", metaLeadWebhookRoutes);
 // with a shared secret (see crmInternalAuth) — never called directly from a browser.
 app.use("/api/crm", crmInternalAuth, adsDataRoutes);
 
+// Register/login/google: no bearer token exists yet when calling these, so they're
+// mounted ahead of requireAuth (falls through to the gated router below if unmatched).
+app.use("/api", authEntryRouter);
 app.use("/api", requireAuth, router);
 
 app.use((_req, res) => {

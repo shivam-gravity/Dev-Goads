@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
+import { api } from "../../api/client.js";
 import { useAuth } from "../../context/AuthContext.js";
 
 export default function YourProfileTab() {
@@ -7,23 +8,28 @@ export default function YourProfileTab() {
   const [name, setName] = useState(user?.name ?? "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function handleSave(e: FormEvent) {
+  async function handleSave(e: FormEvent) {
     e.preventDefault();
     setSaving(true);
     setSaved(false);
-    // No account-update backend endpoint exists yet — simulated the same way
-    // other mocked forms in this app do (e.g. Billing's card-update form).
-    setTimeout(() => {
-      setSaving(false);
+    setError(null);
+    try {
+      await api.updateMe({ name });
       setSaved(true);
-    }, 800);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update profile.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <div className="your-profile-tab">
       <div className="card">
         <h2>Your Profile</h2>
+        {error && <p className="error">{error}</p>}
         <form onSubmit={handleSave} className="wizard-form mt-3">
           <label>
             Full Name

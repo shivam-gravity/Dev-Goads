@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { RefObject } from "react";
 import { CloseIcon, SearchIcon, ChevronRightIcon, InboxIcon, ArrowLeftIcon, ClockIcon } from "./icons.js";
+import { api } from "../api/client.js";
 
 const ARTICLES = [
   "Getting Started with CRM Ads — Launch Your First Campaign in 3 Simple Steps",
@@ -81,6 +82,7 @@ export default function HelpWidget({ onClose, panelRef }: { onClose: () => void;
   const [messageText, setMessageText] = useState("");
   const [sending, setSending] = useState(false);
   const [messageSent, setMessageSent] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   const query = searchQuery.trim().toLowerCase();
   const filteredArticles = query ? ARTICLES.filter((a) => a.toLowerCase().includes(query)) : ARTICLES;
@@ -93,17 +95,21 @@ export default function HelpWidget({ onClose, panelRef }: { onClose: () => void;
     setSearchQuery("");
   }
 
-  function handleSendMessage() {
+  async function handleSendMessage() {
     if (!messageText.trim() || sending) return;
+    const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo";
     setSending(true);
-    // No support-messaging backend exists yet — simulated the same way the
-    // Help Center's support ticket form does (apps/web/src/pages/HelpCenter.tsx).
-    setTimeout(() => {
-      setSending(false);
+    setSendError(null);
+    try {
+      await api.createSupportTicket(workspaceId, { subject: "Chat message", message: messageText });
       setComposing(false);
       setMessageSent(true);
       setMessageText("");
-    }, 900);
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : "Failed to send message.");
+    } finally {
+      setSending(false);
+    }
   }
 
   if (composing) {
@@ -153,6 +159,7 @@ export default function HelpWidget({ onClose, panelRef }: { onClose: () => void;
             onChange={(e) => setMessageText(e.target.value)}
             autoFocus
           />
+          {sendError && <p className="error mt-2">{sendError}</p>}
           <div className="help-widget-compose-actions">
             <span className="help-widget-emoji-btn" aria-hidden="true">🙂</span>
             <button

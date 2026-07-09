@@ -16,7 +16,6 @@ import { getCampaignTrend } from "../modules/analytics/analyticsService.js";
 import { scrapeUrl } from "../modules/onboarding/scraper.js";
 import { analyzeAudience, analyzeProduct, runDeepResearch } from "../modules/onboarding/analysis.js";
 import { findCachedSession, cloneSessionFromCache, createResearchSession, getResearchSession } from "../modules/onboarding/researchSessionService.js";
-import { issueDemoToken } from "./middleware/auth.js";
 import {
   listCreatives,
   getCreative,
@@ -55,23 +54,34 @@ import {
   listDrafts, createDraft, updateDraft, publishDraft, deleteDraft, scheduleDraft,
   listAdSets, createAdSet, listAds, createAd, updateAd, seedDemoDrafts,
 } from "../modules/drafts/draftsService.js";
+import { listSupportTickets, createSupportTicket } from "../modules/support/supportTicketService.js";
+import { getNotificationPreferences, setNotificationPreferences } from "../modules/notifications/notificationPreferenceService.js";
+import { getRbacMatrix, setRbacMatrix } from "../modules/admin/rbacService.js";
+import {
+  listDeveloperWebhooks, createDeveloperWebhook, deleteDeveloperWebhook,
+  getOrCreateApiKey, regenerateApiKey,
+} from "../modules/admin/developerPortalService.js";
+import { getPaymentMethod, setPaymentMethod, validatePaymentMethodInput } from "../modules/billing/paymentMethodService.js";
+import { listAutomationRules, createAutomationRule, deleteAutomationRule } from "../modules/automation/automationRuleService.js";
+import { getOptimizationGoal, setOptimizationGoal } from "../modules/optimization/optimizationGoalService.js";
 
 export const router = Router();
+
+// Register/login/google are mounted unauthenticated, ahead of requireAuth, in index.ts
+// (see authEntryRouter below) — a client has no bearer token yet when calling them, so
+// gating them behind requireAuth would be a chicken-and-egg 401 in production.
+export const authEntryRouter = Router();
+const authProxy = proxyTo(AUTH_SERVICE_URL);
+authEntryRouter.post("/auth/register", authProxy);
+authEntryRouter.post("/auth/login", authProxy);
+authEntryRouter.post("/auth/google", authProxy);
 
 /* ═══════════════════════════════════════════════
    AUTH
    ═══════════════════════════════════════════════ */
 
-router.post("/auth/demo-token", (req, res) => {
-  const subject = typeof req.body?.subject === "string" ? req.body.subject : "demo-user";
-  res.json({ token: issueDemoToken(subject) });
-});
-
-const authProxy = proxyTo(AUTH_SERVICE_URL);
-router.post("/auth/register", authProxy);
-router.post("/auth/login", authProxy);
-router.post("/auth/google", authProxy);
 router.get("/auth/me", authProxy);
+router.patch("/auth/me", authProxy);
 
 /* ═══════════════════════════════════════════════
    WORKSPACES — extracted to auth-service (roadmap Phase 2). Workspace-scoped
@@ -475,8 +485,21 @@ router.post("/workspaces/:id/drafts", asyncHandler(async (req, res) => {
   res.status(201).json(await createDraft(req.params.id, parsed.data));
 }));
 
+const draftUpdateSchema = z.object({
+  name: z.string().trim().min(1).optional(),
+  type: z.enum(["campaign", "ad_set", "ad"]).optional(),
+  status: z.enum(["draft", "review", "scheduled", "published"]).optional(),
+  data: z.record(z.unknown()).optional(),
+  aiRecommendation: z.string().optional(),
+  score: z.number().optional(),
+  scheduledAt: z.string().optional(),
+  publishedAt: z.string().optional(),
+});
+
 router.patch("/drafts/:id", asyncHandler(async (req, res) => {
-  try { res.json(await updateDraft(req.params.id, req.body)); }
+  const parsed = draftUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try { res.json(await updateDraft(req.params.id, parsed.data)); }
   catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
@@ -537,8 +560,22 @@ router.post("/ad-sets/:id/ads", asyncHandler(async (req, res) => {
   res.status(201).json(await createAd(req.params.id, parsed.data));
 }));
 
+const adUpdateSchema = z.object({
+  name: z.string().trim().min(1).optional(),
+  status: z.enum(["active", "paused", "draft", "rejected"]).optional(),
+  creative: z.object({
+    headline: z.string(),
+    body: z.string(),
+    callToAction: z.string(),
+    imageUrl: z.string().optional(),
+  }).optional(),
+  format: z.enum(["single_image", "carousel", "video", "collection"]).optional(),
+});
+
 router.patch("/ads/:id", asyncHandler(async (req, res) => {
-  try { res.json(await updateAd(req.params.id, req.body)); }
+  const parsed = adUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try { res.json(await updateAd(req.params.id, parsed.data)); }
   catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
@@ -793,6 +830,119 @@ router.get("/research-sessions/:id", asyncHandler(async (req, res) => {
 const scraperProxy = proxyTo(SCRAPER_SERVICE_URL);
 router.post("/products/scrape", scraperProxy);
 router.post("/products/import", scraperProxy);
+
+/* ═══════════════════════════════════════════════
+   SUPPORT TICKETS
+   ═══════════════════════════════════════════════ */
+
+const supportTicketSchema = z.object({ subject: z.string().trim().min(1), message: z.string().trim().min(1) });
+
+router.get("/workspaces/:id/support-tickets", asyncHandler(async (req, res) => res.json(await listSupportTickets(req.params.id))));
+router.post("/workspaces/:id/support-tickets", asyncHandler(async (req, res) => {
+  const parsed = supportTicketSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  res.status(201).json(await createSupportTicket(req.params.id, parsed.data));
+}));
+
+/* ═══════════════════════════════════════════════
+   NOTIFICATION PREFERENCES
+   ═══════════════════════════════════════════════ */
+
+const notificationPreferencesSchema = z.object({ emailAlerts: z.boolean(), slackAlerts: z.boolean(), digestAlerts: z.boolean() });
+
+router.get("/workspaces/:id/notification-preferences", asyncHandler(async (req, res) => res.json(await getNotificationPreferences(req.params.id))));
+router.put("/workspaces/:id/notification-preferences", asyncHandler(async (req, res) => {
+  const parsed = notificationPreferencesSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  res.json(await setNotificationPreferences(req.params.id, parsed.data));
+}));
+
+/* ═══════════════════════════════════════════════
+   RBAC ROLE MATRIX
+   ═══════════════════════════════════════════════ */
+
+router.get("/workspaces/:id/rbac-matrix", asyncHandler(async (req, res) => res.json(await getRbacMatrix(req.params.id))));
+router.put("/workspaces/:id/rbac-matrix", asyncHandler(async (req, res) => {
+  const parsed = z.record(z.record(z.boolean())).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  res.json(await setRbacMatrix(req.params.id, parsed.data));
+}));
+
+/* ═══════════════════════════════════════════════
+   DEVELOPER PORTAL — webhooks & API key
+   ═══════════════════════════════════════════════ */
+
+router.get("/workspaces/:id/developer/webhooks", asyncHandler(async (req, res) => res.json(await listDeveloperWebhooks(req.params.id))));
+router.post("/workspaces/:id/developer/webhooks", asyncHandler(async (req, res) => {
+  const parsed = z.object({ url: z.string().url(), events: z.array(z.string()).min(1) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  res.status(201).json(await createDeveloperWebhook(req.params.id, parsed.data));
+}));
+router.delete("/developer/webhooks/:id", asyncHandler(async (req, res) => {
+  const deleted = await deleteDeveloperWebhook(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "Not found" });
+  res.status(204).send();
+}));
+
+router.get("/workspaces/:id/developer/api-key", asyncHandler(async (req, res) => res.json(await getOrCreateApiKey(req.params.id))));
+router.post("/workspaces/:id/developer/api-key/regenerate", asyncHandler(async (req, res) => res.json(await regenerateApiKey(req.params.id))));
+
+/* ═══════════════════════════════════════════════
+   BILLING — payment method (mock; never stores a card number or CVC)
+   ═══════════════════════════════════════════════ */
+
+router.get("/workspaces/:id/payment-method", asyncHandler(async (req, res) => res.json(await getPaymentMethod(req.params.id))));
+router.put("/workspaces/:id/payment-method", asyncHandler(async (req, res) => {
+  const parsed = z.object({ cardNumber: z.string().min(1), expiry: z.string().min(1), cvc: z.string().min(1) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const validationError = validatePaymentMethodInput(parsed.data);
+  if (validationError) return res.status(400).json({ error: validationError });
+  res.json(await setPaymentMethod(req.params.id, parsed.data));
+}));
+
+/* ═══════════════════════════════════════════════
+   AUTOMATION RULES
+   ═══════════════════════════════════════════════ */
+
+const automationRuleSchema = z.object({
+  name: z.string().trim().min(1),
+  metric: z.string().trim().min(1),
+  operator: z.enum(["gt", "lt", "eq"]),
+  thresholdValue: z.number(),
+  action: z.string().trim().min(1),
+  actionParam: z.string().optional(),
+  cooldownMinutes: z.number().int().nonnegative(),
+  priority: z.enum(["low", "medium", "high"]),
+});
+
+router.get("/workspaces/:id/automation-rules", asyncHandler(async (req, res) => res.json(await listAutomationRules(req.params.id))));
+router.post("/workspaces/:id/automation-rules", asyncHandler(async (req, res) => {
+  const parsed = automationRuleSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  res.status(201).json(await createAutomationRule(req.params.id, parsed.data));
+}));
+router.delete("/automation-rules/:id", asyncHandler(async (req, res) => {
+  const deleted = await deleteAutomationRule(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "Not found" });
+  res.status(204).send();
+}));
+
+/* ═══════════════════════════════════════════════
+   OPTIMIZATION GOAL (Optimize Goal page's budget/KPI section)
+   ═══════════════════════════════════════════════ */
+
+const optimizationGoalSchema = z.object({
+  dailyBudgetCents: z.number().int().positive().max(MAX_BUDGET_CENTS),
+  primaryKpi: z.string().trim().min(1),
+  locations: z.array(z.string()),
+});
+
+router.get("/workspaces/:id/optimization-goal", asyncHandler(async (req, res) => res.json(await getOptimizationGoal(req.params.id))));
+router.put("/workspaces/:id/optimization-goal", asyncHandler(async (req, res) => {
+  const parsed = optimizationGoalSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  res.json(await setOptimizationGoal(req.params.id, parsed.data));
+}));
 
 // Consistent JSON 404 for anything under /api that didn't match a route above,
 // instead of Express's default HTML error page.

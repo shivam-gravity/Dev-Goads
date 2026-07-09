@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Reveal from "../components/Reveal.js";
+import { api, AutomationRule as ApiAutomationRule } from "../api/client.js";
+import { useAuth } from "../context/AuthContext.js";
 
 interface AutomationRule {
   id: string;
@@ -13,6 +15,67 @@ interface AutomationRule {
   priority: "High" | "Medium" | "Low";
   enabled: boolean;
 }
+
+const METRIC_TO_API: Record<AutomationRule["triggerMetric"], string> = {
+  CPA: "CPA",
+  CTR: "CTR",
+  ROAS: "ROAS",
+  Spend: "Spend"
+};
+
+const OPERATOR_TO_API: Record<AutomationRule["operator"], "gt" | "lt" | "eq"> = {
+  ">": "gt",
+  "<": "lt",
+  "=": "eq"
+};
+
+const OPERATOR_FROM_API: Record<"gt" | "lt" | "eq", AutomationRule["operator"]> = {
+  gt: ">",
+  lt: "<",
+  eq: "="
+};
+
+const PRIORITY_TO_API: Record<AutomationRule["priority"], "low" | "medium" | "high"> = {
+  High: "high",
+  Medium: "medium",
+  Low: "low"
+};
+
+const PRIORITY_FROM_API: Record<"low" | "medium" | "high", AutomationRule["priority"]> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High"
+};
+
+function cooldownToMinutes(cooldown: string): number {
+  if (cooldown.endsWith("d")) return parseInt(cooldown, 10) * 24 * 60;
+  if (cooldown.endsWith("h")) return parseInt(cooldown, 10) * 60;
+  return parseInt(cooldown, 10) || 0;
+}
+
+function cooldownFromMinutes(minutes: number): string {
+  if (minutes % (24 * 60) === 0) return `${minutes / (24 * 60)}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
+function fromApiRule(r: ApiAutomationRule): AutomationRule {
+  return {
+    id: r.id,
+    name: r.name,
+    triggerMetric: (r.metric as AutomationRule["triggerMetric"]) ?? "CPA",
+    operator: OPERATOR_FROM_API[r.operator] ?? ">",
+    threshold: r.thresholdValue,
+    action: r.action as AutomationRule["action"],
+    actionValue: r.actionParam,
+    cooldown: cooldownFromMinutes(r.cooldownMinutes),
+    priority: PRIORITY_FROM_API[r.priority] ?? "Medium",
+    enabled: r.enabled
+  };
+}
+
+const THRESHOLD_MIN = 0;
+const THRESHOLD_MAX = 1000000;
 
 const DEFAULT_RULES: AutomationRule[] = [
   {
@@ -52,9 +115,12 @@ const DEFAULT_RULES: AutomationRule[] = [
 ];
 
 export default function AutomationRules({ businessId }: { businessId: string }) {
+  const { workspaceId: authWorkspaceId } = useAuth();
+  const workspaceId = authWorkspaceId ?? localStorage.getItem("adgo_workspace_id") ?? "demo";
+
   const [rules, setRules] = useState<AutomationRule[]>(DEFAULT_RULES);
   const [showAddForm, setShowAddForm] = useState(false);
-  
+
   // Rule builder states
   const [name, setName] = useState("");
   const [metric, setMetric] = useState<AutomationRule["triggerMetric"]>("CPA");
@@ -64,6 +130,20 @@ export default function AutomationRules({ businessId }: { businessId: string }) 
   const [actionValue, setActionValue] = useState("");
   const [cooldown, setCooldown] = useState("24h");
   const [priority, setPriority] = useState<AutomationRule["priority"]>("Medium");
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.listAutomationRules(workspaceId)
+      .then(data => {
+        if (!cancelled) setRules(data.map(fromApiRule));
+      })
+      .catch(() => {
+        if (!cancelled) setRules(DEFAULT_RULES);
+      });
+    return () => { cancelled = true; };
+  }, [workspaceId]);
 
   function handleToggle(id: string) {
     setRules(prev =>
@@ -71,40 +151,55 @@ export default function AutomationRules({ businessId }: { businessId: string }) 
     );
   }
 
-  function handleAddRule(e: React.FormEvent) {
+  async function handleAddRule(e: React.FormEvent) {
     e.preventDefault();
+    setFormError(null);
     if (!name.trim()) return;
 
-    const newRule: AutomationRule = {
-      id: `rule-${Date.now()}`,
-      name,
-      triggerMetric: metric,
-      operator,
-      threshold,
-      action,
-      actionValue: actionValue || undefined,
-      cooldown,
-      priority,
-      enabled: true
-    };
+    if (!Number.isFinite(threshold) || threshold < THRESHOLD_MIN || threshold > THRESHOLD_MAX) {
+      setFormError(`Threshold value must be between ${THRESHOLD_MIN} and ${THRESHOLD_MAX}.`);
+      return;
+    }
 
-    setRules(prev => [...prev, newRule]);
-    // reset form
-    setName("");
-    setMetric("CPA");
-    setOperator(">");
-    setThreshold(0);
-    setAction("Pause Campaign");
-    setActionValue("");
-    setCooldown("24h");
-    setPriority("Medium");
-    setShowAddForm(false);
-    alert("Automation optimization rule created successfully.");
+    setSubmitting(true);
+    try {
+      const created = await api.createAutomationRule(workspaceId, {
+        name,
+        metric: METRIC_TO_API[metric],
+        operator: OPERATOR_TO_API[operator],
+        thresholdValue: threshold,
+        action,
+        actionParam: actionValue || undefined,
+        cooldownMinutes: cooldownToMinutes(cooldown),
+        priority: PRIORITY_TO_API[priority]
+      });
+
+      setRules(prev => [...prev, fromApiRule(created)]);
+      // reset form
+      setName("");
+      setMetric("CPA");
+      setOperator(">");
+      setThreshold(0);
+      setAction("Pause Campaign");
+      setActionValue("");
+      setCooldown("24h");
+      setPriority("Medium");
+      setShowAddForm(false);
+    } catch {
+      setFormError("Failed to create automation rule.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  function handleDelete(id: string) {
+  async function handleDelete(id: string) {
     if (!confirm("Are you sure you want to delete this rule?")) return;
-    setRules(prev => prev.filter(r => r.id !== id));
+    try {
+      await api.deleteAutomationRule(id);
+      setRules(prev => prev.filter(r => r.id !== id));
+    } catch {
+      setFormError("Failed to delete automation rule.");
+    }
   }
 
   return (
@@ -161,6 +256,8 @@ export default function AutomationRules({ businessId }: { businessId: string }) 
                   id="rule-threshold-input"
                   type="number"
                   step="any"
+                  min={THRESHOLD_MIN}
+                  max={THRESHOLD_MAX}
                   value={threshold}
                   onChange={(e) => setThreshold(Number(e.target.value))}
                   required
@@ -210,8 +307,10 @@ export default function AutomationRules({ businessId }: { businessId: string }) 
               </select>
             </div>
 
-            <button className="btn btn-primary mt-4" type="submit" aria-label="Save current automation rule details">
-              Save Automation Rule
+            {formError && <p className="error mt-3">{formError}</p>}
+
+            <button className="btn btn-primary mt-4" type="submit" disabled={submitting} aria-label="Save current automation rule details">
+              {submitting ? "Saving..." : "Save Automation Rule"}
             </button>
           </form>
         </section>

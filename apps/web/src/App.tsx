@@ -427,6 +427,29 @@ function CopilotFab() {
   );
 }
 
+function LoggedOutRoute({ children }: { children: JSX.Element }) {
+  const { isAuthenticated, isLoading } = useAuth();
+  if (isLoading) return null;
+  if (isAuthenticated) return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
+function RequireAuth({ children }: { children: JSX.Element }) {
+  const { isAuthenticated, isLoading, businessId } = useAuth();
+  if (isLoading) return null;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (!businessId) return <Navigate to="/get-started" replace />;
+  return children;
+}
+
+function OnboardingWrapper() {
+  const { isAuthenticated, isLoading, businessId, setBusinessId } = useAuth();
+  if (isLoading) return null;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (businessId) return <Navigate to="/dashboard" replace />;
+  return <Onboarding onOnboarded={setBusinessId} />;
+}
+
 export default function App() {
   const location = useLocation();
 
@@ -440,19 +463,13 @@ export default function App() {
       <AuthProvider>
         <CopilotProvider>
           <Routes>
-            <Route path="/login" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/signup" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/get-started" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/*" element={<AuthenticatedApp />} />
+            <Route path="/login" element={<LoggedOutRoute><Login /></LoggedOutRoute>} />
+            <Route path="/signup" element={<LoggedOutRoute><Signup /></LoggedOutRoute>} />
+            <Route path="/get-started" element={<OnboardingWrapper />} />
+            <Route path="/*" element={<RequireAuth><AuthenticatedApp /></RequireAuth>} />
           </Routes>
         </CopilotProvider>
       </AuthProvider>
     </ErrorBoundary>
   );
-}
-
-function OnboardingWrapper() {
-  const { businessId, setBusinessId } = useAuth();
-  if (businessId) return <Navigate to="/dashboard" replace />;
-  return <Onboarding onOnboarded={setBusinessId} />;
 }

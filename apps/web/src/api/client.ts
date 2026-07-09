@@ -11,18 +11,6 @@ export function setToken(t: string | null) {
 
 export function getToken() { return _token; }
 
-async function getOrFetchDemoToken(): Promise<string> {
-  if (_token) return _token;
-  const res = await fetch(`${BASE_URL}/auth/demo-token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ subject: "demo-user" }),
-  });
-  const data = await res.json();
-  setToken(data.token);
-  return data.token;
-}
-
 // Defense-in-depth: the backend should never send internals in an error message
 // (see docs/architecture-roadmap.md and the 2026-07-06 QA report), but if it ever
 // does — a misconfigured environment, a new endpoint that forgot the pattern —
@@ -46,13 +34,11 @@ function extractErrorMessage(error: unknown): string {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = _token ?? await getOrFetchDemoToken();
-
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+      ...(_token ? { Authorization: `Bearer ${_token}` } : {}),
       ...options.headers,
     },
   });
@@ -111,6 +97,17 @@ export interface LiveInsights {
 }
 export interface OptimizationDecision { campaignId: string; chosenVariantId: string; action: string; reason: string; decidedAt: string; }
 export interface Invoice { id: string; businessId: string; periodStart: string; periodEnd: string; adSpendCents: number; platformFeeCents: number; totalCents: number; createdAt: string; }
+export interface PaymentMethod { workspaceId: string; brand: "visa" | "mastercard" | "amex" | "discover" | "unknown"; last4: string; expiry: string; updatedAt: string; }
+export interface SupportTicket { id: string; workspaceId: string; subject: string; message: string; status: "open" | "resolved"; createdAt: string; }
+export interface NotificationPreferences { emailAlerts: boolean; slackAlerts: boolean; digestAlerts: boolean; }
+export type RbacMatrix = Record<string, Record<string, boolean>>;
+export interface DeveloperWebhook { id: string; workspaceId: string; url: string; events: string[]; createdAt: string; }
+export interface AutomationRule {
+  id: string; workspaceId: string; name: string; metric: string; operator: "gt" | "lt" | "eq"; thresholdValue: number;
+  action: string; actionParam?: string; cooldownMinutes: number; priority: "low" | "medium" | "high"; enabled: boolean;
+  createdAt: string; updatedAt: string;
+}
+export interface OptimizationGoal { dailyBudgetCents: number; primaryKpi: string; locations: string[]; }
 export interface ScrapedSite { url: string; title: string; description: string; excerpt: string; images: string[]; crawledPages: string[]; pagesDiscovered: number; screenshot?: string; }
 export interface ProductAnalysis {
   productName: string; category: string; summary: string; valueProposition: string; keyFeatures: string[];
@@ -200,6 +197,8 @@ export const api = {
   googleAuth: (name: string, email: string, googleId: string) =>
     request<AuthResult>("/auth/google", { method: "POST", body: JSON.stringify({ name, email, googleId }) }),
   me: () => request<User>("/auth/me"),
+  updateMe: (patch: { name?: string; avatar?: string }) =>
+    request<User>("/auth/me", { method: "PATCH", body: JSON.stringify(patch) }),
 
   // Workspaces
   getWorkspace: (id: string) => request<Workspace>(`/workspaces/${id}`),
@@ -368,4 +367,42 @@ export const api = {
   generateInvoice: (businessId: string, periodStart: string, periodEnd: string) =>
     request<Invoice>(`/businesses/${businessId}/invoices`, { method: "POST", body: JSON.stringify({ periodStart, periodEnd }) }),
   listInvoices: (businessId: string) => request<Invoice[]>(`/businesses/${businessId}/invoices`),
+  getPaymentMethod: (workspaceId: string) => request<PaymentMethod | null>(`/workspaces/${workspaceId}/payment-method`),
+  setPaymentMethod: (workspaceId: string, input: { cardNumber: string; expiry: string; cvc: string }) =>
+    request<PaymentMethod>(`/workspaces/${workspaceId}/payment-method`, { method: "PUT", body: JSON.stringify(input) }),
+
+  // Support tickets
+  listSupportTickets: (workspaceId: string) => request<SupportTicket[]>(`/workspaces/${workspaceId}/support-tickets`),
+  createSupportTicket: (workspaceId: string, input: { subject: string; message: string }) =>
+    request<SupportTicket>(`/workspaces/${workspaceId}/support-tickets`, { method: "POST", body: JSON.stringify(input) }),
+
+  // Notification preferences
+  getNotificationPreferences: (workspaceId: string) => request<NotificationPreferences>(`/workspaces/${workspaceId}/notification-preferences`),
+  setNotificationPreferences: (workspaceId: string, prefs: NotificationPreferences) =>
+    request<NotificationPreferences>(`/workspaces/${workspaceId}/notification-preferences`, { method: "PUT", body: JSON.stringify(prefs) }),
+
+  // RBAC role matrix
+  getRbacMatrix: (workspaceId: string) => request<RbacMatrix>(`/workspaces/${workspaceId}/rbac-matrix`),
+  setRbacMatrix: (workspaceId: string, matrix: RbacMatrix) =>
+    request<RbacMatrix>(`/workspaces/${workspaceId}/rbac-matrix`, { method: "PUT", body: JSON.stringify(matrix) }),
+
+  // Developer portal
+  listDeveloperWebhooks: (workspaceId: string) => request<DeveloperWebhook[]>(`/workspaces/${workspaceId}/developer/webhooks`),
+  createDeveloperWebhook: (workspaceId: string, input: { url: string; events: string[] }) =>
+    request<DeveloperWebhook>(`/workspaces/${workspaceId}/developer/webhooks`, { method: "POST", body: JSON.stringify(input) }),
+  deleteDeveloperWebhook: (id: string) => request<void>(`/developer/webhooks/${id}`, { method: "DELETE" }),
+  getDeveloperApiKey: (workspaceId: string) => request<{ key: string; createdAt: string }>(`/workspaces/${workspaceId}/developer/api-key`),
+  regenerateDeveloperApiKey: (workspaceId: string) =>
+    request<{ key: string; createdAt: string }>(`/workspaces/${workspaceId}/developer/api-key/regenerate`, { method: "POST" }),
+
+  // Automation rules
+  listAutomationRules: (workspaceId: string) => request<AutomationRule[]>(`/workspaces/${workspaceId}/automation-rules`),
+  createAutomationRule: (workspaceId: string, input: Omit<AutomationRule, "id" | "workspaceId" | "createdAt" | "updatedAt" | "enabled">) =>
+    request<AutomationRule>(`/workspaces/${workspaceId}/automation-rules`, { method: "POST", body: JSON.stringify(input) }),
+  deleteAutomationRule: (id: string) => request<void>(`/automation-rules/${id}`, { method: "DELETE" }),
+
+  // Optimization goal (Optimize Goal page's budget/KPI section)
+  getOptimizationGoal: (workspaceId: string) => request<OptimizationGoal>(`/workspaces/${workspaceId}/optimization-goal`),
+  setOptimizationGoal: (workspaceId: string, goal: OptimizationGoal) =>
+    request<OptimizationGoal>(`/workspaces/${workspaceId}/optimization-goal`, { method: "PUT", body: JSON.stringify(goal) }),
 };

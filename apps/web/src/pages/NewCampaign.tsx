@@ -230,9 +230,8 @@ interface BrandInfoCardProps {
 
 /**
  * Non-blocking checkpoint: the research session keeps running/is already done regardless
- * of whether the user confirms this. "Confirm" updates the current business if one
- * already exists (the common case — businessId defaults to "demo-business" from
- * AuthContext), falling back to creating one for a truly fresh session with no business yet.
+ * of whether the user confirms this. "Confirm" updates the current business (RequireAuth
+ * guarantees one exists by the time this page can render — see App.tsx).
  */
 function BrandInfoCard({ url, product, candidateLogos, businessId, onConfirmed }: BrandInfoCardProps) {
   const [brandName, setBrandName] = useState(`${product.productName.replace(/\s+/g, "_")}_${dateStamp()}`);
@@ -489,7 +488,7 @@ function PromotionObjectiveCard({ session, businessId, setBusinessId }: Promotio
         <label className="adsgo-modal-field">
           <span>Suggested Daily Limit</span>
           <div className="promo-budget-input">
-            <input type="number" min={1} value={dailyBudget} onChange={(e) => setDailyBudget(Number(e.target.value) || 1)} />
+            <input type="number" min={1} value={dailyBudget} onChange={(e) => setDailyBudget(Math.max(1, Number(e.target.value) || 1))} />
             <span>USD</span>
           </div>
         </label>
@@ -763,7 +762,7 @@ export default function NewCampaign() {
               url={session.url}
               product={session.result.product}
               candidateLogos={session.result.site.images}
-              businessId={businessId ?? "demo-business"}
+              businessId={businessId!}
               onConfirmed={setBusinessId}
             />
 
@@ -805,7 +804,7 @@ export default function NewCampaign() {
 
             <PromotionObjectiveCard
               session={session}
-              businessId={businessId ?? "demo-business"}
+              businessId={businessId!}
               setBusinessId={setBusinessId}
             />
 

@@ -34,6 +34,11 @@ export async function getUserById(id: string): Promise<User | null> {
   return row ? toUser(row) : null;
 }
 
+export async function updateUser(id: string, patch: { name?: string; avatar?: string }): Promise<User> {
+  const row = await prisma.user.update({ where: { id }, data: patch });
+  return toUser(row);
+}
+
 export async function getUserByEmail(email: string): Promise<(User & { passwordHash?: string | null }) | null> {
   const row = await prisma.user.findUnique({ where: { email } });
   return row ? { ...toUser(row), passwordHash: row.passwordHash } : null;

@@ -45,6 +45,11 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
   const [manualSubmitting, setManualSubmitting] = useState(false);
   const [metaManualForm, setMetaManualForm] = useState(EMPTY_META_MANUAL_FORM);
   const [googleManualForm, setGoogleManualForm] = useState(EMPTY_GOOGLE_MANUAL_FORM);
+  const [revealedTokens, setRevealedTokens] = useState<Record<string, boolean>>({});
+
+  function toggleTokenReveal(key: string) {
+    setRevealedTokens((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
 
   const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
 
@@ -154,7 +159,16 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
             </p>
             <label className="adsgo-modal-field">
               <span>Access Token</span>
-              <textarea rows={2} value={metaManualForm.accessToken} onChange={(e) => setMetaManualForm((f) => ({ ...f, accessToken: e.target.value }))} />
+              <div className="token-reveal-field">
+                <input
+                  type={revealedTokens.metaAccessToken ? "text" : "password"}
+                  value={metaManualForm.accessToken}
+                  onChange={(e) => setMetaManualForm((f) => ({ ...f, accessToken: e.target.value }))}
+                />
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => toggleTokenReveal("metaAccessToken")}>
+                  {revealedTokens.metaAccessToken ? "Hide" : "Reveal"}
+                </button>
+              </div>
             </label>
             <label className="adsgo-modal-field">
               <span>Ad Account ID (e.g. act_123456)</span>
@@ -166,7 +180,16 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
             </label>
             <label className="adsgo-modal-field">
               <span>Page Access Token</span>
-              <textarea rows={2} value={metaManualForm.pageAccessToken} onChange={(e) => setMetaManualForm((f) => ({ ...f, pageAccessToken: e.target.value }))} />
+              <div className="token-reveal-field">
+                <input
+                  type={revealedTokens.metaPageAccessToken ? "text" : "password"}
+                  value={metaManualForm.pageAccessToken}
+                  onChange={(e) => setMetaManualForm((f) => ({ ...f, pageAccessToken: e.target.value }))}
+                />
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => toggleTokenReveal("metaPageAccessToken")}>
+                  {revealedTokens.metaPageAccessToken ? "Hide" : "Reveal"}
+                </button>
+              </div>
               <div className="field-hint">From Graph API Explorer → me/accounts → copy the page's access_token. Required for lead form capture.</div>
             </label>
           </>
@@ -183,7 +206,16 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
             </label>
             <label className="adsgo-modal-field">
               <span>Access Token</span>
-              <textarea rows={2} value={googleManualForm.accessToken} onChange={(e) => setGoogleManualForm((f) => ({ ...f, accessToken: e.target.value }))} />
+              <div className="token-reveal-field">
+                <input
+                  type={revealedTokens.googleAccessToken ? "text" : "password"}
+                  value={googleManualForm.accessToken}
+                  onChange={(e) => setGoogleManualForm((f) => ({ ...f, accessToken: e.target.value }))}
+                />
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => toggleTokenReveal("googleAccessToken")}>
+                  {revealedTokens.googleAccessToken ? "Hide" : "Reveal"}
+                </button>
+              </div>
             </label>
             <label className="adsgo-modal-field">
               <span>Client ID (optional)</span>
@@ -195,7 +227,16 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
             </label>
             <label className="adsgo-modal-field">
               <span>Refresh Token (optional)</span>
-              <textarea rows={2} value={googleManualForm.refreshToken} onChange={(e) => setGoogleManualForm((f) => ({ ...f, refreshToken: e.target.value }))} />
+              <div className="token-reveal-field">
+                <input
+                  type={revealedTokens.googleRefreshToken ? "text" : "password"}
+                  value={googleManualForm.refreshToken}
+                  onChange={(e) => setGoogleManualForm((f) => ({ ...f, refreshToken: e.target.value }))}
+                />
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => toggleTokenReveal("googleRefreshToken")}>
+                  {revealedTokens.googleRefreshToken ? "Hide" : "Reveal"}
+                </button>
+              </div>
               <div className="field-hint">Without this, AdGo can't refresh the token once it expires (~1hr) — you'll need to reconnect.</div>
             </label>
           </>

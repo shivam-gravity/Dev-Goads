@@ -1,25 +1,19 @@
-import { useState } from "react";
-
-interface Webhook {
-  id: string;
-  url: string;
-  events: string[];
-  status: "active" | "inactive";
-}
-
-const DEFAULT_WEBHOOKS: Webhook[] = [
-  { id: "wh-1", url: "https://api.brandcompany.com/v1/adgo-webhook", events: ["campaign.published", "budget.changed"], status: "active" }
-];
+import { useEffect, useState } from "react";
+import { api, DeveloperWebhook } from "../../api/client.js";
+import { useAuth } from "../../context/AuthContext.js";
 
 export default function DeveloperPortalTab() {
-  const [apiKey, setApiKey] = useState("sk_test_51P7033f5adgoaikeyplaceholder889");
+  const { workspaceId } = useAuth();
+  const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
-  const [webhooks, setWebhooks] = useState<Webhook[]>(DEFAULT_WEBHOOKS);
-  
+  const [keyLoading, setKeyLoading] = useState(false);
+  const [webhooks, setWebhooks] = useState<DeveloperWebhook[]>([]);
+
   // Webhook form states
   const [webhookUrl, setWebhookUrl] = useState("");
   const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
-  
+  const [submitting, setSubmitting] = useState(false);
+
   const availableEvents = [
     "campaign.create",
     "campaign.published",
@@ -28,11 +22,23 @@ export default function DeveloperPortalTab() {
     "billing.invoice_created"
   ];
 
-  function handleRegenerateKey() {
+  useEffect(() => {
+    if (!workspaceId) return;
+    api.getDeveloperApiKey(workspaceId).then(res => setApiKey(res.key)).catch(() => {});
+    api.listDeveloperWebhooks(workspaceId).then(setWebhooks).catch(() => {});
+  }, [workspaceId]);
+
+  async function handleRegenerateKey() {
+    if (!workspaceId) return;
     if (!confirm("Are you sure you want to regenerate your API Key? Old keys will instantly be invalidated.")) return;
-    const randomHex = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
-    setApiKey(`sk_live_${randomHex}`);
-    alert("New API Key generated successfully.");
+    setKeyLoading(true);
+    try {
+      const res = await api.regenerateDeveloperApiKey(workspaceId);
+      setApiKey(res.key);
+      alert("New API Key generated successfully.");
+    } finally {
+      setKeyLoading(false);
+    }
   }
 
   function handleToggleEvent(event: string) {
@@ -41,25 +47,25 @@ export default function DeveloperPortalTab() {
     );
   }
 
-  function handleAddWebhook(e: React.FormEvent) {
+  async function handleAddWebhook(e: React.FormEvent) {
     e.preventDefault();
-    if (!webhookUrl.trim() || selectedEvents.length === 0) return;
-    
-    const newWebhook: Webhook = {
-      id: `wh-${Date.now()}`,
-      url: webhookUrl,
-      events: selectedEvents,
-      status: "active"
-    };
+    if (!webhookUrl.trim() || selectedEvents.length === 0 || !workspaceId) return;
 
-    setWebhooks(prev => [...prev, newWebhook]);
-    setWebhookUrl("");
-    setSelectedEvents([]);
-    alert("Webhook registered successfully.");
+    setSubmitting(true);
+    try {
+      const newWebhook = await api.createDeveloperWebhook(workspaceId, { url: webhookUrl, events: selectedEvents });
+      setWebhooks(prev => [...prev, newWebhook]);
+      setWebhookUrl("");
+      setSelectedEvents([]);
+      alert("Webhook registered successfully.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  function handleDeleteWebhook(id: string) {
+  async function handleDeleteWebhook(id: string) {
     if (!confirm("Delete this webhook endpoint?")) return;
+    await api.deleteDeveloperWebhook(id);
     setWebhooks(prev => prev.filter(w => w.id !== id));
   }
 
@@ -91,8 +97,8 @@ export default function DeveloperPortalTab() {
             </button>
           </div>
           <div className="mt-2">
-            <button className="btn btn-sm btn-danger" onClick={handleRegenerateKey}>
-              Regenerate API Key
+            <button className="btn btn-sm btn-danger" onClick={handleRegenerateKey} disabled={keyLoading}>
+              {keyLoading ? "Regenerating..." : "Regenerate API Key"}
             </button>
           </div>
         </div>
@@ -136,8 +142,8 @@ export default function DeveloperPortalTab() {
                 </div>
               </div>
               
-              <button className="btn btn-primary mt-4" type="submit" disabled={selectedEvents.length === 0} aria-label="Register webhook delivery endpoint">
-                Add Webhook Endpoint
+              <button className="btn btn-primary mt-4" type="submit" disabled={selectedEvents.length === 0 || submitting} aria-label="Register webhook delivery endpoint">
+                {submitting ? "Registering..." : "Add Webhook Endpoint"}
               </button>
             </form>
           </section>
@@ -153,7 +159,7 @@ export default function DeveloperPortalTab() {
                 {webhooks.map(w => (
                   <div key={w.id} style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px" }}>
                     <div className="flex justify-between items-center">
-                      <span className="status status-active" style={{ fontSize: "10px" }}>{w.status.toUpperCase()}</span>
+                      <span className="status status-active" style={{ fontSize: "10px" }}>ACTIVE</span>
                       <button className="btn btn-sm btn-danger" onClick={() => handleDeleteWebhook(w.id)}>Delete</button>
                     </div>
                     <strong className="block mt-2 font-size-12" style={{ wordBreak: "break-all" }}>{w.url}</strong>

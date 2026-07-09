@@ -22,23 +22,11 @@ interface AuthContextValue extends AuthState {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>({
-    id: "demo-user",
-    name: "ssrivastava",
-    email: "ssrivastava@example.com",
-    createdAt: new Date().toISOString()
-  });
-  const [workspace, setWorkspaceState] = useState<Workspace | null>({
-    id: "demo-workspace",
-    name: "Default Brand",
-    ownerId: "demo-user",
-    plan: "pro",
-    timezone: "UTC+5.5",
-    createdAt: new Date().toISOString()
-  });
-  const [workspaceId, setWorkspaceId] = useState<string | null>(localStorage.getItem("adgo_workspace_id") ?? "demo-workspace");
-  const [businessId, setBusinessIdState] = useState<string | null>(localStorage.getItem("businessId") ?? "demo-business");
-  const [isLoading, setIsLoading] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [workspace, setWorkspaceState] = useState<Workspace | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(localStorage.getItem("adgo_workspace_id"));
+  const [businessId, setBusinessIdState] = useState<string | null>(localStorage.getItem("businessId"));
+  const [isLoading, setIsLoading] = useState(Boolean(getToken()));
 
   async function applyAuthResult(result: AuthResult) {
     setToken(result.token);
@@ -106,18 +94,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Restore session from token on mount
   useEffect(() => {
     const token = getToken();
-    if (!token) return;
-    // Validate token by fetching user
-    api.me().then((u) => setUser(u)).catch(() => {
-      // Token invalid — clear it but keep demo token flow working
-      // Don't force logout so demo mode continues to work
-    });
-    if (workspaceId) {
-      api.getWorkspace(workspaceId).then(setWorkspaceState).catch(() => {});
-    }
+    if (!token) { setIsLoading(false); return; }
+    api.me()
+      .then((u) => {
+        setUser(u);
+        if (workspaceId) return api.getWorkspace(workspaceId).then(setWorkspaceState).catch(() => {});
+      })
+      .catch(() => logout())
+      .finally(() => setIsLoading(false));
   }, []);
 
-  const isAuthenticated = true;
+  const isAuthenticated = Boolean(user);
 
   return (
     <AuthContext.Provider value={{

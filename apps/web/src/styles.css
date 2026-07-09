@@ -4660,6 +4660,17 @@ td {
   resize: vertical;
 }
 
+.token-reveal-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.token-reveal-field input {
+  flex: 1;
+  min-width: 0;
+}
+
 .adsgo-modal-submit {
   width: 100%;
 }

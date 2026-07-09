@@ -110,12 +110,15 @@ export default function CampaignDetail() {
     if (!campaignId || !campaign) return;
     const cents = Math.round(parseFloat(newBudget) * 100);
     if (isNaN(cents) || cents <= 0) return;
+    setBusy("save-budget");
     try {
       await api.updateCampaign(campaignId, { dailyBudgetCents: cents });
       setEditingBudget(false);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Budget update failed");
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -177,7 +180,9 @@ export default function CampaignDetail() {
                   min={1}
                 />
                 <span className="muted-text">/day</span>
-                <button className="btn btn-sm btn-primary" onClick={handleSaveBudget}>Save</button>
+                <button className="btn btn-sm btn-primary" onClick={handleSaveBudget} disabled={busy === "save-budget"}>
+                  {busy === "save-budget" ? "Saving…" : "Save"}
+                </button>
                 <button className="btn btn-sm btn-secondary" onClick={() => setEditingBudget(false)}>Cancel</button>
               </div>
             ) : (

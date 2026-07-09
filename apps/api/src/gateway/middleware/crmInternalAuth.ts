@@ -12,8 +12,8 @@ const CRM_INTERNAL_SERVICE_KEY = process.env.CRM_INTERNAL_SERVICE_KEY;
  */
 export function crmInternalAuth(req: Request, res: Response, next: NextFunction) {
   if (!CRM_INTERNAL_SERVICE_KEY) {
-    console.warn("CRM_INTERNAL_SERVICE_KEY is not set — /api/crm is accepting unauthenticated direct traffic.");
-    return next();
+    console.error("CRM_INTERNAL_SERVICE_KEY is not set — refusing all /api/crm traffic until it's configured.");
+    return res.status(500).json({ error: "Service misconfigured" });
   }
   if (req.header("x-internal-service-key") !== CRM_INTERNAL_SERVICE_KEY) {
     return res.status(401).json({ error: "Direct access to this route is not permitted" });

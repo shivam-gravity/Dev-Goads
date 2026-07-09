@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import AdsGoHeader from "../components/AdsGoHeader.js";
+import { useAuth } from "../context/AuthContext.js";
+import { api, Integration } from "../api/client.js";
 import {
   PinIcon,
   PlusIcon,
@@ -20,21 +22,50 @@ const PLATFORMS = [
   { id: "bing", label: "Bing", icon: <BingIcon /> },
 ];
 
+const CONNECTABLE_PLATFORMS = new Set<Integration["platform"]>(["meta", "google", "tiktok"]);
+
 const KPI_OPTIONS = ["Lowest CPA", "Highest ROAS", "Most Conversions", "Most Clicks"];
 
 export default function OptimizeGoal() {
+  const { workspaceId: authWorkspaceId } = useAuth();
+  const workspaceId = authWorkspaceId ?? localStorage.getItem("adgo_workspace_id") ?? "demo";
+
   const [locations, setLocations] = useState<string[]>([]);
   const [locationInput, setLocationInput] = useState("");
   const [dailyBudget, setDailyBudget] = useState("");
   const [kpi, setKpi] = useState(KPI_OPTIONS[0]);
+  const [savingGoal, setSavingGoal] = useState(false);
+  const [goalError, setGoalError] = useState<string | null>(null);
+  const [goalSaved, setGoalSaved] = useState(false);
 
   const [selectedPlatform, setSelectedPlatform] = useState(PLATFORMS[0].id);
   const [connectedPlatforms, setConnectedPlatforms] = useState<Record<string, boolean>>({});
   const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
 
   const [skills, setSkills] = useState("");
   const [skillsDraft, setSkillsDraft] = useState("");
   const [editingSkills, setEditingSkills] = useState(false);
+
+  useEffect(() => {
+    api.getOptimizationGoal(workspaceId)
+      .then((goal) => {
+        setLocations(goal.locations ?? []);
+        setDailyBudget(goal.dailyBudgetCents ? String(goal.dailyBudgetCents / 100) : "");
+        setKpi(goal.primaryKpi || KPI_OPTIONS[0]);
+      })
+      .catch(() => {});
+
+    api.listIntegrations(workspaceId)
+      .then((list) => {
+        const next: Record<string, boolean> = {};
+        for (const integration of list) {
+          if (integration.status === "connected") next[integration.platform] = true;
+        }
+        setConnectedPlatforms(next);
+      })
+      .catch(() => {});
+  }, [workspaceId]);
 
   function addLocation() {
     const value = locationInput.trim();
@@ -47,11 +78,38 @@ export default function OptimizeGoal() {
     setLocations((prev) => prev.filter((l) => l !== loc));
   }
 
+  async function handleSaveGoal() {
+    setGoalError(null);
+    setGoalSaved(false);
+    const dailyBudgetCents = Math.round(parseFloat(dailyBudget) * 100);
+    if (!dailyBudgetCents || dailyBudgetCents <= 0) {
+      setGoalError("Enter a valid daily budget.");
+      return;
+    }
+    setSavingGoal(true);
+    try {
+      await api.setOptimizationGoal(workspaceId, { dailyBudgetCents, primaryKpi: kpi, locations });
+      setGoalSaved(true);
+    } catch (err) {
+      setGoalError(err instanceof Error ? err.message : "Failed to save budget and KPI.");
+    } finally {
+      setSavingGoal(false);
+    }
+  }
+
   async function handleConnectPlatform() {
+    if (!CONNECTABLE_PLATFORMS.has(selectedPlatform as Integration["platform"])) return;
+    setConnectError(null);
     setConnecting(true);
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    setConnectedPlatforms((prev) => ({ ...prev, [selectedPlatform]: true }));
-    setConnecting(false);
+    try {
+      const platformLabel = PLATFORMS.find((p) => p.id === selectedPlatform)?.label ?? selectedPlatform;
+      const integration = await api.connectIntegration(workspaceId, selectedPlatform as Integration["platform"], `${platformLabel} Ad Account`);
+      setConnectedPlatforms((prev) => ({ ...prev, [selectedPlatform]: integration.status === "connected" }));
+    } catch (err) {
+      setConnectError(err instanceof Error ? err.message : "Failed to connect platform.");
+    } finally {
+      setConnecting(false);
+    }
   }
 
   function startEditingSkills() {
@@ -166,6 +224,12 @@ export default function OptimizeGoal() {
                         ))}
                       </select>
                     </label>
+
+                    {goalError && <p className="error">{goalError}</p>}
+                    {goalSaved && !goalError && <p className="muted-text">Budget and KPI saved.</p>}
+                    <button type="button" className="btn btn-primary btn-sm" onClick={handleSaveGoal} disabled={savingGoal}>
+                      {savingGoal ? "Saving…" : "Save"}
+                    </button>
                   </div>
                 )}
               </div>
@@ -194,12 +258,19 @@ export default function OptimizeGoal() {
                 type="button"
                 className="optimize-goal-connect-btn"
                 onClick={handleConnectPlatform}
-                disabled={connecting || isPlatformConnected}
+                disabled={connecting || isPlatformConnected || !CONNECTABLE_PLATFORMS.has(selectedPlatform as Integration["platform"])}
               >
                 <LinkIcon />
-                {isPlatformConnected ? "Connected" : connecting ? "Connecting…" : "Connect Ad Platform"}
+                {isPlatformConnected
+                  ? "Connected"
+                  : connecting
+                  ? "Connecting…"
+                  : CONNECTABLE_PLATFORMS.has(selectedPlatform as Integration["platform"])
+                  ? "Connect Ad Platform"
+                  : "Coming soon"}
               </button>
             </div>
+            {connectError && <p className="error">{connectError}</p>}
           </section>
 
           <section className="gen-card">

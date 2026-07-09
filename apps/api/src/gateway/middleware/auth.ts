@@ -30,7 +30,3 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
     res.status(401).json({ error: "Invalid or expired token" });
   }
 }
-
-export function issueDemoToken(subject: string): string {
-  return jwt.sign({ sub: subject }, JWT_SECRET, { expiresIn: "7d" });
-}

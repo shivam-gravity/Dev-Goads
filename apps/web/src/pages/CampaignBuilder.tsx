@@ -363,7 +363,7 @@ export default function CampaignBuilder() {
   function buildPatch() {
     const included = variants.filter((v) => includedVariantIds.has(v.id));
     return {
-      dailyBudgetCents: Math.round((parseFloat(dailyBudget) || 0) * 100),
+      dailyBudgetCents: Math.max(1, Math.round((parseFloat(dailyBudget) || 0) * 100)),
       conversionEvent,
       finalUrl: finalUrl.trim() || undefined,
       startDate: startDate || undefined,

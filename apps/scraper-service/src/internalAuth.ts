@@ -11,8 +11,8 @@ const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY;
  */
 export function internalServiceAuth(req: Request, res: Response, next: NextFunction) {
   if (!INTERNAL_SERVICE_KEY) {
-    console.warn("INTERNAL_SERVICE_KEY is not set — this service is accepting unauthenticated direct traffic.");
-    return next();
+    console.error("INTERNAL_SERVICE_KEY is not set — refusing all direct traffic until it's configured.");
+    return res.status(500).json({ error: "Service misconfigured" });
   }
   if (req.header("x-internal-service-key") !== INTERNAL_SERVICE_KEY) {
     return res.status(401).json({ error: "Direct access to this service is not permitted" });
