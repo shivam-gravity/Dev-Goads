@@ -85,7 +85,7 @@ export default function AdsGoHeader({ breadcrumb }: { breadcrumb: string[] }) {
               <div className="header-profile-menu-divider" />
               <div className="header-profile-menu-section-label">Setting</div>
               <button type="button" className="header-profile-menu-item" onClick={() => goTo("/profile/ad-platform-connection")}>
-                <LinkIcon /> Ad Account Connect
+                <LinkIcon /> Advertising Accounts
               </button>
               <button type="button" className="header-profile-menu-item danger" onClick={handleLogout}>
                 <LogOutIcon /> Log out

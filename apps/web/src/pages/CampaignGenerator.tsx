@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, CatalogSourceResult, Draft, GenerationJob, ProductAnalysis, ProductCatalogItem } from "../api/client.js";
 import {
-  ChevronDownIcon,
   ClockIcon as HistoryIcon,
   LightningIcon,
   LinkIcon,
@@ -18,12 +17,7 @@ import {
   SearchIcon,
 } from "../components/icons.js";
 import { GoogleIcon } from "../components/icons.js";
-
-interface Option {
-  value: string;
-  label: string;
-  icon?: React.ReactNode;
-}
+import { DropdownField, type Option } from "../components/DropdownField.js";
 
 const COUNTRY_OPTIONS: Option[] = [
   { value: "US", label: "United States" },
@@ -74,79 +68,6 @@ interface PromotedProduct {
   name: string;
   category: string;
   summary: string;
-}
-
-function DropdownField({
-  label,
-  icon,
-  options,
-  selected,
-  onChange,
-  multi = false,
-  placeholder = "Select...",
-}: {
-  label: string;
-  icon: React.ReactNode;
-  options: Option[];
-  selected: string[];
-  onChange: (next: string[]) => void;
-  multi?: boolean;
-  placeholder?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function onOutsideClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onOutsideClick);
-    return () => document.removeEventListener("mousedown", onOutsideClick);
-  }, []);
-
-  function pick(value: string) {
-    if (multi) {
-      onChange(selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value]);
-    } else {
-      onChange([value]);
-      setOpen(false);
-    }
-  }
-
-  const selectedLabels = options.filter((o) => selected.includes(o.value)).map((o) => o.label);
-  const displayIcon = options.find((o) => o.value === selected[0])?.icon ?? icon;
-
-  return (
-    <div className="gen-field" ref={ref}>
-      <span className="gen-field-label">{label}</span>
-      <button type="button" className={`gen-field-control ${open ? "open" : ""}`} onClick={() => setOpen((v) => !v)}>
-        <span className="gen-field-icon">{displayIcon}</span>
-        <span className={`gen-field-value ${selectedLabels.length === 0 ? "placeholder" : ""}`}>
-          {selectedLabels.length > 0 ? selectedLabels.join(", ") : placeholder}
-        </span>
-        <ChevronDownIcon className="gen-field-chevron" />
-      </button>
-      {open && (
-        <div className="gen-field-menu">
-          {options.map((opt) => (
-            <div
-              key={opt.value}
-              className={`gen-field-option ${selected.includes(opt.value) ? "selected" : ""}`}
-              onClick={() => pick(opt.value)}
-            >
-              {multi && (
-                <input type="checkbox" checked={selected.includes(opt.value)} onChange={() => {}} />
-              )}
-              {opt.icon && <span className="gen-field-option-icon">{opt.icon}</span>}
-              <span>{opt.label}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 export default function CampaignGenerator({ businessId }: { businessId: string }) {

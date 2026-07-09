@@ -1,6 +1,5 @@
 import { logger } from "../logger/logger.js";
 import {
-  connectIntegration,
   setGoogleOAuthConnection,
   getRawGoogleTokenData,
   updateGoogleAccessToken,
@@ -36,6 +35,20 @@ export function getGoogleAuthUrl(workspaceId: string): string {
   return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 }
 
+// Realistic-shaped mock connection (a plausible 10-digit customer ID, not a random
+// "act_..." string) so the Advertising Accounts page's "Customer" row looks right even
+// in local/demo mode with no real Google OAuth client registered.
+async function mockConnectGoogle(workspaceId: string): Promise<void> {
+  await setGoogleOAuthConnection(workspaceId, {
+    refreshToken: "mock-refresh-token",
+    accessToken: "mock-access-token",
+    expiresInSeconds: 60 * 60 * 24 * 60,
+    customerId: "1234567890",
+    customerName: "AdGo Google Ads MCC (mock)",
+    mock: true,
+  });
+}
+
 /**
  * Entry point for the "Connect" button. Same shape as metaOAuth.startMetaConnect: with no
  * Google OAuth client (or no developer token) registered, there's nothing real to redirect
@@ -44,7 +57,7 @@ export function getGoogleAuthUrl(workspaceId: string): string {
 export async function startGoogleConnect(workspaceId: string): Promise<{ redirectUrl: string } | { mockConnected: true }> {
   if (!hasLiveGoogleAppCredentials) {
     logger.warn("Google OAuth client/developer token not set — mock-connecting Google instead of redirecting");
-    await connectIntegration(workspaceId, "google", "AdGo Google Ads MCC (mock)");
+    await mockConnectGoogle(workspaceId);
     return { mockConnected: true };
   }
   return { redirectUrl: getGoogleAuthUrl(workspaceId) };
@@ -108,7 +121,7 @@ export async function handleGoogleOAuthCallback(code: string, state: string): Pr
 
   if (!hasLiveGoogleAppCredentials) {
     logger.warn("Google OAuth client/developer token not set — completing Google OAuth callback with mock connect");
-    await connectIntegration(workspaceId, "google", "AdGo Google Ads MCC (mock)");
+    await mockConnectGoogle(workspaceId);
     return { workspaceId };
   }
 
@@ -124,6 +137,59 @@ export async function handleGoogleOAuthCallback(code: string, state: string): Pr
   });
 
   return { workspaceId };
+}
+
+async function googleAdsSearch(customerId: string, accessToken: string, developerToken: string, query: string): Promise<any> {
+  const res = await fetch(`https://googleads.googleapis.com/${ADS_API_VERSION}/customers/${customerId}/googleAds:search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}`, "developer-token": developerToken },
+    body: JSON.stringify({ query }),
+  });
+  const json = (await res.json()) as any;
+  if (!res.ok) throw new Error(`Google Ads search failed: ${JSON.stringify(json)}`);
+  return json;
+}
+
+// Mock lists returned when there's no real Google OAuth connection — same "(mock)" naming
+// convention as mockConnectGoogle above, so the campaign builder always has something to
+// show in local/demo mode.
+const MOCK_CUSTOMERS = [{ id: "1234567890", name: "AdGo Google Ads MCC (mock)" }];
+const MOCK_CONVERSION_ACTIONS = [
+  { id: "1000000001", name: "Purchase (mock)", category: "PURCHASE" },
+  { id: "1000000002", name: "Lead Form Submission (mock)", category: "SUBMIT_LEAD_FORM" },
+];
+
+/**
+ * Full list of Google Ads accounts the connected user can access — distinct from the single
+ * "first customer" fetchFirstAccessibleCustomer picks during OAuth callback (multi-account
+ * picker is a follow-up there too, same as Meta's ad-account selection).
+ */
+export async function listAccessibleCustomers(workspaceId: string): Promise<{ id: string; name: string }[]> {
+  const credentials = await getGoogleAdsCredentials(workspaceId);
+  if (!credentials) return MOCK_CUSTOMERS;
+  const res = await fetch(`https://googleads.googleapis.com/${ADS_API_VERSION}/customers:listAccessibleCustomers`, {
+    headers: { Authorization: `Bearer ${credentials.accessToken}`, "developer-token": credentials.developerToken },
+  });
+  const json = (await res.json()) as any;
+  if (!res.ok) throw new Error(`Failed to list accessible Google Ads customers: ${JSON.stringify(json)}`);
+  const ids = ((json.resourceNames ?? []) as string[]).map((rn) => rn.replace("customers/", ""));
+  return ids.map((id) => ({ id, name: `Google Ads Account ${id}` }));
+}
+
+export async function listConversionActions(workspaceId: string): Promise<{ id: string; name: string; category: string }[]> {
+  const credentials = await getGoogleAdsCredentials(workspaceId);
+  if (!credentials) return MOCK_CONVERSION_ACTIONS;
+  const json = await googleAdsSearch(
+    credentials.customerId,
+    credentials.accessToken,
+    credentials.developerToken,
+    `SELECT conversion_action.id, conversion_action.name, conversion_action.category FROM conversion_action WHERE conversion_action.status = 'ENABLED'`
+  );
+  return ((json.results ?? []) as any[]).map((r) => ({
+    id: String(r.conversionAction.id),
+    name: r.conversionAction.name,
+    category: r.conversionAction.category,
+  }));
 }
 
 export interface GoogleAdsCredentials {

@@ -3,37 +3,76 @@
 An AI-driven ad automation platform: a business describes itself, Claude generates an ad
 strategy (audiences, budget split, creatives), a campaign orchestrator launches it across
 Meta and Google, a performance pipeline ingests results, a bandit-based optimization engine
-reallocates budget toward winners, and a billing engine invoices usage-based fees.
+reallocates budget toward winners, and a CRM sync pipeline pushes leads back to the
+business's own systems.
 
 ## Architecture
 
+The backend is split into several small services (`apps/*`), fronted by `apps/api` as the
+gateway, plus a Python microservice used only for AI-assisted web scraping:
+
 ```
-apps/web        Frontend — onboarding + dashboard (React/Vite)
-apps/api        Backend — single Express service composed of modular units:
-  gateway/        Auth (JWT) + rate limiting + routing
-  modules/strategy/      Claude-based strategy generation (falls back to a
-                         deterministic mock if ANTHROPIC_API_KEY is unset)
-  modules/orchestrator/  Builds campaigns from a strategy, launches/pauses
-                         variants via ad network adapters
-  modules/adapters/      Meta + Google Ads clients (mock data unless live
-                         credentials are configured — see below)
-  modules/pipeline/      Ingests raw ad-network insights, normalizes into
-                         CTR / conversion rate / CPA per variant
-  modules/optimization/  Epsilon-greedy bandit: exploits the best-scoring
-                         variant, explores others, pauses high-CPA variants
-  modules/billing/       Usage-based invoicing: flat fee + % of ad spend
+apps/web             Frontend — onboarding + dashboard (React/Vite)
+apps/api             Gateway + core domain logic (Express + Prisma/Postgres):
+  gateway/             Auth (JWT), rate limiting, routing to the other services
+  modules/strategy/    Claude-based strategy generation (falls back to a
+                       deterministic mock if ANTHROPIC_API_KEY is unset)
+  modules/orchestrator/ Builds campaigns from a strategy, launches/pauses
+                       variants via ad network adapters
+  modules/adapters/    Meta + Google + TikTok Ads clients (mock data unless
+                       live credentials are configured — see below)
+  modules/integrations/ OAuth connections (Meta, Google) + product catalog
+                       adapters (Shopify, WooCommerce)
+  modules/onboarding/  Business scraping + AI market research
+  modules/generation/  AI creative generation (image/video providers)
+  modules/leadgen/     Lead ingestion + Meta/Google lead sync, contacts
+  modules/crm/         Outbound CRM webhook delivery for synced leads
+  modules/audience/    Saved audience management
+  modules/pipeline/    Ingests raw ad-network insights, normalizes into
+                       CTR / conversion rate / CPA per variant
+  modules/adInsights/, modules/analytics/, modules/insights/
+                       Ad performance and analytics rollups
+  modules/optimization/ Epsilon-greedy bandit: exploits the best-scoring
+                       variant, explores others, pauses high-CPA variants
+  modules/billing/     Usage-based invoicing: flat fee + % of ad spend
+  workers/             Background jobs (BullMQ/Redis): research sessions,
+                       lead ingestion, CRM webhooks, metrics ingestion,
+                       creative generation
+apps/auth-service     Standalone auth microservice
+apps/campaign-service Standalone campaign microservice
+apps/scraper-service  Scraping/pipeline microservice (Node) that in turn
+                       calls a Python sidecar (see below) for AI scraping
 ```
 
-Data is persisted to a local SQLite file at `apps/api/data/adgo.sqlite` (created on first run).
+### Python scraping sidecar (`apps/scraper-service/python`)
+
+`research_server.py` is a FastAPI service built on `scrapegraphai` that performs
+LLM-assisted structured scraping for onboarding/market-research. Install its deps
+separately (a virtualenv is recommended):
+
+```bash
+cd apps/scraper-service/python
+pip install -r requirements.txt
+uvicorn research_server:app --port 5055
+```
+
+`apps/api` and `apps/scraper-service` call it via `SCRAPEGRAPH_SERVICE_URL`.
 
 ## Setup
 
 ```bash
 npm install
-cp apps/api/.env.example apps/api/.env   # fill in keys you have; all are optional
-npm run dev:api    # http://localhost:4000
-npm run dev:web    # http://localhost:5173 (or next free port)
+cp apps/api/.env.example apps/api/.env   # fill in keys you have; most are optional
+npm run db:migrate --workspace apps/api  # requires DATABASE_URL (Postgres) + Redis running
+npm run dev:api               # http://localhost:4000
+npm run dev:web               # http://localhost:5173 (or next free port)
+npm run dev:auth-service      # http://localhost:4001
+npm run dev:campaign-service  # http://localhost:4002
+npm run dev:scraper-service   # http://localhost:4003
 ```
+
+On Windows, `npm run dev` (root) does not run both apps in parallel — start `dev:api` and
+`dev:web` in separate terminals instead.
 
 Open the web app, complete onboarding, generate a strategy, and launch a campaign. Use
 "Pull latest metrics" and "Run optimization pass" on a campaign's detail page to exercise
@@ -41,31 +80,31 @@ the performance/optimization feedback loop, and generate an invoice from the Bil
 
 ### Environment variables (`apps/api/.env`)
 
-All external integrations are optional in development — every adapter falls back to
-deterministic mock data so the full flow works with zero configuration:
+Service URLs and internal auth (`INTERNAL_SERVICE_KEY`, `CRM_INTERNAL_SERVICE_KEY`) are
+required to talk to the other services. External ad/AI integrations are optional in
+development — every adapter falls back to deterministic mock data:
 
 - `ANTHROPIC_API_KEY` — enables real Claude-generated strategies (Claude Sonnet 5)
-- `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID` — enables live Meta Marketing API calls
-- `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_ACCESS_TOKEN` — enables live Google Ads API calls
+- `OPENAI_API_KEY`, `RUNWAY_API_KEY` — enable real AI creative generation
+- `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID` / `META_APP_ID`, `META_APP_SECRET` — Meta
+  Marketing API + OAuth
+- `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_ACCESS_TOKEN` /
+  `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` — Google Ads API + OAuth
+- `TIKTOK_ACCESS_TOKEN`, `TIKTOK_ADVERTISER_ID` — TikTok Ads API
+- `SHOPIFY_*`, `WOOCOMMERCE_*` — product catalog sync
+- `TOKEN_ENCRYPTION_KEY` — encrypts OAuth tokens at rest
+- `DATABASE_URL`, `REDIS_URL` — Postgres (Prisma) and Redis (BullMQ queues, caching)
 
 ## Data model (Postgres / Prisma)
 
-`apps/api/prisma/schema.prisma` defines the target production schema: Organization/User
-(tenancy), Business + ScrapedPage (onboarding), OAuthConnection (encrypted-at-rest tokens),
-Strategy + Creative (AI output, held in DRAFT/IN_REVIEW until approved), Campaign +
-CampaignCreative (per-network launch state), Metric (daily performance, designed to become
-a TimescaleDB hypertable at volume), OptimizationAction (audit log of every automated
-pause/budget change), Notification, and Subscription/UsageRecord/Invoice (Stripe-backed
-usage billing). A generated initial migration lives at
-`apps/api/prisma/migrations/20260703000000_init/migration.sql`.
-
-This schema is **not yet wired into the running app** — the working prototype still uses
-the simpler SQLite/JSON-blob store in `apps/api/src/db/`. Migrating the modules under
-`apps/api/src/modules/` to read/write through Prisma against Postgres is the next step
-before any of the OAuth, scraping, or Stripe work lands.
-
-To point it at a real database: set `DATABASE_URL` in `apps/api/.env`, then run
-`npm run db:migrate --workspace apps/api`.
+`apps/api/prisma/schema.prisma` is the live production schema and is wired into the running
+app via Prisma: Organization/User (tenancy), Business + ScrapedPage (onboarding),
+OAuthConnection (encrypted-at-rest tokens), Strategy + Creative (AI output, held in
+DRAFT/IN_REVIEW until approved), Campaign + CampaignCreative (per-network launch state),
+Metric (daily performance), OptimizationAction (audit log of automated pause/budget
+changes), Contact + lead sync state, CRM webhook config, Notification, and
+Subscription/UsageRecord/Invoice (usage billing). Migrations live under
+`apps/api/prisma/migrations/`.
 
 ## Notes
 

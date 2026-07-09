@@ -8,13 +8,14 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/scraper-service/src/index.js",
-    "postinstall": "playwright install chromium"
+    "postinstall": "playwright install chromium",
+    "dev:research-server": "python -m uvicorn research_server:app --port 5055 --reload --app-dir python"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
+    "openai": "^6.45.0",
     "playwright": "^1.48.0",
     "zod": "^3.23.8"
   },

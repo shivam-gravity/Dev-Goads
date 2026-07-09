@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../db/prisma.js";
+import { upsertContactForLead } from "./contactService.js";
+import { dispatchCrmWebhook } from "../crm/crmWebhookService.js";
 
 export type LeadPlatform = "meta" | "google";
 
@@ -29,6 +31,7 @@ export interface LeadRecord {
   companyName: string | null;
   submittedAt: Date;
   data: Record<string, unknown>;
+  contactId: string | null;
 }
 
 export interface UpsertLeadFormInput {
@@ -92,8 +95,11 @@ export async function ingestLead(input: IngestLeadInput): Promise<LeadRecord> {
     leadFormId = form?.id ?? null;
   }
 
-  const row = await prisma.lead.upsert({
-    where: { workspaceId_platform_externalId: { workspaceId: input.workspaceId, platform: input.platform, externalId: input.externalId } },
+  const uniqueWhere = { workspaceId_platform_externalId: { workspaceId: input.workspaceId, platform: input.platform, externalId: input.externalId } };
+  const existingLead = await prisma.lead.findUnique({ where: uniqueWhere });
+
+  let row = await prisma.lead.upsert({
+    where: uniqueWhere,
     create: {
       id: randomUUID(),
       workspaceId: input.workspaceId,
@@ -120,7 +126,40 @@ export async function ingestLead(input: IngestLeadInput): Promise<LeadRecord> {
       data: input.data as any,
     },
   });
+
+  // Only normalize into a Contact (and fire the CRM webhook) on genuinely new leads —
+  // ingestLead is called on every webhook redelivery and backfill re-run, and both
+  // upsertContactForLead's leadCount increment and a webhook push would otherwise double-fire.
+  if (!existingLead) {
+    const contactId = await upsertContactForLead(input.workspaceId, {
+      email: input.email ?? null,
+      phone: input.phone ?? null,
+      fullName: input.fullName ?? null,
+      companyName: input.companyName ?? null,
+      submittedAt: input.submittedAt,
+    });
+    if (contactId) {
+      row = await prisma.lead.update({ where: { id: row.id }, data: { contactId } });
+    }
+
+    const record = toLeadRecord(row, input.formExternalId ?? null);
+    await dispatchCrmWebhook({ workspaceId: input.workspaceId, event: "lead.created", payload: toCrmLeadPayload(record) });
+    return record;
+  }
+
   return toLeadRecord(row, input.formExternalId ?? null);
+}
+
+/** Shared lead → CRM JSON shape, used by both the polled /ads-data/leads route and the pushed lead.created webhook, so the two never drift apart. */
+export function toCrmLeadPayload(lead: LeadRecord): Record<string, unknown> {
+  return {
+    id: lead.id,
+    form_id: lead.formExternalId,
+    field_data: lead.data,
+    created_at: lead.submittedAt.toISOString(),
+    platform: lead.platform,
+    contact_id: lead.contactId,
+  };
 }
 
 export interface PageResult<T> {
@@ -175,7 +214,7 @@ function toLeadRecord(
   row: {
     id: string; workspaceId: string; platform: string; externalId: string; leadFormId: string | null;
     campaignId: string | null; adId: string | null; fullName: string | null; email: string | null;
-    phone: string | null; companyName: string | null; submittedAt: Date; data: unknown;
+    phone: string | null; companyName: string | null; submittedAt: Date; data: unknown; contactId: string | null;
   },
   formExternalId: string | null
 ): LeadRecord {
@@ -194,6 +233,7 @@ function toLeadRecord(
     companyName: row.companyName,
     submittedAt: row.submittedAt,
     data: (row.data as Record<string, unknown>) ?? {},
+    contactId: row.contactId,
   };
 }
 

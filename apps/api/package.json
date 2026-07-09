@@ -20,13 +20,16 @@
     "start:lead-worker": "node dist/workers/leadIngestionWorker.js",
     "dev:research-worker": "tsx watch src/workers/researchSessionWorker.ts",
     "start:research-worker": "node dist/workers/researchSessionWorker.js",
+    "dev:metrics-worker": "tsx watch src/workers/metricsIngestionWorker.ts",
+    "start:metrics-worker": "node dist/workers/metricsIngestionWorker.js",
+    "dev:crm-webhook-worker": "tsx watch src/workers/crmWebhookWorker.ts",
+    "start:crm-webhook-worker": "node dist/workers/crmWebhookWorker.js",
     "test": "tsx --test src/test/googleAdapter.test.ts src/test/googleAdapter.live.test.ts src/test/metaAdapter.test.ts src/test/metaAdapter.live.test.ts src/test/tiktokAdapter.test.ts src/test/tiktokAdapter.live.test.ts src/test/shopifyCatalogAdapter.live.test.ts src/test/wooCommerceCatalogAdapter.live.test.ts src/test/infra.test.ts src/test/campaignOrchestrator.test.ts src/test/crypto.test.ts src/test/imageProvider.test.ts src/test/imageProvider.live.test.ts src/test/videoProvider.test.ts src/test/videoProvider.live.test.ts src/test/metaTargetingMapper.test.ts src/test/metaOAuth.test.ts src/test/googleOAuth.test.ts src/test/googleTargetingMapper.test.ts src/test/leadIngestion.test.ts src/test/metaLeadWebhook.test.ts src/test/marketResearch.test.ts src/test/marketResearch.live.test.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.110.0",
     "@prisma/client": "^6.19.3",
     "bullmq": "^5.34.5",
     "cheerio": "^1.2.0",
@@ -35,6 +38,8 @@
     "express": "^4.21.1",
     "express-rate-limit": "^7.4.1",
     "jsonwebtoken": "^9.0.2",
+    "openai": "^6.45.0",
+    "undici": "^7.28.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

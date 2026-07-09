@@ -96,6 +96,21 @@ async function resolveGeoTargetConstants(accessToken: string | null, developerTo
   return locationNames.map((name) => `geoTargetConstants/${STATIC_GEO_TARGET_IDS[name.trim().toLowerCase()] ?? DEFAULT_GEO_TARGET_ID}`);
 }
 
+/**
+ * Builds campaign-level (geo/language) targeting directly from explicit location names —
+ * used by the campaign builder, which collects locations as ad-hoc campaign state rather
+ * than requiring a saved audience first (see buildGoogleTargeting below for the
+ * SavedAudience-driven path).
+ */
+export async function buildGoogleCampaignTargetingFromLocations(
+  accessToken: string | null,
+  developerToken: string | null,
+  locations: string[]
+): Promise<GoogleCampaignTargeting> {
+  const geoTargetConstants = await resolveGeoTargetConstants(accessToken, developerToken, locations);
+  return { geoTargetConstants, languageConstant: "languageConstants/1000" /* English */ };
+}
+
 /** Maps a SavedAudience into Google Ads campaign-level (geo/language) + ad-group-level (age/gender/keywords) targeting. */
 export async function buildGoogleTargeting(
   accessToken: string | null,

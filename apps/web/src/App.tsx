@@ -9,6 +9,7 @@ import Dashboard from "./pages/Dashboard.js";
 import CampaignDetail from "./pages/CampaignDetail.js";
 import Campaigns from "./pages/Campaigns.js";
 import NewCampaign from "./pages/NewCampaign.js";
+import CampaignBuilder from "./pages/CampaignBuilder.js";
 import Analytics from "./pages/Analytics.js";
 import Audiences from "./pages/Audiences.js";
 import Creatives from "./pages/Creatives.js";
@@ -313,6 +314,10 @@ function AuthenticatedApp() {
             <Route
               path="/campaigns/new"
               element={businessId ? <NewCampaign /> : <Navigate to="/login" replace />}
+            />
+            <Route
+              path="/campaigns/:campaignId/builder"
+              element={businessId ? <CampaignBuilder /> : <Navigate to="/login" replace />}
             />
             <Route
               path="/campaigns/:campaignId"

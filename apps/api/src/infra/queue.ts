@@ -64,3 +64,41 @@ export const researchSessionQueue = new Queue(RESEARCH_SESSION_QUEUE, {
     removeOnFail: { age: 7 * 24 * 60 * 60 },
   },
 });
+
+/**
+ * Powers the Live Insights Dashboard: a single repeatable job (registered once by
+ * metricsIngestionWorker.ts at startup) fans out one ingest-metrics call per active
+ * campaign on an interval, then runs the optimization pass on each so fresh data and
+ * fresh AI suggestions land together.
+ */
+export const METRICS_INGESTION_QUEUE = "metrics-ingestion";
+
+export const metricsIngestionQueue = new Queue(METRICS_INGESTION_QUEUE, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: { type: "exponential", delay: 5000 },
+    removeOnComplete: { age: 24 * 60 * 60 },
+    removeOnFail: { age: 7 * 24 * 60 * 60 },
+  },
+});
+
+/**
+ * Outbound deliveries to a workspace's configured CRM webhook URL (Stage E). Decoupled from
+ * ingestLead()/etc. via this queue so a slow or down CRM endpoint can never add latency to
+ * ingestion — see crmWebhookWorker.ts, which registers the custom backoffStrategy function
+ * (30s/2m/10m/30m/2h) that `attempts`/`backoff` below drive. Failed jobs after all 5 attempts sit in
+ * BullMQ's own "failed" set as the de facto dead-letter store — kept 30 days, longer than
+ * other queues, since there's no separate delivery-log UI yet to surface them elsewhere.
+ */
+export const CRM_WEBHOOK_QUEUE = "crm-webhook";
+
+export const crmWebhookQueue = new Queue(CRM_WEBHOOK_QUEUE, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 5,
+    backoff: { type: "crm-webhook" },
+    removeOnComplete: { age: 24 * 60 * 60 },
+    removeOnFail: { age: 30 * 24 * 60 * 60 },
+  },
+});

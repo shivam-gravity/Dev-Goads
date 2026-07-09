@@ -201,21 +201,24 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
 
     if (!hasLiveCredentials) {
       const impressions = Math.floor(2000 + Math.random() * 8000);
+      // Reach is always <= impressions (a user can be shown an ad more than once) — mock
+      // it as a plausible fraction rather than a fully independent random number.
+      const reach = Math.floor(impressions * (0.55 + Math.random() * 0.3));
       const clicks = Math.floor(impressions * (0.01 + Math.random() * 0.04));
       const conversions = Math.floor(clicks * (0.02 + Math.random() * 0.08));
       const spendCents = Math.floor(clicks * (30 + Math.random() * 70));
       logger.info(`Offline mode. Generated mock insights metrics for ${externalId}`);
-      return { impressions, clicks, conversions, spendCents };
+      return { impressions, reach, clicks, conversions, spendCents };
     }
 
     try {
-      const url = `${GRAPH_BASE}/${externalId}/insights?fields=impressions,clicks,actions,spend&access_token=${ENV_META_ACCESS_TOKEN}`;
+      const url = `${GRAPH_BASE}/${externalId}/insights?fields=impressions,reach,clicks,actions,spend&access_token=${ENV_META_ACCESS_TOKEN}`;
       const res = await fetchWithRetry(url, { method: "GET" });
       const json = (await res.json()) as any;
 
       if (!json || !json.data) {
         logger.warn(`No stats returned in data array for Meta Ads resource: ${externalId}. Returning zero metrics.`);
-        return { impressions: 0, clicks: 0, conversions: 0, spendCents: 0 };
+        return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0 };
       }
 
       const row = json.data[0] || {};
@@ -223,6 +226,7 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
 
       const stats = {
         impressions: Number(row.impressions ?? 0),
+        reach: Number(row.reach ?? 0),
         clicks: Number(row.clicks ?? 0),
         conversions: Number(conversions),
         spendCents: Math.round(Number(row.spend ?? 0) * 100),
@@ -256,15 +260,22 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     const credentials = resolveCredentials(explicit);
     if (!credentials) return { externalId: mockId("meta_adset") };
 
-    const json = await graphPost(`/act_${credentials.adAccountId}/adsets`, credentials.accessToken, {
+    const body: Record<string, unknown> = {
       name: input.name,
       campaign_id: input.campaignExternalId,
       daily_budget: toMetaMinorUnits(input.dailyBudgetCents, credentials.currency),
       billing_event: "IMPRESSIONS",
-      optimization_goal: "LINK_CLICKS",
+      // Meta requires OFFSITE_CONVERSIONS (not LINK_CLICKS) whenever a promoted_object/pixel is set.
+      optimization_goal: input.promotedObject ? "OFFSITE_CONVERSIONS" : "LINK_CLICKS",
       targeting: input.targeting,
       status: "PAUSED",
-    });
+    };
+    if (input.promotedObject) body.promoted_object = { pixel_id: input.promotedObject.pixelId, custom_event_type: input.promotedObject.customEventType };
+    if (input.startTime) body.start_time = input.startTime;
+    if (input.endTime) body.end_time = input.endTime;
+    if (input.advantagePlus) body.targeting_automation = { advantage_audience: 1 };
+
+    const json = await graphPost(`/act_${credentials.adAccountId}/adsets`, credentials.accessToken, body);
     if (!json?.id) throw new Error(`Meta ad set creation failed: ${JSON.stringify(json)}`);
     return { externalId: json.id };
   },
@@ -310,6 +321,7 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     if (input.imageHash) linkData.image_hash = input.imageHash;
 
     const objectStorySpec: Record<string, unknown> = { page_id: credentials.pageId };
+    if (input.instagramActorId) objectStorySpec.instagram_actor_id = input.instagramActorId;
     if (input.videoId) {
       objectStorySpec.video_data = {
         video_id: input.videoId,

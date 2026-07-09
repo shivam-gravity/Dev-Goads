@@ -5,10 +5,10 @@ import { googleAdapter } from "../adapters/googleAdapter.js";
 import { tiktokAdapter } from "../adapters/tiktokAdapter.js";
 import type { AdAdapter, HierarchyCapableAdapter } from "../adapters/AdAdapter.js";
 import { resolveAudienceTargetingForWorkspace } from "../adapters/metaTargetingMapper.js";
-import { resolveGoogleTargetingForWorkspace } from "../adapters/googleTargetingMapper.js";
+import { resolveGoogleTargetingForWorkspace, buildGoogleCampaignTargetingFromLocations } from "../adapters/googleTargetingMapper.js";
 import { getMetaCredentials } from "../integrations/integrationService.js";
 import { getGoogleAdsCredentials } from "../integrations/googleOAuth.js";
-import type { AdNetwork, Campaign, CampaignVariant } from "../../types/index.js";
+import type { AdNetwork, Campaign, CampaignSuggestion, CampaignVariant, CreativeAssetRef } from "../../types/index.js";
 import { getStrategy } from "../strategy/strategyEngine.js";
 import { getBusiness } from "../business/businessService.js";
 import { eventBus } from "../../infra/eventBus.js";
@@ -32,8 +32,8 @@ const adapters: Record<AdNetwork, AdAdapter & Partial<HierarchyCapableAdapter>> 
 async function saveCampaign(campaign: Campaign): Promise<void> {
   await prisma.campaign.upsert({
     where: { id: campaign.id },
-    create: { id: campaign.id, businessId: campaign.businessId, data: campaign as any, updatedAt: new Date(campaign.updatedAt) },
-    update: { data: campaign as any, updatedAt: new Date(campaign.updatedAt) },
+    create: { id: campaign.id, businessId: campaign.businessId, workspaceId: campaign.workspaceId, data: campaign as any, updatedAt: new Date(campaign.updatedAt) },
+    update: { workspaceId: campaign.workspaceId, data: campaign as any, updatedAt: new Date(campaign.updatedAt) },
   });
 }
 
@@ -45,6 +45,12 @@ export async function getCampaign(id: string): Promise<Campaign | null> {
 export async function listCampaignsForBusiness(businessId: string): Promise<Campaign[]> {
   const rows = await prisma.campaign.findMany({ where: { businessId }, orderBy: { updatedAt: "desc" } });
   return rows.map((r) => r.data as unknown as Campaign);
+}
+
+/** Powers the scheduled metrics-ingestion worker — every campaign currently spending, across every business/workspace, via a Postgres JSON-path filter on the schemaless `data` column. workspaceId falls back to "demo" for the rare pre-existing row launched before campaign.workspaceId started being persisted. */
+export async function listActiveCampaigns(): Promise<{ id: string; workspaceId: string }[]> {
+  const rows = await prisma.campaign.findMany({ where: { data: { path: ["status"], equals: "active" } }, select: { id: true, workspaceId: true } });
+  return rows.map((r) => ({ id: r.id, workspaceId: r.workspaceId ?? "demo" }));
 }
 
 /** Builds a campaign draft from a strategy: one variant per creative x recommended network. */
@@ -89,6 +95,49 @@ export async function buildCampaignFromStrategy(strategyId: string, name: string
 }
 
 /**
+ * Builds a campaign draft from a set of AI-generated CampaignSuggestions: exactly one variant
+ * per suggestion, using that suggestion's own platform as the variant's network — unlike
+ * buildCampaignFromStrategy's creative × recommendedNetworks cross-product, which would put
+ * every creative on every network. This is what lets "Generate Campaign" land the user straight
+ * in the builder with N ready-to-edit ads (one per suggestion) instead of a single generic ad.
+ */
+export async function buildCampaignFromSuggestions(strategyId: string, suggestions: CampaignSuggestion[], name: string, dailyBudgetCents: number): Promise<Campaign> {
+  const strategy = await getStrategy(strategyId);
+  if (!strategy) throw new Error(`Strategy ${strategyId} not found`);
+  const business = await getBusiness(strategy.businessId);
+  const baseUrl = business?.website?.replace(/\/$/, "") ?? "https://example.com";
+
+  const variants: CampaignVariant[] = suggestions.map((suggestion, i) => {
+    const audienceName = strategy.audiences[i % strategy.audiences.length] ?? "General Audience";
+    const slug = LANDING_PAGE_SLUGS[i % LANDING_PAGE_SLUGS.length];
+    return {
+      id: randomUUID(),
+      creative: { headline: suggestion.headline, body: suggestion.body, callToAction: suggestion.callToAction },
+      network: suggestion.platform,
+      status: "draft" as const,
+      audienceName,
+      landingPageUrl: slug ? `${baseUrl}/${slug}` : `${baseUrl}/`,
+    };
+  });
+
+  const campaign: Campaign = {
+    id: randomUUID(),
+    businessId: strategy.businessId,
+    strategyId,
+    name,
+    status: "draft",
+    networks: [...new Set(variants.map((v) => v.network))],
+    dailyBudgetCents,
+    variants,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  await saveCampaign(campaign);
+  return campaign;
+}
+
+/**
  * Builds the real Meta object graph for a shared group of variants: one Campaign
  * container, one Ad Set per distinct audience (grouping variants so they share
  * budget/targeting the way Meta expects), then a Creative + Ad per variant.
@@ -101,13 +150,24 @@ async function launchMetaHierarchy(
   workspaceId: string,
   perVariantBudgetCents: number
 ): Promise<void> {
-  const credentials = (await getMetaCredentials(workspaceId)) ?? undefined;
+  const workspaceCredentials = (await getMetaCredentials(workspaceId)) ?? undefined;
+  // The builder lets a user pick a specific ad account/Page per campaign (dropdowns backed by
+  // metaOAuth.listAdAccounts/listPages) instead of always using the workspace's default
+  // Integration connection — override here when the campaign carries a selection.
+  const credentials = workspaceCredentials
+    ? {
+        ...workspaceCredentials,
+        adAccountId: campaign.metaAdAccountId ?? workspaceCredentials.adAccountId,
+        pageId: campaign.pageId ?? workspaceCredentials.pageId,
+      }
+    : undefined;
   const accessToken = credentials?.accessToken ?? null;
 
   let campaignExternalId: string;
   try {
     const container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: DEFAULT_META_OBJECTIVE }, credentials);
     campaignExternalId = container.externalId;
+    campaign.externalIds = { ...campaign.externalIds, meta: campaignExternalId };
   } catch {
     variants.forEach((v) => { v.status = "failed"; });
     return;
@@ -129,6 +189,10 @@ async function launchMetaHierarchy(
           name: `${campaign.name} — ${audienceName}`,
           dailyBudgetCents: perVariantBudgetCents * groupVariants.length,
           targeting,
+          promotedObject: campaign.pixelId && campaign.conversionEvent ? { pixelId: campaign.pixelId, customEventType: campaign.conversionEvent } : undefined,
+          startTime: campaign.startDate,
+          endTime: campaign.endDate,
+          advantagePlus: campaign.advantagePlus,
         },
         credentials
       );
@@ -144,9 +208,10 @@ async function launchMetaHierarchy(
               adSetExternalId: adSet.externalId,
               name: `${campaign.id}-${variant.id}`,
               creative: variant.creative,
-              landingPageUrl: variant.landingPageUrl ?? "https://example.com",
+              landingPageUrl: variant.landingPageUrl ?? campaign.finalUrl ?? "https://example.com",
               imageHash: upload.imageHash,
               videoId: upload.videoId,
+              instagramActorId: campaign.instagramAccountId,
             },
             credentials
           );
@@ -176,7 +241,13 @@ async function launchGoogleHierarchy(
   workspaceId: string,
   perVariantBudgetCents: number
 ): Promise<void> {
-  const credentials = (await getGoogleAdsCredentials(workspaceId)) ?? undefined;
+  const workspaceCredentials = (await getGoogleAdsCredentials(workspaceId)) ?? undefined;
+  // Same builder-selection override pattern as launchMetaHierarchy: the campaign builder
+  // lets a user pick a specific Google Ads customer per campaign instead of always using
+  // the workspace's default Integration connection.
+  const credentials = workspaceCredentials
+    ? { ...workspaceCredentials, customerId: campaign.googleCustomerId ?? workspaceCredentials.customerId }
+    : undefined;
   const accessToken = credentials?.accessToken ?? null;
   const developerToken = credentials?.developerToken ?? null;
 
@@ -187,15 +258,24 @@ async function launchGoogleHierarchy(
     groups.get(key)!.push(variant);
   }
   const [firstAudienceName] = groups.keys();
-  const campaignLevelTargeting = await resolveGoogleTargetingForWorkspace(workspaceId, firstAudienceName, accessToken, developerToken);
+  // Locations collected directly in the builder take precedence over the SavedAudience-name
+  // bridge (which strategy-generated variants without builder state still rely on).
+  const campaignLevelGeoTargeting = campaign.locations?.length
+    ? await buildGoogleCampaignTargetingFromLocations(accessToken, developerToken, campaign.locations)
+    : (await resolveGoogleTargetingForWorkspace(workspaceId, firstAudienceName, accessToken, developerToken)).campaign;
+
+  const conversionActionResourceName = credentials && campaign.googleConversionActionId
+    ? `customers/${credentials.customerId}/conversionActions/${campaign.googleConversionActionId}`
+    : undefined;
 
   let campaignExternalId: string;
   try {
     const container = await googleAdapter.createCampaignContainer!(
-      { name: campaign.name, objective: "SEARCH", dailyBudgetCents: campaign.dailyBudgetCents, targeting: campaignLevelTargeting.campaign },
+      { name: campaign.name, objective: "SEARCH", dailyBudgetCents: campaign.dailyBudgetCents, targeting: campaignLevelGeoTargeting, conversionActionResourceName },
       credentials
     );
     campaignExternalId = container.externalId;
+    campaign.externalIds = { ...campaign.externalIds, google: campaignExternalId };
   } catch {
     variants.forEach((v) => { v.status = "failed"; });
     return;
@@ -221,7 +301,7 @@ async function launchGoogleHierarchy(
               adSetExternalId: adGroup.externalId,
               name: `${campaign.id}-${variant.id}`,
               creative: variant.creative,
-              landingPageUrl: variant.landingPageUrl ?? "https://example.com",
+              landingPageUrl: variant.landingPageUrl ?? campaign.finalUrl ?? "https://example.com",
             },
             credentials
           );
@@ -248,6 +328,9 @@ export async function launchCampaign(campaignId: string, workspaceId = "demo"): 
   if (!campaign) throw new Error(`Campaign ${campaignId} not found`);
 
   campaign.status = "launching";
+  // Persisted so later reads (e.g. the scheduled metrics-ingestion worker, which only has a
+  // campaignId to start from) know which workspace's Insight feed this campaign belongs to.
+  campaign.workspaceId = workspaceId;
   const perVariantBudget = Math.floor(campaign.dailyBudgetCents / Math.max(campaign.variants.length, 1));
 
   const metaVariants = campaign.variants.filter((v) => v.network === "meta");
@@ -276,6 +359,14 @@ export async function launchCampaign(campaignId: string, workspaceId = "demo"): 
   if (googleVariants.length) {
     await launchGoogleHierarchy(campaign, googleVariants, workspaceId, perVariantBudget);
   }
+
+  // `networks` was previously frozen at strategy-creation time (buildCampaignFromStrategy),
+  // so it could drift from reality once the builder added/removed per-network ads afterward —
+  // e.g. still reading ["meta"] after a Google ad was added and published. Recomputed here
+  // from actual variant outcomes so it never contradicts externalIds or the real launch
+  // result, which matters for anything reading this field downstream (the CRM sync in
+  // particular — see adsDataRoutes.ts's /ads-data/campaigns).
+  campaign.networks = [...new Set(campaign.variants.filter((v) => v.status !== "failed").map((v) => v.network))];
 
   campaign.status = campaign.variants.some((v) => v.status === "active")
     ? "active"
@@ -357,11 +448,45 @@ export async function applyCreativeMedia(campaignId: string, media: { imageUrl?:
   return campaign;
 }
 
-export async function updateCampaign(campaignId: string, patch: { name?: string; dailyBudgetCents?: number }): Promise<Campaign> {
+export interface CampaignBuilderPatch {
+  name?: string;
+  dailyBudgetCents?: number;
+  conversionEvent?: string;
+  finalUrl?: string;
+  startDate?: string;
+  endDate?: string;
+  locations?: string[];
+  advantagePlus?: boolean;
+  metaAdAccountId?: string;
+  pageId?: string;
+  instagramAccountId?: string;
+  pixelId?: string;
+  googleCustomerId?: string;
+  googleConversionActionId?: string;
+  variants?: CampaignVariant[];
+  creativeAssets?: CreativeAssetRef[];
+}
+
+export async function updateCampaign(campaignId: string, patch: CampaignBuilderPatch): Promise<Campaign> {
   const campaign = await getCampaign(campaignId);
   if (!campaign) throw new Error(`Campaign ${campaignId} not found`);
   if (patch.name !== undefined) campaign.name = patch.name;
   if (patch.dailyBudgetCents !== undefined) campaign.dailyBudgetCents = patch.dailyBudgetCents;
+  if (patch.conversionEvent !== undefined) campaign.conversionEvent = patch.conversionEvent;
+  if (patch.finalUrl !== undefined) campaign.finalUrl = patch.finalUrl;
+  if (patch.startDate !== undefined) campaign.startDate = patch.startDate;
+  if (patch.endDate !== undefined) campaign.endDate = patch.endDate;
+  if (patch.locations !== undefined) campaign.locations = patch.locations;
+  if (patch.advantagePlus !== undefined) campaign.advantagePlus = patch.advantagePlus;
+  if (patch.metaAdAccountId !== undefined) campaign.metaAdAccountId = patch.metaAdAccountId;
+  if (patch.pageId !== undefined) campaign.pageId = patch.pageId;
+  if (patch.instagramAccountId !== undefined) campaign.instagramAccountId = patch.instagramAccountId;
+  if (patch.pixelId !== undefined) campaign.pixelId = patch.pixelId;
+  if (patch.googleCustomerId !== undefined) campaign.googleCustomerId = patch.googleCustomerId;
+  if (patch.googleConversionActionId !== undefined) campaign.googleConversionActionId = patch.googleConversionActionId;
+  if (patch.variants !== undefined) campaign.variants = patch.variants;
+  // Capped at 10 server-side, not just in the UI.
+  if (patch.creativeAssets !== undefined) campaign.creativeAssets = patch.creativeAssets.slice(0, 10);
   campaign.updatedAt = new Date().toISOString();
   await saveCampaign(campaign);
   return campaign;

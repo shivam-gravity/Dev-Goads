@@ -1,42 +1,43 @@
 import { test, after } from "node:test";
 import assert from "node:assert";
 
-// Anthropic's client captures `fetch` at construction time (`new Anthropic()`, which
+// OpenAI's client captures `fetch` at construction time (`new OpenAI()`, which
 // marketResearch.ts does at module load), so the mock must be installed BEFORE the
 // dynamic import runs — same ordering constraint as metaAdapter.live.test.ts, just for
 // module-load-time construction instead of a per-call fetch.
-process.env.ANTHROPIC_API_KEY = "test-key";
+process.env.OPENAI_API_KEY = "test-key";
 
 let fetchCallCount = 0;
 const originalFetch = global.fetch;
 global.fetch = (async (url: string) => {
   fetchCallCount++;
-  assert.ok(String(url).includes("api.anthropic.com"));
+  assert.ok(String(url).includes("api.openai.com"));
   return {
     ok: true,
     status: 200,
     headers: new Headers({ "content-type": "application/json" }),
     json: async () => ({
-      id: "msg_test",
-      type: "message",
-      role: "assistant",
-      model: "claude-sonnet-5",
-      stop_reason: "end_turn",
-      stop_sequence: null,
-      usage: { input_tokens: 10, output_tokens: 20 },
-      content: [
-        { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: { query: "Acme Corp pricing" } },
+      id: "chatcmpl_test",
+      object: "chat.completion",
+      created: 1700000000,
+      model: "gpt-4o-search-preview",
+      choices: [
         {
-          type: "web_search_tool_result",
-          tool_use_id: "srvtoolu_1",
-          content: [{ type: "web_search_result", url: "https://example.com/report", title: "Example Market Report", encrypted_content: "x", page_age: null }],
-        },
-        {
-          type: "text",
-          text: "Acme Corp prices its product between $10-$50/month.",
-          citations: [{ type: "web_search_result_location", url: "https://example.com/report", title: "Example Market Report", cited_text: "$10-$50/month", encrypted_index: "x" }],
+          index: 0,
+          finish_reason: "stop",
+          message: {
+            role: "assistant",
+            content: "Acme Corp prices its product between $10-$50/month.",
+            annotations: [
+              {
+                type: "url_citation",
+                url_citation: { url: "https://example.com/report", title: "Example Market Report", start_index: 0, end_index: 52 },
+              },
+            ],
+          },
         },
       ],
+      usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
     }),
   } as unknown as Response;
 }) as typeof fetch;

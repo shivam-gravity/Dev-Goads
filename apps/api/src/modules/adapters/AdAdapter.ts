@@ -49,6 +49,8 @@ export interface CampaignContainerInput {
   dailyBudgetCents?: number;
   /** Google only: campaign-level geo/language criteria (from the first audience group — see googleTargetingMapper). */
   targeting?: Record<string, unknown>;
+  /** Google only, set by the campaign builder — full resource name (customers/{id}/conversionActions/{id}) attached as a CampaignConversionGoal after creation. Best-effort: Search-campaign conversion-goal mutations have real API constraints, so a failure here doesn't fail the whole launch. */
+  conversionActionResourceName?: string;
 }
 
 export interface AdSetContainerInput {
@@ -57,6 +59,13 @@ export interface AdSetContainerInput {
   /** Meta: this ad set's daily budget. Google: informational only — budget already set on the campaign. */
   dailyBudgetCents: number;
   targeting: Record<string, unknown>;
+  /** Meta only, set by the campaign builder — conversion event tied to a Pixel. Switches optimization_goal to OFFSITE_CONVERSIONS when present. */
+  promotedObject?: { pixelId: string; customEventType: string };
+  /** Meta only, ISO date strings from the campaign builder's Schedule field. */
+  startTime?: string;
+  endTime?: string;
+  /** Meta only — maps to targeting_automation.advantage_audience. */
+  advantagePlus?: boolean;
 }
 
 export interface CreativeUploadInput {
@@ -76,6 +85,8 @@ export interface HierarchyAdInput {
   landingPageUrl: string;
   imageHash?: string;
   videoId?: string;
+  /** Meta only, set by the campaign builder — publishes the ad to this Instagram business account alongside the Page. */
+  instagramActorId?: string;
 }
 
 /**

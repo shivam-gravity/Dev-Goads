@@ -191,13 +191,18 @@ export default function Campaigns({ businessId }: { businessId: string }) {
                           View
                         </Link>
                         {(c.status === "draft") && (
-                          <button
-                            className="btn btn-sm btn-primary"
-                            onClick={() => handleLaunch(c)}
-                            disabled={launching === c.id}
-                          >
-                            {launching === c.id ? "Launching…" : "Launch"}
-                          </button>
+                          <>
+                            <Link to={`/campaigns/${c.id}/builder`} className="btn btn-sm btn-secondary">
+                              Edit
+                            </Link>
+                            <button
+                              className="btn btn-sm btn-primary"
+                              onClick={() => handleLaunch(c)}
+                              disabled={launching === c.id}
+                            >
+                              {launching === c.id ? "Launching…" : "Launch"}
+                            </button>
+                          </>
                         )}
                       </div>
                     </td>

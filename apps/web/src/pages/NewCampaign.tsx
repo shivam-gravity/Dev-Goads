@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.js";
+import { DropdownField, type Option } from "../components/DropdownField.js";
+import { TargetIcon, UserIcon, LightningIcon, GlobeIcon, SparkleIcon } from "../components/icons.js";
 import type {
   AudienceAnalysis,
   AudiencePersona,
@@ -17,13 +19,14 @@ const AVATAR_EMOJIS = ["🤖", "👨", "👩", "👩‍🦰", "🧑", "👩🏾"
 
 // Mirrors marketResearch.ts's RESEARCH_STEPS on the backend — this is the fixed order the
 // worker runs blocks in, used to render a checklist (done/active/pending) even for steps
-// that haven't completed yet (and so have no block/data to show).
-const STEP_ORDER: { key: string; label: string }[] = [
-  { key: "productPositioning", label: "Analyzing product positioning, features, pricing and use cases" },
-  { key: "audienceProfile", label: "Analyzing target audience profile" },
-  { key: "competitorBudget", label: "Analyzing competitors and calculating daily budget recommendations" },
-  { key: "marketLocation", label: "Analyzing market trends and competition, recommending target locations" },
-  { key: "audiencePersonas", label: "Mining Meta Ads audience interest keywords and building audience personas" },
+// that haven't completed yet (and so have no block/data to show). Each step gets its own
+// icon + accent so the trace/result sections read as distinct topics, not a wall of identical cards.
+const STEP_ORDER: { key: string; label: string; icon: typeof TargetIcon; accent: string }[] = [
+  { key: "productPositioning", label: "Analyzing product positioning, features, pricing and use cases", icon: TargetIcon, accent: "#7033f5" },
+  { key: "audienceProfile", label: "Analyzing target audience profile", icon: UserIcon, accent: "#0e9f6e" },
+  { key: "competitorBudget", label: "Analyzing competitors and calculating daily budget recommendations", icon: LightningIcon, accent: "#f59e0b" },
+  { key: "marketLocation", label: "Analyzing market trends and competition, recommending target locations", icon: GlobeIcon, accent: "#3b82f6" },
+  { key: "audiencePersonas", label: "Mining Meta Ads audience interest keywords and building audience personas", icon: SparkleIcon, accent: "#ec4899" },
 ];
 
 const POLL_INTERVAL_MS = 1500;
@@ -46,6 +49,14 @@ function DataSource({ source }: { source?: string }) {
   return <p className="crawler-block-source">💡 Data Source: {source}</p>;
 }
 
+/** Renders `**phrase**` markdown-bold spans the research tool schemas ask the model to wrap
+ * around key numbers/terms — turns a flat sentence into skimmable, marketing-copy-style text. */
+function renderBold(text: string) {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.startsWith("**") && part.endsWith("**") ? <strong key={i}>{part.slice(2, -2)}</strong> : part
+  );
+}
+
 function CitationLinks({ citations }: { citations: Citation[] }) {
   if (citations.length === 0) return null;
   return (
@@ -64,13 +75,21 @@ function CitationLinks({ citations }: { citations: Citation[] }) {
 function ProductBlockView({ data, citations }: { data: ProductAnalysis; citations: Citation[] }) {
   return (
     <div className="crawler-block-content">
-      <p><strong>Brand Positioning:</strong> {data.summary} <strong>Value proposition:</strong> {data.valueProposition}</p>
+      <p><strong>Brand Positioning:</strong> {renderBold(data.summary)} <strong>Value proposition:</strong> {renderBold(data.valueProposition)}</p>
       <p><strong>Business Type:</strong> {data.businessType ?? data.category}</p>
       <p><strong>Product Pricing:</strong> {data.pricingModel} ({data.pricingRange})</p>
       <p><strong>Key Features:</strong></p>
       <ul className="crawler-block-list">
         {data.keyFeatures.map((f) => <li key={f}>{f}</li>)}
       </ul>
+      {data.useCases && data.useCases.length > 0 && (
+        <>
+          <p><strong>Use Cases:</strong></p>
+          <ul className="crawler-block-list">
+            {data.useCases.map((u) => <li key={u.title}><strong>{u.title}</strong> — {u.description}</li>)}
+          </ul>
+        </>
+      )}
       <DataSource source={data.dataSource} />
       <CitationLinks citations={citations} />
     </div>
@@ -80,13 +99,13 @@ function ProductBlockView({ data, citations }: { data: ProductAnalysis; citation
 function AudienceBlockView({ data, citations }: { data: AudienceAnalysis; citations: Citation[] }) {
   return (
     <div className="crawler-block-content">
-      <p><strong>Primary Audience:</strong> {data.primaryAudience}</p>
+      <p><strong>Primary Audience:</strong> {renderBold(data.primaryAudience)}</p>
       {data.demographics && (
         <p>
           <strong>Demographics:</strong> {data.demographics.ageDistribution} · {data.demographics.genderRatio} · {data.demographics.occupation}
         </p>
       )}
-      {data.consumerCharacteristics && <p><strong>Consumer Characteristics:</strong> {data.consumerCharacteristics}</p>}
+      {data.consumerCharacteristics && <p><strong>Consumer Characteristics:</strong> {renderBold(data.consumerCharacteristics)}</p>}
       {data.interestTags && data.interestTags.length > 0 && <p><strong>Interest Tags:</strong> {data.interestTags.join(", ")}</p>}
       {data.recommendedObjective && (
         <p><strong>Recommended Objective:</strong> {data.recommendedObjective} <strong>Performance Goal:</strong> {data.recommendedPerformanceGoal}</p>
@@ -101,16 +120,16 @@ function CompetitorBlockView({ data, citations }: { data: CompetitorBudgetAnalys
   return (
     <div className="crawler-block-content">
       <p><strong>Main Competitors:</strong> {data.competitors.join(", ")}</p>
-      <p><strong>Competition Intensity:</strong> {data.competitionIntensity}</p>
+      <p><strong>Competition Intensity:</strong> {renderBold(data.competitionIntensity)}</p>
       <p><strong>Differentiators:</strong></p>
       <ul className="crawler-block-list">
         {data.differentiators.map((d) => <li key={d}>{d}</li>)}
       </ul>
-      <p><strong>Budget Reasoning:</strong></p>
-      <ul className="crawler-block-list">
-        {data.budgetReasoning.map((r) => <li key={r}>{r}</li>)}
-      </ul>
-      <p className="crawler-block-highlight">💰 Recommended Daily Budget: {formatCents(data.recommendedDailyBudgetCents)}</p>
+      <p><strong>Budget Calculation Walkthrough:</strong></p>
+      <ol className="crawler-budget-steps">
+        {data.budgetReasoning.map((r, i) => <li key={i}>{renderBold(r)}</li>)}
+      </ol>
+      <p className="crawler-block-highlight">🎯 Recommended Daily Budget: <strong>{formatCents(data.recommendedDailyBudgetCents)}</strong></p>
       <DataSource source={data.dataSource} />
       <CitationLinks citations={citations} />
     </div>
@@ -122,10 +141,18 @@ function MarketBlockView({ data, citations }: { data: MarketLocationAnalysis; ci
     <div className="crawler-block-content">
       <p><strong>Recommended Target Region:</strong> {data.recommendedRegion}</p>
       <p><strong>Alternative Regions:</strong> {data.alternativeRegions.join(", ")}</p>
-      <p><strong>Market Trends:</strong> {data.marketTrends}</p>
+      <p><strong>Market Trends:</strong> {renderBold(data.marketTrends)}</p>
+      {data.keyDrivers && data.keyDrivers.length > 0 && (
+        <>
+          <p><strong>Key Drivers:</strong></p>
+          <ul className="crawler-block-list">
+            {data.keyDrivers.map((d) => <li key={d}>{d}</li>)}
+          </ul>
+        </>
+      )}
       <p><strong>Competition Level:</strong> {data.competitionLevel}</p>
       <p><strong>Recommended Platform:</strong> {data.recommendedPlatform}</p>
-      <p><strong>Placement Rationale:</strong> {data.placementRationale}</p>
+      <p><strong>Placement Rationale:</strong> {renderBold(data.placementRationale)}</p>
       <DataSource source={data.dataSource} />
       <CitationLinks citations={citations} />
     </div>
@@ -171,8 +198,10 @@ function PersonaCarousel({ personas }: { personas: AudiencePersona[] }) {
                   <span><strong>Gender:</strong> {p.genderSplit}</span>
                 </div>
                 <p className="persona-card-details">{p.details}</p>
-                <div className="persona-card-interests">
-                  <strong>Interests:</strong> {p.interests.join(", ")}
+                <div className="persona-card-interest-chips">
+                  {p.interests.slice(0, 6).map((tag) => (
+                    <span key={tag} className="persona-card-interest-chip" style={{ color: avatar.color, borderColor: avatar.color }}>{tag}</span>
+                  ))}
                 </div>
               </div>
             );
@@ -212,6 +241,9 @@ function BrandInfoCard({ url, product, candidateLogos, businessId, onConfirmed }
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  // Candidate logos are hotlinked from the crawled site — some hosts block off-site loading,
+  // which would otherwise show as blank/broken boxes. Hide any that fail rather than that.
+  const [brokenLogos, setBrokenLogos] = useState<Set<string>>(new Set());
 
   function toggleLogo(src: string) {
     setSaved(false);
@@ -269,54 +301,81 @@ function BrandInfoCard({ url, product, candidateLogos, businessId, onConfirmed }
       </label>
       <div className="adsgo-modal-field">
         <span>Brand Logos <span className="field-hint" style={{ display: "inline" }}>Added: {logoUrls.length}/5</span></span>
-        {candidateLogos.length > 0 ? (
+        {candidateLogos.filter((src) => !brokenLogos.has(src)).length > 0 ? (
           <div className="brand-logo-picker">
-            {candidateLogos.slice(0, 12).map((src) => (
+            {candidateLogos.filter((src) => !brokenLogos.has(src)).slice(0, 12).map((src) => (
               <button
                 key={src}
                 type="button"
                 className={`brand-logo-option ${logoUrls.includes(src) ? "selected" : ""}`}
                 onClick={() => toggleLogo(src)}
               >
-                <img src={src} alt="" loading="lazy" />
+                <img src={src} alt="" loading="lazy" onError={() => setBrokenLogos((prev) => new Set(prev).add(src))} />
               </button>
             ))}
           </div>
         ) : (
-          <p className="muted-text">No images found on the page to pick a logo from.</p>
+          <p className="muted-text">No usable images found on the page to pick a logo from.</p>
         )}
       </div>
     </div>
   );
 }
 
-const BUSINESS_GOALS = ["Sales", "Leads", "Traffic", "Awareness"];
-const PROMOTION_TYPES = ["Long-term", "Short-term", "Test"];
-const PLATFORM_OPTIONS: { value: "meta" | "google" | "tiktok"; label: string }[] = [
+const BUSINESS_TYPE_OPTIONS: Option[] = [
+  { value: "Online Shopping", label: "Online Shopping" },
+  { value: "Solution & Online Service", label: "Solution & Online Service" },
+  { value: "Local Store & Service", label: "Local Store & Service" },
+  { value: "App", label: "App" },
+];
+
+const BUSINESS_GOAL_OPTIONS: Option[] = [
+  { value: "Sales", label: "Sales", description: "Find people who take desired actions within your website." },
+  { value: "Leads", label: "Leads", description: "Collect leads for your business." },
+  { value: "Awareness & Engagement", label: "Awareness & Engagement", description: "Find people interested in your product or business." },
+  { value: "Traffic", label: "Traffic", description: "Increase traffic to your website." },
+];
+
+const PROMOTION_TYPE_OPTIONS: Option[] = [
+  { value: "Long-term", label: "Long-term", description: "Best for ongoing growth. You can pause anytime." },
+  { value: "Short-term", label: "Short-term", description: "Ideal for time-limited campaigns. Set an end date below." },
+];
+
+const PLATFORM_OPTIONS: Option[] = [
   { value: "meta", label: "Meta" },
   { value: "google", label: "Google" },
   { value: "tiktok", label: "TikTok" },
 ];
 
+/** Free-text research output ("SaaS", "DTC skincare brand", ...) doesn't line up with the
+ * fixed Business Type enum the builder form uses — map it to the closest bucket instead of
+ * losing the AI-inferred value to a blank dropdown. */
+function inferBusinessType(freeText: string): string {
+  const t = freeText.toLowerCase();
+  if (/shop|ecommerce|e-commerce|retail|marketplace/.test(t)) return "Online Shopping";
+  if (/\bapp\b|mobile app|ios|android/.test(t)) return "App";
+  if (/local|restaurant|clinic|salon|brick.and.mortar/.test(t)) return "Local Store & Service";
+  return "Solution & Online Service";
+}
+
 interface PromotionObjectiveCardProps {
   session: ResearchSession;
   businessId: string;
-  wsId: string;
   setBusinessId: (id: string) => void;
 }
 
 /**
- * The final step: turns the completed research into an actual (paused) Campaign. Skips
- * the separate /wizard page entirely — matching the one-continuous-page flow this whole
- * feature is modeled on — by calling createStrategyFromResearch (which reuses the
- * already-gathered research instead of a redundant fresh strategy-generation call),
- * then the existing createCampaign/launchCampaign pipeline unchanged.
+ * The final step: turns the completed research into a draft Campaign pre-populated with 6 ready-
+ * to-edit ads (one per AI-generated suggestion — see createCampaignFromSuggestions), then hands
+ * off to the CampaignBuilder (/campaigns/:id/builder) for manual review — ad account/Page/pixel
+ * selection, per-ad copy/creative, checkbox-include, and the actual Publish action — rather than
+ * a separate pre-builder picker screen or auto-launching immediately.
  */
-function PromotionObjectiveCard({ session, businessId, wsId, setBusinessId }: PromotionObjectiveCardProps) {
+function PromotionObjectiveCard({ session, businessId, setBusinessId }: PromotionObjectiveCardProps) {
   const navigate = useNavigate();
   const result = session.result!;
 
-  const [businessType, setBusinessType] = useState(result.product.businessType ?? result.product.category);
+  const [businessType, setBusinessType] = useState(() => inferBusinessType(result.product.businessType ?? result.product.category));
   const [businessGoal, setBusinessGoal] = useState(result.audience.recommendedObjective ?? "Sales");
   const [performanceGoal, setPerformanceGoal] = useState(result.audience.recommendedPerformanceGoal ?? "In-web actions");
   const [platform, setPlatform] = useState<"meta" | "google" | "tiktok">(result.marketLocation.recommendedPlatform);
@@ -354,14 +413,16 @@ function PromotionObjectiveCard({ session, businessId, wsId, setBusinessId }: Pr
     setGenerateError(null);
     try {
       const resolvedBusinessId = await resolveBusinessId();
-      const strategy = await api.createStrategyFromResearch(resolvedBusinessId, session.id);
-      const campaign = await api.createCampaign({
-        strategyId: strategy.id,
-        name: `${result.product.productName} — ${platform}`,
-        dailyBudgetCents: Math.round(dailyBudget * 100),
-      });
-      await api.launchCampaign(campaign.id, wsId);
-      navigate(`/campaigns/${campaign.id}`);
+      const campaign = await api.createCampaignFromSuggestions(
+        session.id,
+        resolvedBusinessId,
+        `${result.product.productName} — ${platform}`,
+        Math.round(dailyBudget * 100)
+      );
+      await api.updateCampaign(campaign.id, { locations });
+      const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
+      localStorage.removeItem(`adgo_active_research_session_${wsId}`);
+      navigate(`/campaigns/${campaign.id}/builder`);
     } catch (err) {
       setGenerateError(err instanceof Error ? err.message : "Couldn't generate the campaign — try again.");
     } finally {
@@ -378,18 +439,20 @@ function PromotionObjectiveCard({ session, businessId, wsId, setBusinessId }: Pr
 
       {generateError && <p className="error">{generateError}</p>}
 
-      <label className="adsgo-modal-field">
-        <span>Business Type</span>
-        <input type="text" value={businessType} onChange={(e) => setBusinessType(e.target.value)} />
-      </label>
+      <DropdownField
+        label="Business Type"
+        options={BUSINESS_TYPE_OPTIONS}
+        selected={[businessType]}
+        onChange={([v]) => setBusinessType(v)}
+      />
 
       <div className="promo-objective-row">
-        <label className="adsgo-modal-field">
-          <span>Your Business Goal</span>
-          <select value={businessGoal} onChange={(e) => setBusinessGoal(e.target.value)}>
-            {BUSINESS_GOALS.map((g) => <option key={g} value={g}>{g}</option>)}
-          </select>
-        </label>
+        <DropdownField
+          label="Your Business Goal"
+          options={BUSINESS_GOAL_OPTIONS}
+          selected={[businessGoal]}
+          onChange={([v]) => setBusinessGoal(v)}
+        />
         <label className="adsgo-modal-field">
           <span>Your Ad Performance Goal</span>
           <input type="text" value={performanceGoal} onChange={(e) => setPerformanceGoal(e.target.value)} />
@@ -397,16 +460,12 @@ function PromotionObjectiveCard({ session, businessId, wsId, setBusinessId }: Pr
       </div>
 
       <div className="promo-objective-row">
-        <label className="adsgo-modal-field">
-          <span>Ad Platform</span>
-          <select value={platform} onChange={(e) => setPlatform(e.target.value as typeof platform)}>
-            {PLATFORM_OPTIONS.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}{p.value === result.marketLocation.recommendedPlatform ? " (Recommended)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+        <DropdownField
+          label="Ad Platform"
+          options={PLATFORM_OPTIONS.map((p) => (p.value === result.marketLocation.recommendedPlatform ? { ...p, label: `${p.label} (Recommended)` } : p))}
+          selected={[platform]}
+          onChange={([v]) => setPlatform(v as typeof platform)}
+        />
         <label className="adsgo-modal-field">
           <span>Target Locations</span>
           <div className="promo-location-chips">
@@ -434,12 +493,12 @@ function PromotionObjectiveCard({ session, businessId, wsId, setBusinessId }: Pr
             <span>USD</span>
           </div>
         </label>
-        <label className="adsgo-modal-field">
-          <span>Promotion Type</span>
-          <select value={promotionType} onChange={(e) => setPromotionType(e.target.value)}>
-            {PROMOTION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </label>
+        <DropdownField
+          label="Promotion Type"
+          options={PROMOTION_TYPE_OPTIONS}
+          selected={[promotionType]}
+          onChange={([v]) => setPromotionType(v)}
+        />
       </div>
 
       <button type="button" className="btn btn-primary promo-generate-btn" onClick={handleGenerateCampaign} disabled={generating}>
@@ -463,12 +522,29 @@ function renderBlock(block: DeepResearchBlock) {
 export default function NewCampaign() {
   const { businessId, setBusinessId } = useAuth();
   const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
+  const activeSessionKey = `adgo_active_research_session_${wsId}`;
 
   const [pageUrl, setPageUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [session, setSession] = useState<ResearchSession | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const [brokenPageImages, setBrokenPageImages] = useState<Set<string>>(new Set());
   const pollRef = useRef<number | null>(null);
+
+  // Research runs server-side (BullMQ worker) regardless of whether this component is
+  // mounted — persisting just the session id (not the whole object, which goes stale) means
+  // switching to another page and back resumes exactly where it left off instead of
+  // silently losing the in-flight/completed session and forcing a re-paste of the URL.
+  useEffect(() => {
+    const savedId = localStorage.getItem(activeSessionKey);
+    if (!savedId) return;
+    api
+      .getResearchSession(savedId)
+      .then(setSession)
+      .catch(() => localStorage.removeItem(activeSessionKey));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!session || session.status === "done" || session.status === "failed") {
@@ -489,8 +565,8 @@ export default function NewCampaign() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id, session?.status]);
 
-  async function handleStart() {
-    const url = pageUrl.trim();
+  async function handleStart(urlOverride?: string, force = false) {
+    const url = (urlOverride ?? pageUrl).trim();
     if (!url) {
       setError("Please enter a page URL to continue.");
       return;
@@ -498,8 +574,10 @@ export default function NewCampaign() {
     setError(null);
     setStarting(true);
     try {
-      const created = await api.createResearchSession(wsId, url);
+      const created = await api.createResearchSession(wsId, url, undefined, force);
       setSession(created);
+      setBrokenPageImages(new Set());
+      localStorage.setItem(activeSessionKey, created.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't start research — check the URL and try again.");
     } finally {
@@ -507,9 +585,20 @@ export default function NewCampaign() {
     }
   }
 
+  // force=true so resubmitting always runs a fresh research pass instead of silently
+  // cloning the same cached result — otherwise repeated resubmits within the 1hr session
+  // cache window (researchSessionService's SESSION_CACHE_WINDOW_MS) return identical data,
+  // which reads as "resubmitting doesn't help" when the underlying data was genuinely thin.
+  function handleResubmit() {
+    if (session) handleStart(session.url, true);
+  }
+
   function handleReset() {
     setSession(null);
     setError(null);
+    setPageUrl("");
+    setBrokenPageImages(new Set());
+    localStorage.removeItem(activeSessionKey);
   }
 
   const isActive = Boolean(session) && session!.status !== "done" && session!.status !== "failed";
@@ -524,10 +613,20 @@ export default function NewCampaign() {
         </div>
       </div>
 
-      <a className="how-to-use-link" href="#" onClick={(e) => e.preventDefault()}>
+      <button type="button" className="how-to-use-link" onClick={() => setShowHelp((v) => !v)}>
         <span className="how-to-use-icon" aria-hidden="true">📖</span>
         How to use?
-      </a>
+      </button>
+
+      {showHelp && (
+        <div className="how-to-use-panel">
+          Paste any page URL — your website, a social profile, or a product page — and Deep
+          Research will analyze it to build a full campaign strategy (product positioning,
+          target audience, competitors, budget, and market recommendations). This usually takes
+          a few minutes, so feel free to browse other pages while it runs — we'll pick up right
+          where you left off when you come back.
+        </div>
+      )}
 
       <div className="new-campaign-hero">
         {!session && (
@@ -552,6 +651,20 @@ export default function NewCampaign() {
 
         {error && <p className="error">{error}</p>}
 
+        {session && (
+          <div className="new-campaign-resubmit-bar">
+            <div className="new-campaign-resubmit-row">
+              <span className="new-campaign-resubmit-input">{session.url}</span>
+              <button type="button" className="new-campaign-resubmit-btn" onClick={handleResubmit} disabled={starting}>
+                {starting ? "Resubmitting…" : "Resubmit URL"}
+              </button>
+            </div>
+            <button type="button" className="new-campaign-resubmit-chip" onClick={handleReset}>
+              {session.url}
+            </button>
+          </div>
+        )}
+
         {!session && (
           <div className="new-campaign-url-row">
             <input
@@ -563,10 +676,27 @@ export default function NewCampaign() {
               onKeyDown={(e) => e.key === "Enter" && handleStart()}
               disabled={starting}
             />
-            <button className="btn btn-primary new-campaign-deep-research-btn" onClick={handleStart} disabled={starting}>
+            <button className="btn btn-primary new-campaign-deep-research-btn" onClick={() => handleStart()} disabled={starting}>
               <span aria-hidden="true">✨</span>
               {starting ? "Starting…" : "Deep Research"}
             </button>
+          </div>
+        )}
+
+        {!session && (
+          <div className="new-campaign-value-row">
+            <div className="new-campaign-value-item">
+              <span className="new-campaign-value-icon"><TargetIcon /></span>
+              <span>AI-powered product &amp; audience research</span>
+            </div>
+            <div className="new-campaign-value-item">
+              <span className="new-campaign-value-icon"><LightningIcon /></span>
+              <span>Real, calculated budget recommendations</span>
+            </div>
+            <div className="new-campaign-value-item">
+              <span className="new-campaign-value-icon"><SparkleIcon /></span>
+              <span>12 ready-to-edit ads, generated for you</span>
+            </div>
           </div>
         )}
 
@@ -580,20 +710,32 @@ export default function NewCampaign() {
         {isActive && session && (
           <div className="crawler-trace">
             <div className="crawler-trace-header">
-              Task received: analyzing <strong>{session.url}</strong> with comprehensive product and audience analysis.
-              {session.cacheHit && " (served from a recent cached analysis)"}
+              <span>
+                Task received: analyzing <strong>{session.url}</strong> with comprehensive product and audience analysis.
+                {session.cacheHit && " (served from a recent cached analysis)"}
+              </span>
+              <button type="button" className="btn btn-secondary crawler-trace-reenter-btn" onClick={handleReset}>
+                Re-enter URL
+              </button>
             </div>
+            {!session.cacheHit && (
+              <p className="crawler-trace-time-note">
+                This usually takes a few minutes — feel free to browse other pages, we'll keep working in the background.
+              </p>
+            )}
             <ul className="crawler-trace-steps">
               {STEP_ORDER.map((step) => {
                 const completedBlock = session.blocks.find((b) => b.key === step.key);
                 const isCurrent = !completedBlock && session.currentStep === step.label;
+                const StepIcon = step.icon;
                 return (
                   <li key={step.key} className={completedBlock ? "done" : isCurrent ? "active" : "pending"}>
                     <div className="crawler-trace-step-row">
-                      <span className="crawler-trace-step-icon" aria-hidden="true">
-                        {completedBlock ? "✓" : isCurrent ? <span className="crawler-trace-spinner" /> : ""}
+                      <span className="crawler-trace-step-badge" style={{ "--step-accent": step.accent } as CSSProperties}>
+                        {isCurrent ? <span className="crawler-trace-spinner" /> : <StepIcon />}
                       </span>
                       <span>{step.label}</span>
+                      {completedBlock && <span className="crawler-trace-step-done-mark" aria-hidden="true">✓</span>}
                     </div>
                     {completedBlock && renderBlock(completedBlock)}
                   </li>
@@ -626,29 +768,44 @@ export default function NewCampaign() {
             />
 
             <div className="crawler-trace-steps crawler-result-blocks">
-              {session.blocks.map((block) => (
-                <div key={block.key} className="crawler-result-block">
-                  <div className="crawler-block-label">{block.label}</div>
-                  {renderBlock(block)}
-                </div>
-              ))}
+              {session.blocks.map((block) => {
+                const step = STEP_ORDER.find((s) => s.key === block.key);
+                const StepIcon = step?.icon;
+                return (
+                  <div key={block.key} className="crawler-result-block">
+                    <div className="crawler-block-label" style={step ? ({ "--step-accent": step.accent } as CSSProperties) : undefined}>
+                      {StepIcon && (
+                        <span className="crawler-block-label-badge">
+                          <StepIcon />
+                        </span>
+                      )}
+                      {block.label}
+                    </div>
+                    {renderBlock(block)}
+                  </div>
+                );
+              })}
             </div>
 
-            {session.result.site.images.length > 0 && (
+            {session.result.site.images.filter((src) => !brokenPageImages.has(src)).length > 0 && (
               <div className="crawler-result-images">
                 <span className="crawler-result-caption">Images found on the page</span>
                 <div className="crawler-result-image-grid">
-                  {session.result.site.images.slice(0, 8).map((src) => (
-                    <img key={src} src={src} alt="" loading="lazy" />
+                  {session.result.site.images.filter((src) => !brokenPageImages.has(src)).slice(0, 8).map((src) => (
+                    <img key={src} src={src} alt="" loading="lazy" onError={() => setBrokenPageImages((prev) => new Set(prev).add(src))} />
                   ))}
                 </div>
               </div>
             )}
 
+            <div className="all-set-banner">
+              <span className="all-set-banner-icon" aria-hidden="true">✓</span>
+              <span>All set! Your best ad strategy is ready. Review your goals below and start your campaign with one click!</span>
+            </div>
+
             <PromotionObjectiveCard
               session={session}
               businessId={businessId ?? "demo-business"}
-              wsId={wsId}
               setBusinessId={setBusinessId}
             />
 

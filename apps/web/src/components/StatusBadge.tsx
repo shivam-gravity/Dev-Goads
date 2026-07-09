@@ -13,13 +13,14 @@ export default function StatusBadge({ status, className = "" }: StatusBadgeProps
 }
 
 interface NetworkBadgeProps {
-  network: "meta" | "google";
+  network: "meta" | "google" | "tiktok";
 }
 
 export function NetworkBadge({ network }: NetworkBadgeProps) {
   const labels: Record<string, string> = {
     meta: "Meta",
     google: "Google",
+    tiktok: "TikTok",
   };
   return <span className={`network-badge network-badge-${network}`}>{labels[network] ?? network}</span>;
 }

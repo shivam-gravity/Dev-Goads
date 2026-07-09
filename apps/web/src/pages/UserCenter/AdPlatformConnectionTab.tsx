@@ -1,31 +1,46 @@
 import { useEffect, useState } from "react";
-import type { ComponentType } from "react";
 import { api, Integration } from "../../api/client.js";
 import { MetaInfinityIcon, GoogleIcon, TikTokIcon, BingIcon } from "../../components/icons.js";
 
-interface Platform {
-  key: Integration["platform"] | "bing";
-  label: string;
-  Icon: ComponentType<{ className?: string }>;
-  supported: boolean;
-}
-
-const PLATFORMS: Platform[] = [
-  { key: "meta", label: "Meta", Icon: MetaInfinityIcon, supported: true },
-  { key: "google", label: "Google", Icon: GoogleIcon, supported: true },
-  { key: "tiktok", label: "TikTok", Icon: TikTokIcon, supported: false },
-  { key: "bing", label: "Bing", Icon: BingIcon, supported: false }
-];
+type ManualPlatform = "meta" | "google";
 
 const EMPTY_META_MANUAL_FORM = { accessToken: "", adAccountId: "", pageId: "", pageAccessToken: "" };
 const EMPTY_GOOGLE_MANUAL_FORM = { customerId: "", developerToken: "", accessToken: "", clientId: "", clientSecret: "", refreshToken: "" };
 
-export default function AdPlatformConnectionTab({ businessId }: { businessId: string }) {
-  const [active, setActive] = useState<Platform["key"]>("meta");
+function timeAgo(iso: string): string {
+  const sec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (sec < 60) return "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} hour${hr === 1 ? "" : "s"} ago`;
+  const day = Math.floor(hr / 24);
+  return `${day} day${day === 1 ? "" : "s"} ago`;
+}
+
+/** Google customer IDs are stored as raw digits ("1234567890") — display them in Google's own dashed convention ("123-456-7890"). */
+function formatGoogleCustomerId(id: string): string {
+  const digits = id.replace(/\D/g, "");
+  if (digits.length !== 10) return id;
+  return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+
+function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="ad-account-card-row">
+      <span className="ad-account-card-row-label">{label}</span>
+      <span className="ad-account-card-row-value">{value}</span>
+    </div>
+  );
+}
+
+export default function AdPlatformConnectionTab({ businessId: _businessId }: { businessId: string }) {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [conversionActionCount, setConversionActionCount] = useState<number | null>(null);
 
+  const [manualPlatform, setManualPlatform] = useState<ManualPlatform | null>(null);
   const [manualError, setManualError] = useState<string | null>(null);
   const [manualSubmitting, setManualSubmitting] = useState(false);
   const [metaManualForm, setMetaManualForm] = useState(EMPTY_META_MANUAL_FORM);
@@ -48,25 +63,39 @@ export default function AdPlatformConnectionTab({ businessId }: { businessId: st
   useEffect(() => {
     load();
     const params = new URLSearchParams(window.location.search);
-    const connected = params.get("connected");
-    if (connected === "meta" || connected === "google") {
-      setActive(connected);
-      window.history.replaceState({}, "", window.location.pathname);
-    } else if (params.get("error")) {
-      setError("Failed to connect platform. Please try again.");
+    if (params.get("connected") === "meta" || params.get("connected") === "google" || params.get("error")) {
+      if (params.get("error")) setError("Failed to connect platform. Please try again.");
       window.history.replaceState({}, "", window.location.pathname);
     }
-  }, [businessId]);
+  }, []);
 
-  const current = PLATFORMS.find((p) => p.key === active)!;
-  const integration = integrations.find((i) => i.platform === active);
-  const isConnected = integration?.status === "connected";
+  const metaIntegration = integrations.find((i) => i.platform === "meta");
+  const googleIntegration = integrations.find((i) => i.platform === "google");
+  const metaConnected = metaIntegration?.status === "connected";
+  const googleConnected = googleIntegration?.status === "connected";
 
-  async function handleManualConnect() {
+  useEffect(() => {
+    if (!googleConnected) {
+      setConversionActionCount(null);
+      return;
+    }
+    api.listGoogleConversionActions(wsId).then((list) => setConversionActionCount(list.length)).catch(() => setConversionActionCount(null));
+  }, [googleConnected, wsId]);
+
+  function startOAuthConnect(platform: ManualPlatform) {
+    window.location.href = platform === "meta" ? api.startMetaOAuth(wsId) : api.startGoogleOAuth(wsId);
+  }
+
+  function toggleManualForm(platform: ManualPlatform) {
+    setManualError(null);
+    setManualPlatform((current) => (current === platform ? null : platform));
+  }
+
+  async function handleManualConnect(platform: ManualPlatform) {
     setManualError(null);
     setManualSubmitting(true);
     try {
-      if (active === "meta") {
+      if (platform === "meta") {
         if (!metaManualForm.accessToken || !metaManualForm.adAccountId) {
           setManualError("Access Token and Ad Account ID are required.");
           return;
@@ -78,7 +107,7 @@ export default function AdPlatformConnectionTab({ businessId }: { businessId: st
           pageAccessToken: metaManualForm.pageAccessToken || undefined,
         });
         setMetaManualForm(EMPTY_META_MANUAL_FORM);
-      } else if (active === "google") {
+      } else {
         if (!googleManualForm.customerId || !googleManualForm.developerToken || !googleManualForm.accessToken) {
           setManualError("Customer ID, Developer Token, and Access Token are required.");
           return;
@@ -93,6 +122,7 @@ export default function AdPlatformConnectionTab({ businessId }: { businessId: st
         });
         setGoogleManualForm(EMPTY_GOOGLE_MANUAL_FORM);
       }
+      setManualPlatform(null);
       await load();
     } catch {
       setManualError("Manual connect failed. Double-check the values and try again.");
@@ -101,197 +131,175 @@ export default function AdPlatformConnectionTab({ businessId }: { businessId: st
     }
   }
 
-  async function handleDisconnect() {
+  async function handleDisconnect(platform: ManualPlatform) {
     if (!confirm("Disconnect this platform? Syncing campaigns will pause.")) return;
     setError(null);
     try {
-      await api.disconnectIntegration(wsId, active as Integration["platform"]);
+      await api.disconnectIntegration(wsId, platform);
       await load();
     } catch {
       setError("Failed to disconnect platform.");
     }
   }
 
+  function renderManualForm(platform: ManualPlatform) {
+    return (
+      <div className="platform-connect-manual-inline">
+        {manualError && <p className="error">{manualError}</p>}
+        {platform === "meta" ? (
+          <>
+            <p className="muted-text">
+              Paste tokens from the{" "}
+              <a href="https://developers.facebook.com/tools/explorer" target="_blank" rel="noreferrer">Meta Graph API Explorer</a>.
+            </p>
+            <label className="adsgo-modal-field">
+              <span>Access Token</span>
+              <textarea rows={2} value={metaManualForm.accessToken} onChange={(e) => setMetaManualForm((f) => ({ ...f, accessToken: e.target.value }))} />
+            </label>
+            <label className="adsgo-modal-field">
+              <span>Ad Account ID (e.g. act_123456)</span>
+              <input type="text" value={metaManualForm.adAccountId} onChange={(e) => setMetaManualForm((f) => ({ ...f, adAccountId: e.target.value }))} />
+            </label>
+            <label className="adsgo-modal-field">
+              <span>Page ID</span>
+              <input type="text" value={metaManualForm.pageId} onChange={(e) => setMetaManualForm((f) => ({ ...f, pageId: e.target.value }))} />
+            </label>
+            <label className="adsgo-modal-field">
+              <span>Page Access Token</span>
+              <textarea rows={2} value={metaManualForm.pageAccessToken} onChange={(e) => setMetaManualForm((f) => ({ ...f, pageAccessToken: e.target.value }))} />
+              <div className="field-hint">From Graph API Explorer → me/accounts → copy the page's access_token. Required for lead form capture.</div>
+            </label>
+          </>
+        ) : (
+          <>
+            <p className="muted-text">Paste credentials from the Google Ads API Center.</p>
+            <label className="adsgo-modal-field">
+              <span>Customer ID (e.g. 123-456-7890)</span>
+              <input type="text" value={googleManualForm.customerId} onChange={(e) => setGoogleManualForm((f) => ({ ...f, customerId: e.target.value }))} />
+            </label>
+            <label className="adsgo-modal-field">
+              <span>Developer Token</span>
+              <input type="password" value={googleManualForm.developerToken} onChange={(e) => setGoogleManualForm((f) => ({ ...f, developerToken: e.target.value }))} />
+            </label>
+            <label className="adsgo-modal-field">
+              <span>Access Token</span>
+              <textarea rows={2} value={googleManualForm.accessToken} onChange={(e) => setGoogleManualForm((f) => ({ ...f, accessToken: e.target.value }))} />
+            </label>
+            <label className="adsgo-modal-field">
+              <span>Client ID (optional)</span>
+              <input type="text" value={googleManualForm.clientId} onChange={(e) => setGoogleManualForm((f) => ({ ...f, clientId: e.target.value }))} />
+            </label>
+            <label className="adsgo-modal-field">
+              <span>Client Secret (optional)</span>
+              <input type="password" value={googleManualForm.clientSecret} onChange={(e) => setGoogleManualForm((f) => ({ ...f, clientSecret: e.target.value }))} />
+            </label>
+            <label className="adsgo-modal-field">
+              <span>Refresh Token (optional)</span>
+              <textarea rows={2} value={googleManualForm.refreshToken} onChange={(e) => setGoogleManualForm((f) => ({ ...f, refreshToken: e.target.value }))} />
+              <div className="field-hint">Without this, AdGo can't refresh the token once it expires (~1hr) — you'll need to reconnect.</div>
+            </label>
+          </>
+        )}
+        <button type="button" className="btn btn-primary adsgo-modal-submit" onClick={() => handleManualConnect(platform)} disabled={manualSubmitting}>
+          {manualSubmitting ? "Connecting..." : "Connect manually"}
+        </button>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="platform-connect">
+        <div className="campaigns-loading">
+          <div className="campaign-row-skeleton" />
+          <div className="campaign-row-skeleton" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="platform-connect">
-      <div className="platform-connect-tabs">
-        {PLATFORMS.map((p) => (
-          <button
-            key={p.key}
-            className={`platform-connect-tab ${active === p.key ? "active" : ""}`}
-            onClick={() => setActive(p.key)}
-          >
-            <p.Icon /> {p.label}
-          </button>
-        ))}
-      </div>
-
       {error && <p className="error">{error}</p>}
 
-      <div className="platform-connect-card">
-        {loading ? (
-          <div className="campaigns-loading">
-            <div className="campaign-row-skeleton" />
+      <div className="ad-account-cards-grid">
+        <section className="card ad-account-card">
+          <div className="ad-account-card-header">
+            <MetaInfinityIcon />
+            <h3>Meta Ads</h3>
+            <span className={`ad-account-status-pill ${metaConnected ? "connected" : "disconnected"}`}>
+              <span className="live-dot" /> {metaConnected ? "Connected" : "Not connected"}
+            </span>
           </div>
-        ) : !current.supported ? (
-          <div className="platform-connect-empty">
-            <div className="platform-connect-icon-badge">
-              <current.Icon />
-            </div>
-            <p>{current.label} Ads integration is coming soon.</p>
-          </div>
-        ) : isConnected ? (
-          <div className="platform-connect-empty">
-            <div className="platform-connect-icon-badge">
-              <current.Icon />
-            </div>
-            <p className="platform-connect-status">Connected</p>
 
-            <div className="platform-connect-details">
-              <div className="platform-connect-details-header">Ad Account Details</div>
-              {integration?.accountName && (
-                <div className="platform-connect-detail-row"><span>Account Name</span><span>{integration.accountName}</span></div>
-              )}
-              {integration?.accountId && (
-                <div className="platform-connect-detail-row"><span>Account ID</span><span>{integration.accountId}</span></div>
-              )}
-              {active === "meta" && Boolean(integration?.settings?.currency) && (
-                <div className="platform-connect-detail-row"><span>Currency</span><span>{String(integration!.settings.currency)}</span></div>
-              )}
-              {active === "meta" && Boolean(integration?.settings?.timezoneName) && (
-                <div className="platform-connect-detail-row"><span>Timezone</span><span>{String(integration!.settings.timezoneName)}</span></div>
-              )}
-              {active === "meta" && Boolean(integration?.settings?.accountStatus) && (
-                <div className="platform-connect-detail-row"><span>Status</span><span>{String(integration!.settings.accountStatus)}</span></div>
-              )}
-              {active === "meta" && Boolean(integration?.settings?.pageName) && (
-                <div className="platform-connect-detail-row"><span>Page</span><span>{String(integration!.settings.pageName)}</span></div>
-              )}
-              {integration?.connectedAt && (
-                <div className="platform-connect-detail-row"><span>Connected On</span><span>{new Date(integration.connectedAt).toLocaleString()}</span></div>
-              )}
-            </div>
-
-            <button className="platform-connect-btn danger" onClick={handleDisconnect}>
-              Disconnect
-            </button>
-          </div>
-        ) : (
-          <div className="platform-connect-empty">
-            <div className="platform-connect-icon-badge">
-              <current.Icon />
-            </div>
-            <p>Start by linking your {current.label} accounts.</p>
-
-            {(active === "meta" || active === "google") && (
-              <div className="platform-connect-manual-inline">
-                {manualError && <p className="error">{manualError}</p>}
-
-                {active === "meta" ? (
-                  <>
-                    <p className="muted-text">
-                      Paste tokens from the{" "}
-                      <a href="https://developers.facebook.com/tools/explorer" target="_blank" rel="noreferrer">
-                        Meta Graph API Explorer
-                      </a>
-                      .
-                    </p>
-                    <label className="adsgo-modal-field">
-                      <span>Access Token</span>
-                      <textarea
-                        rows={2}
-                        value={metaManualForm.accessToken}
-                        onChange={(e) => setMetaManualForm((f) => ({ ...f, accessToken: e.target.value }))}
-                      />
-                    </label>
-                    <label className="adsgo-modal-field">
-                      <span>Ad Account ID (e.g. act_123456)</span>
-                      <input
-                        type="text"
-                        value={metaManualForm.adAccountId}
-                        onChange={(e) => setMetaManualForm((f) => ({ ...f, adAccountId: e.target.value }))}
-                      />
-                    </label>
-                    <label className="adsgo-modal-field">
-                      <span>Page ID</span>
-                      <input
-                        type="text"
-                        value={metaManualForm.pageId}
-                        onChange={(e) => setMetaManualForm((f) => ({ ...f, pageId: e.target.value }))}
-                      />
-                    </label>
-                    <label className="adsgo-modal-field">
-                      <span>Page Access Token</span>
-                      <textarea
-                        rows={2}
-                        value={metaManualForm.pageAccessToken}
-                        onChange={(e) => setMetaManualForm((f) => ({ ...f, pageAccessToken: e.target.value }))}
-                      />
-                      <div className="field-hint">From Graph API Explorer → me/accounts → copy the page's access_token. Required for lead form capture.</div>
-                    </label>
-                  </>
-                ) : (
-                  <>
-                    <p className="muted-text">Paste credentials from the Google Ads API Center.</p>
-                    <label className="adsgo-modal-field">
-                      <span>Customer ID (e.g. 123-456-7890)</span>
-                      <input
-                        type="text"
-                        value={googleManualForm.customerId}
-                        onChange={(e) => setGoogleManualForm((f) => ({ ...f, customerId: e.target.value }))}
-                      />
-                    </label>
-                    <label className="adsgo-modal-field">
-                      <span>Developer Token</span>
-                      <input
-                        type="password"
-                        value={googleManualForm.developerToken}
-                        onChange={(e) => setGoogleManualForm((f) => ({ ...f, developerToken: e.target.value }))}
-                      />
-                    </label>
-                    <label className="adsgo-modal-field">
-                      <span>Access Token</span>
-                      <textarea
-                        rows={2}
-                        value={googleManualForm.accessToken}
-                        onChange={(e) => setGoogleManualForm((f) => ({ ...f, accessToken: e.target.value }))}
-                      />
-                    </label>
-                    <label className="adsgo-modal-field">
-                      <span>Client ID (optional)</span>
-                      <input
-                        type="text"
-                        value={googleManualForm.clientId}
-                        onChange={(e) => setGoogleManualForm((f) => ({ ...f, clientId: e.target.value }))}
-                      />
-                    </label>
-                    <label className="adsgo-modal-field">
-                      <span>Client Secret (optional)</span>
-                      <input
-                        type="password"
-                        value={googleManualForm.clientSecret}
-                        onChange={(e) => setGoogleManualForm((f) => ({ ...f, clientSecret: e.target.value }))}
-                      />
-                    </label>
-                    <label className="adsgo-modal-field">
-                      <span>Refresh Token (optional)</span>
-                      <textarea
-                        rows={2}
-                        value={googleManualForm.refreshToken}
-                        onChange={(e) => setGoogleManualForm((f) => ({ ...f, refreshToken: e.target.value }))}
-                      />
-                      <div className="field-hint">Without this, AdGo can't refresh the token once it expires (~1hr) — you'll need to reconnect.</div>
-                    </label>
-                  </>
-                )}
-
-                <button type="button" className="btn btn-primary adsgo-modal-submit" onClick={handleManualConnect} disabled={manualSubmitting}>
-                  {manualSubmitting ? "Connecting..." : "Connect manually"}
-                </button>
+          {metaConnected && metaIntegration ? (
+            <>
+              <div className="ad-account-card-details">
+                {Boolean(metaIntegration.settings?.businessName) && <DetailRow label="Business" value={String(metaIntegration.settings.businessName)} />}
+                {metaIntegration.accountName && <DetailRow label="Ad Account" value={metaIntegration.accountName} />}
+                {Boolean(metaIntegration.settings?.pageName) && <DetailRow label="Page" value={String(metaIntegration.settings.pageName)} />}
+                {Boolean(metaIntegration.settings?.instagramUsername) && <DetailRow label="Instagram" value={`@${String(metaIntegration.settings.instagramUsername)}`} />}
+                <DetailRow label="Last synced" value={timeAgo(metaIntegration.updatedAt)} />
               </div>
-            )}
+              <div className="ad-account-card-actions">
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => startOAuthConnect("meta")}>Reconnect</button>
+                <button type="button" className="platform-connect-btn danger" onClick={() => handleDisconnect("meta")}>Disconnect</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="muted-text">Connect your Meta Business account to launch and sync ads.</p>
+              <button type="button" className="btn btn-primary platform-connect-oauth-btn" onClick={() => startOAuthConnect("meta")}>
+                <MetaInfinityIcon /> Connect Meta
+              </button>
+              <button type="button" className="platform-connect-manual-toggle" onClick={() => toggleManualForm("meta")}>
+                {manualPlatform === "meta" ? "Hide manual connect" : "Have a token already? Connect manually instead"}
+              </button>
+              {manualPlatform === "meta" && renderManualForm("meta")}
+            </>
+          )}
+        </section>
+
+        <section className="card ad-account-card">
+          <div className="ad-account-card-header">
+            <GoogleIcon />
+            <h3>Google Ads</h3>
+            <span className={`ad-account-status-pill ${googleConnected ? "connected" : "disconnected"}`}>
+              <span className="live-dot" /> {googleConnected ? "Connected" : "Not connected"}
+            </span>
           </div>
-        )}
+
+          {googleConnected && googleIntegration ? (
+            <>
+              <div className="ad-account-card-details">
+                {googleIntegration.accountId && <DetailRow label="Customer" value={formatGoogleCustomerId(googleIntegration.accountId)} />}
+                <DetailRow label="Conversion Actions" value={conversionActionCount ?? "…"} />
+                <DetailRow label="Last synced" value={timeAgo(googleIntegration.updatedAt)} />
+              </div>
+              <div className="ad-account-card-actions">
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => startOAuthConnect("google")}>Reconnect</button>
+                <button type="button" className="platform-connect-btn danger" onClick={() => handleDisconnect("google")}>Disconnect</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="muted-text">Connect your Google Ads account to launch and sync campaigns.</p>
+              <button type="button" className="btn btn-primary platform-connect-oauth-btn" onClick={() => startOAuthConnect("google")}>
+                <GoogleIcon /> Connect Google
+              </button>
+              <button type="button" className="platform-connect-manual-toggle" onClick={() => toggleManualForm("google")}>
+                {manualPlatform === "google" ? "Hide manual connect" : "Have a token already? Connect manually instead"}
+              </button>
+              {manualPlatform === "google" && renderManualForm("google")}
+            </>
+          )}
+        </section>
+      </div>
+
+      <div className="ad-account-coming-soon-row">
+        <span className="muted-text">More platforms:</span>
+        <span className="ad-account-coming-soon-chip"><TikTokIcon /> TikTok — coming soon</span>
+        <span className="ad-account-coming-soon-chip"><BingIcon /> Bing — coming soon</span>
       </div>
     </div>
   );

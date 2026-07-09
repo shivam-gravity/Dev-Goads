@@ -1,7 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { openai, runStructured } from "../openaiClient.js";
 import type { AdCopyVariant, CampaignSuggestion, NormalizedProduct } from "../types.js";
 
-const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 const NETWORKS = ["meta", "google", "tiktok"] as const;
 
 const CAMPAIGN_TOOL = {
@@ -33,19 +32,17 @@ function fallbackCampaignSuggestion(): CampaignSuggestion {
     recommendedNetworks: ["meta"],
     budgetSplit: { meta: 1 },
     audiences: ["General interest shoppers"],
-    rationale: "Default single-network suggestion — set ANTHROPIC_API_KEY for tailored recommendations.",
+    rationale: "Default single-network suggestion — set OPENAI_API_KEY for tailored recommendations.",
   };
 }
 
-/** Falls back to a generic single-network suggestion if ANTHROPIC_API_KEY is unset. */
+/** Falls back to a generic single-network suggestion if OPENAI_API_KEY is unset. */
 export async function suggestCampaign(product: NormalizedProduct, adCopy: AdCopyVariant[]): Promise<CampaignSuggestion> {
-  if (!anthropic) return fallbackCampaignSuggestion();
+  if (!openai) return fallbackCampaignSuggestion();
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1024,
-    tools: [CAMPAIGN_TOOL],
-    tool_choice: { type: "tool", name: "emit_campaign_suggestion" },
+  const result = await runStructured<CampaignSuggestion>({
+    maxTokens: 1024,
+    tool: CAMPAIGN_TOOL,
     messages: [
       {
         role: "user",
@@ -59,8 +56,6 @@ ${JSON.stringify(adCopy, null, 2)}`,
       },
     ],
   });
-
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) throw new Error("Campaign suggestion: model did not return structured output");
-  return toolUse.input as CampaignSuggestion;
+  if (!result) throw new Error("Campaign suggestion: model did not return structured output");
+  return result;
 }

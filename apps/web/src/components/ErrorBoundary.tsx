@@ -51,7 +51,6 @@ export default class ErrorBoundary extends Component<Props, State> {
             padding: "32px",
             maxWidth: "500px",
             width: "100%",
-            boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
             textAlign: "center"
           }}>
             <span style={{ fontSize: "48px", display: "block" }}>⚠️</span>

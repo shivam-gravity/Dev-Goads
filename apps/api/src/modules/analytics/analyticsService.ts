@@ -1,10 +1,8 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { openai, runStructured } from "../../infra/openaiClient.js";
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
-import { normalizePerformance, getRawMetrics } from "../pipeline/performancePipeline.js";
+import { normalizePerformance, getRawMetrics, ESTIMATED_REVENUE_CENTS_PER_CONVERSION } from "../pipeline/performancePipeline.js";
 import { getBusiness } from "../business/businessService.js";
 import type { AnalyticsSummary, TrendPoint, AudienceSuggestion, AdNetwork } from "../../types/index.js";
-
-const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
 export async function getAnalyticsSummary(businessId: string, period: "all" | "month" | "week" = "all"): Promise<AnalyticsSummary> {
   const campaigns = await listCampaignsForBusiness(businessId);
@@ -44,8 +42,7 @@ export async function getAnalyticsSummary(businessId: string, period: "all" | "m
 
   const avgCtr = totalImpressions > 0 ? totalClicks / totalImpressions : 0;
   const avgCpc = totalClicks > 0 ? totalSpendCents / totalClicks : null;
-  // ROAS: assume revenue = conversions * avg order value of $50 (placeholder ratio)
-  const roas = totalSpendCents > 0 && totalConversions > 0 ? (totalConversions * 5000) / totalSpendCents : null;
+  const roas = totalSpendCents > 0 && totalConversions > 0 ? (totalConversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / totalSpendCents : null;
 
   return {
     businessId,
@@ -180,13 +177,11 @@ export async function getAudienceSuggestions(businessId: string): Promise<Audien
   const business = await getBusiness(businessId);
   if (!business) throw new Error("Business not found");
 
-  if (!anthropic) return fallbackAudienceSuggestions(business.name, business.industry);
+  if (!openai) return fallbackAudienceSuggestions(business.name, business.industry);
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 2048,
-    tools: [AUDIENCE_SUGGESTION_TOOL],
-    tool_choice: { type: "tool", name: "emit_audience_suggestions" },
+  const result = await runStructured<{ suggestions: AudienceSuggestion[] }>({
+    maxTokens: 2048,
+    tool: AUDIENCE_SUGGESTION_TOOL,
     messages: [
       {
         role: "user",
@@ -200,10 +195,6 @@ Include a mix of cold, warm, and retargeting audiences. Make estimatedReach real
       },
     ],
   });
-
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) return fallbackAudienceSuggestions(business.name, business.industry);
-
-  const result = toolUse.input as { suggestions: AudienceSuggestion[] };
+  if (!result) return fallbackAudienceSuggestions(business.name, business.industry);
   return result.suggestions;
 }

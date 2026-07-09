@@ -28,3 +28,9 @@ export function sendError(res: Response, err: unknown, status: number, fallback:
   }
   res.status(status).json({ error: err instanceof Error ? err.message : fallback });
 }
+
+/** The orchestrator throws a plain `Error("X not found")` for missing campaigns/variants — this
+ * lets callers report 404 instead of always falling back to the generic `status` they pass sendError. */
+export function isNotFoundError(err: unknown): boolean {
+  return err instanceof Error && /not found/i.test(err.message);
+}

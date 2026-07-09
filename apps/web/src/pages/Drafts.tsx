@@ -3,10 +3,50 @@ import { api, Draft } from "../api/client.js";
 
 const PLATFORMS: { key: string; label: string; icon: string; enabled: boolean }[] = [
   { key: "meta", label: "Meta", icon: "meta", enabled: true },
-  { key: "google", label: "Google", icon: "google", enabled: false },
+  { key: "google", label: "Google", icon: "google", enabled: true },
   { key: "tiktok", label: "Tiktok", icon: "tiktok", enabled: false },
   { key: "bing", label: "Bing", icon: "bing", enabled: false },
 ];
+
+interface DraftVariant { network?: string; audienceName?: string }
+
+/** Draft.data is duck-typed per producer — the CampaignBuilder save-draft flow writes
+ * dailyBudgetCents/variants/creativeAssets, while older demo-seeded drafts used a
+ * looser {budget, platforms, targeting} shape. These helpers read whichever fields
+ * are actually present instead of assuming one shape. */
+function draftNetworks(data: Record<string, unknown>): string[] {
+  const variants = Array.isArray(data.variants) ? (data.variants as DraftVariant[]) : [];
+  if (variants.length) return [...new Set(variants.map((v) => v.network).filter((n): n is string => Boolean(n)))];
+  if (Array.isArray(data.platforms)) return data.platforms as string[];
+  return ["meta"];
+}
+
+function draftBudget(data: Record<string, unknown>): string {
+  if (typeof data.dailyBudgetCents === "number") return `$${(data.dailyBudgetCents / 100).toFixed(2)}`;
+  if (typeof data.dailyBudget === "number") return `$${data.dailyBudget}`;
+  if (typeof data.budget === "number") return `$${data.budget}`;
+  return "—";
+}
+
+function draftAudience(data: Record<string, unknown>): string {
+  const variants = Array.isArray(data.variants) ? (data.variants as DraftVariant[]) : [];
+  const names = [...new Set(variants.map((v) => v.audienceName).filter((n): n is string => Boolean(n)))];
+  if (names.length) return names.join(", ");
+  if (typeof data.audience === "string") return data.audience;
+  return "—";
+}
+
+function draftCreativeCount(data: Record<string, unknown>): number | "—" {
+  if (Array.isArray(data.creativeAssets)) return data.creativeAssets.length;
+  if (Array.isArray(data.creatives)) return data.creatives.length;
+  return "—";
+}
+
+function draftProduct(data: Record<string, unknown>, fallbackName: string): string {
+  if (typeof data.product === "string") return data.product;
+  if (typeof data.goal === "string") return data.goal;
+  return fallbackName;
+}
 
 const ICON_ITEMS = [
   { key: "products", label: "Products", icon: "cart", cls: "dap-icon-products" },
@@ -219,7 +259,7 @@ export default function Drafts({ businessId }: { businessId: string }) {
     }
   }
 
-  const unpublished = drafts.filter(d => d.status !== "published");
+  const unpublished = drafts.filter(d => d.status !== "published" && draftNetworks((d.data ?? {}) as Record<string, unknown>).includes(platform));
   const recommendationsCount = drafts.filter(d => d.score !== undefined && d.status !== "published").length;
   const publishedCount = drafts.filter(d => d.status === "published").length;
 
@@ -349,10 +389,10 @@ export default function Drafts({ businessId }: { businessId: string }) {
                       <tr key={d.id}>
                         <td>{i + 1}</td>
                         <td>{d.name}</td>
-                        <td>{typeof data.dailyBudget === "number" ? `$${data.dailyBudget}` : "—"}</td>
-                        <td>{typeof data.audience === "string" ? data.audience : "—"}</td>
-                        <td>{Array.isArray(data.creatives) ? data.creatives.length : "—"}</td>
-                        <td>{typeof data.product === "string" ? data.product : "—"}</td>
+                        <td>{draftBudget(data)}</td>
+                        <td>{draftAudience(data)}</td>
+                        <td>{draftCreativeCount(data)}</td>
+                        <td>{draftProduct(data, d.name)}</td>
                         <td>{new Date(d.updatedAt).toLocaleString()}</td>
                         <td className="dap-row-actions">
                           <button type="button" className="dap-row-btn" onClick={() => handlePublish(d.id)}>Publish</button>

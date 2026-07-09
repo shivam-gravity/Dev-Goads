@@ -6,7 +6,10 @@ const MAX_EXCERPT_LENGTH = 6000;
 const FETCH_TIMEOUT_MS = 8000;
 const SCREENSHOT_TIMEOUT_MS = 12000; // Playwright cold-starting a browser is slower than a plain fetch
 const MAX_IMAGES = 8;
-const MAX_CRAWL_PAGES = 3; // the entry page + up to 2 same-site links worth following
+const SMART_CRAWL_CAP = 15; // the entry page + up to 14 same-site pages worth following
+const DISCOVERY_CAP = 200; // ceiling on how many URLs we bother scoring, not how many we fetch
+const CRAWL_TIME_BUDGET_MS = 45_000; // wall-clock budget across the whole multi-page crawl loop
+const MAX_SITEMAP_CHILDREN = 3; // sitemap index files can point at dozens of child sitemaps; only follow the first few
 
 const SCRAPER_SERVICE_URL = process.env.SCRAPER_SERVICE_URL ?? "http://localhost:4003";
 const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY;
@@ -118,9 +121,13 @@ function extractImages($: cheerio.CheerioAPI, pageUrl: string): string[] {
   return [...new Set(found)].slice(0, MAX_IMAGES);
 }
 
-function extractFollowLinks($: cheerio.CheerioAPI, pageUrl: string): string[] {
+/** Same-origin links found in a page's own HTML, deduped by pathname — used both as the
+ * BFS-fallback discovery set (when there's no sitemap) and as one scoring input alongside
+ * sitemap priority. Unlike the old extractFollowLinks, this does NOT filter by FOLLOW_HINTS —
+ * that filtering now happens once, centrally, in scoreAndSelect. */
+function extractSameOriginLinks($: cheerio.CheerioAPI, pageUrl: string): Map<string, string> {
   const base = new URL(pageUrl);
-  const links = new Map<string, number>(); // url -> score, dedup by pathname
+  const links = new Map<string, string>(); // pathname key -> full url, dedup by pathname
 
   $("a[href]").each((_, el) => {
     const href = $(el).attr("href");
@@ -134,22 +141,139 @@ function extractFollowLinks($: cheerio.CheerioAPI, pageUrl: string): string[] {
     if (resolved.origin !== base.origin) return;
     if (resolved.pathname === base.pathname || resolved.pathname === "/") return;
 
-    const label = `${resolved.pathname} ${$(el).text()}`;
-    if (!FOLLOW_HINTS.test(label)) return;
-
     const key = resolved.origin + resolved.pathname;
-    links.set(key, (links.get(key) ?? 0) + 1);
+    if (!links.has(key)) links.set(key, resolved.toString());
   });
 
-  return [...links.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, MAX_CRAWL_PAGES - 1)
-    .map(([url]) => url);
+  return links;
+}
+
+async function fetchText(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<string | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 (compatible; AdGoOnboardingBot/1.0)" } });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+interface DiscoveredPage {
+  url: string;
+  /** Higher = more likely to be worth crawling. Sitemap <priority> (0-1) when available, else a hint-based guess. */
+  score: number;
+}
+
+function extractSitemapEntries($: cheerio.CheerioAPI): DiscoveredPage[] {
+  const entries: DiscoveredPage[] = [];
+  $("url").each((_, el) => {
+    const loc = $(el).find("loc").first().text().trim();
+    if (!loc) return;
+    const priority = parseFloat($(el).find("priority").first().text().trim());
+    entries.push({ url: loc, score: Number.isFinite(priority) ? priority : 0.5 });
+  });
+  return entries;
 }
 
 /**
- * Crawls a business's promotional page (and a couple of same-site pages linked from it —
- * e.g. product/about/shop) so the strategy engine has more than a single page to reason about.
+ * Tries sitemap.xml (then robots.txt's `Sitemap:` directive as a fallback location) to get an
+ * authoritative page list for the site — this is what lets pagesDiscovered reflect the site's
+ * real size instead of just "links visible on the homepage." Returns [] (never throws) if no
+ * sitemap exists or it fails to parse, so the caller falls back to homepage-link discovery.
+ */
+async function discoverSitemapPages(origin: string): Promise<DiscoveredPage[]> {
+  let xml = await fetchText(`${origin}/sitemap.xml`);
+  if (!xml) {
+    const robots = await fetchText(`${origin}/robots.txt`);
+    const match = robots?.match(/^Sitemap:\s*(\S+)/im);
+    if (match) xml = await fetchText(match[1]);
+  }
+  if (!xml) return [];
+
+  const $ = cheerio.load(xml, { xmlMode: true });
+
+  // Sitemap index files point at child sitemaps rather than listing pages directly — follow
+  // a handful of them and merge, rather than trying to fetch every child (some sites shard
+  // sitemaps by the thousands).
+  const childSitemapUrls = $("sitemapindex > sitemap > loc")
+    .map((_, el) => $(el).text().trim())
+    .get()
+    .slice(0, MAX_SITEMAP_CHILDREN);
+
+  if (childSitemapUrls.length > 0) {
+    const merged: DiscoveredPage[] = [];
+    for (const childUrl of childSitemapUrls) {
+      const childXml = await fetchText(childUrl);
+      if (!childXml) continue;
+      merged.push(...extractSitemapEntries(cheerio.load(childXml, { xmlMode: true })));
+      if (merged.length >= DISCOVERY_CAP) break;
+    }
+    return merged.slice(0, DISCOVERY_CAP);
+  }
+
+  return extractSitemapEntries($).slice(0, DISCOVERY_CAP);
+}
+
+/**
+ * Builds the discovered-page set (sitemap first, homepage links as fallback) and picks the
+ * top SMART_CRAWL_CAP - 1 to actually crawl alongside the entry page. Scoring blends sitemap
+ * priority (when present) with the existing FOLLOW_HINTS path/text heuristic, so a page that's
+ * both high-priority in the sitemap AND looks like a product/about/pricing page sorts first.
+ */
+async function discoverAndSelectPages(entryUrl: string, entry$: cheerio.CheerioAPI): Promise<{ toCrawl: string[]; totalDiscovered: number }> {
+  const base = new URL(entryUrl);
+  const homepageLinks = extractSameOriginLinks(entry$, entryUrl);
+
+  const sitemapPages = await discoverSitemapPages(base.origin);
+  const bySitemap = sitemapPages.length > 0;
+
+  const candidates = new Map<string, number>(); // full url -> score
+  if (bySitemap) {
+    for (const { url, score } of sitemapPages) {
+      try {
+        const u = new URL(url);
+        if (u.origin !== base.origin || u.pathname === base.pathname || u.pathname === "/") continue;
+        candidates.set(u.toString(), score);
+      } catch {
+        // malformed sitemap entry — skip it
+      }
+    }
+  } else {
+    for (const url of homepageLinks.values()) candidates.set(url, 0.5);
+  }
+
+  const totalDiscovered = candidates.size;
+
+  const scored = [...candidates.entries()].map(([url, baseScore]) => {
+    let u: URL;
+    try {
+      u = new URL(url);
+    } catch {
+      return { url, score: -1 };
+    }
+    const hintBonus = FOLLOW_HINTS.test(u.pathname) ? 1 : 0;
+    return { url, score: baseScore + hintBonus };
+  });
+
+  const toCrawl = scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, SMART_CRAWL_CAP - 1)
+    .map((c) => c.url);
+
+  return { toCrawl, totalDiscovered };
+}
+
+/**
+ * Crawls a business's promotional site — the entry page plus up to SMART_CRAWL_CAP-1 more
+ * same-site pages, chosen via sitemap.xml (falling back to the homepage's own links when no
+ * sitemap exists) — so the strategy engine has a representative slice of the whole site to
+ * reason about, not just the homepage. Bounded by both SMART_CRAWL_CAP and
+ * CRAWL_TIME_BUDGET_MS so a large site can't turn onboarding into a multi-minute wait; whatever
+ * pages were fetched before the budget ran out are still used.
  */
 export async function scrapeUrl(input: string): Promise<ScrapedSite> {
   const url = normalizeUrl(input);
@@ -167,6 +291,7 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
   // below rather than after it, since the two are independent and Playwright cold-start
   // is the slower of the two — no reason to pay for them sequentially.
   const screenshotPromise = captureScreenshot(url);
+  const crawlDeadline = Date.now() + CRAWL_TIME_BUDGET_MS;
 
   const entry = await fetchPage(url);
   const entryText = extractText(entry.$);
@@ -175,8 +300,9 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
 
   const excerptParts = [entryText.title, entryText.description, ...entryText.headings, entryText.bodyText];
 
-  const followLinks = extractFollowLinks(entry.$, url);
-  for (const link of followLinks) {
+  const { toCrawl, totalDiscovered } = await discoverAndSelectPages(url, entry.$);
+  for (const link of toCrawl) {
+    if (Date.now() >= crawlDeadline) break;
     try {
       const page = await fetchPage(link);
       const text = extractText(page.$);
@@ -190,7 +316,7 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
 
   const title = entryText.title || parsed.hostname;
   const description = entryText.description;
-  const excerpt = excerptParts.filter(Boolean).join("\n").slice(0, MAX_EXCERPT_LENGTH * MAX_CRAWL_PAGES);
+  const excerpt = excerptParts.filter(Boolean).join("\n").slice(0, MAX_EXCERPT_LENGTH * SMART_CRAWL_CAP);
 
   if (!excerpt) {
     throw new Error("Couldn't extract any readable text from that page");
@@ -205,6 +331,7 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
     excerpt,
     images: [...new Set(images)].slice(0, MAX_IMAGES),
     crawledPages,
+    pagesDiscovered: Math.max(totalDiscovered + 1, crawledPages.length), // +1 for the entry page itself, which discovery doesn't count
     screenshot,
   };
 }

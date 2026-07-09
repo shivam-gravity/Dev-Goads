@@ -71,17 +71,50 @@ export interface Workspace { id: string; name: string; ownerId: string; plan: "s
 export interface WorkspaceMember { id: string; workspaceId: string; userId: string; role: "owner" | "admin" | "member" | "viewer"; invitedAt: string; joinedAt?: string; user?: { name: string; email: string; avatar?: string }; }
 export interface AuthResult { user: User; token: string; workspaceId?: string; }
 export interface BusinessProfile { id: string; name: string; website?: string; industry: string; monthlyBudgetCents: number; goals: string[]; targetAudience?: string; brandName?: string; logoUrls?: string[]; }
-export interface AdCreative { headline: string; body: string; callToAction: string; }
+export interface AdCreative { headline: string; body: string; callToAction: string; imageUrl?: string; videoUrl?: string; headlines?: string[]; primaryTexts?: string[]; }
 export interface AdStrategy { id: string; businessId: string; summary: string; recommendedNetworks: ("meta" | "google")[]; budgetSplit: Record<string, number>; audiences: string[]; creatives: AdCreative[]; createdAt: string; }
-export interface CampaignVariant { id: string; creative: AdCreative; network: "meta" | "google"; externalId?: string; status: string; }
-export interface Campaign { id: string; businessId: string; strategyId: string; name: string; status: string; networks: ("meta" | "google")[]; dailyBudgetCents: number; variants: CampaignVariant[]; createdAt: string; updatedAt: string; }
-export interface NormalizedPerformance { campaignId: string; variantId: string; network: "meta" | "google"; impressions: number; clicks: number; conversions: number; spendCents: number; ctr: number; cpaCents: number | null; conversionRate: number; }
+export interface CampaignVariant { id: string; creative: AdCreative; network: "meta" | "google" | "tiktok"; externalId?: string; status: string; audienceName?: string; landingPageUrl?: string; adSetExternalId?: string; }
+export interface CreativeAssetRef { id: string; url: string; type: "image" | "video"; source: "ai" | "upload"; }
+export interface Campaign {
+  id: string; businessId: string; workspaceId?: string; strategyId: string; name: string; status: string;
+  networks: ("meta" | "google")[]; dailyBudgetCents: number; variants: CampaignVariant[];
+  createdAt: string; updatedAt: string;
+  conversionEvent?: string; finalUrl?: string; startDate?: string; endDate?: string;
+  locations?: string[]; advantagePlus?: boolean;
+  metaAdAccountId?: string; pageId?: string; instagramAccountId?: string; pixelId?: string;
+  googleCustomerId?: string; googleConversionActionId?: string;
+  creativeAssets?: CreativeAssetRef[];
+  externalIds?: { meta?: string; google?: string };
+}
+export interface CampaignBuilderPatch {
+  name?: string; dailyBudgetCents?: number; conversionEvent?: string; finalUrl?: string;
+  startDate?: string; endDate?: string; locations?: string[]; advantagePlus?: boolean;
+  metaAdAccountId?: string; pageId?: string; instagramAccountId?: string; pixelId?: string;
+  googleCustomerId?: string; googleConversionActionId?: string;
+  variants?: CampaignVariant[]; creativeAssets?: CreativeAssetRef[];
+}
+export interface MetaAdAccount { id: string; name: string; currency: string; timezoneName?: string; accountStatus?: string; }
+export interface MetaPage { id: string; name: string; }
+export interface MetaInstagramAccount { id: string; username: string; }
+export interface MetaPixel { id: string; name: string; }
+export interface GoogleCustomer { id: string; name: string; }
+export interface GoogleConversionAction { id: string; name: string; category: string; }
+export interface NormalizedPerformance {
+  campaignId: string; variantId: string; network: "meta" | "google";
+  impressions: number; reach: number; clicks: number; conversions: number; spendCents: number;
+  ctr: number; cpaCents: number | null; cpmCents: number | null; cpcCents: number | null; roas: number | null; conversionRate: number;
+}
+export interface LiveInsights {
+  campaignId: string; isLive: boolean;
+  impressions: number; reach: number; clicks: number; conversions: number; spendCents: number;
+  ctr: number; cpcCents: number | null; cpmCents: number | null; roas: number | null;
+}
 export interface OptimizationDecision { campaignId: string; chosenVariantId: string; action: string; reason: string; decidedAt: string; }
 export interface Invoice { id: string; businessId: string; periodStart: string; periodEnd: string; adSpendCents: number; platformFeeCents: number; totalCents: number; createdAt: string; }
-export interface ScrapedSite { url: string; title: string; description: string; excerpt: string; images: string[]; crawledPages: string[]; screenshot?: string; }
+export interface ScrapedSite { url: string; title: string; description: string; excerpt: string; images: string[]; crawledPages: string[]; pagesDiscovered: number; screenshot?: string; }
 export interface ProductAnalysis {
   productName: string; category: string; summary: string; valueProposition: string; keyFeatures: string[];
-  businessType?: string; pricingModel?: string; pricingRange?: string; dataSource?: string;
+  businessType?: string; useCases?: { title: string; description: string }[]; pricingModel?: string; pricingRange?: string; dataSource?: string;
 }
 export interface AudienceAnalysis {
   primaryAudience: string; segments: { name: string; description: string }[]; painPoints: string[]; buyingMotivations: string[];
@@ -93,15 +126,27 @@ export interface DeepResearchResult { site: ScrapedSite; product: ProductAnalysi
 export interface Citation { url: string; title: string; }
 export interface DeepResearchBlock<T = unknown> { key: string; label: string; citations: Citation[]; data: T; }
 export interface CompetitorBudgetAnalysis { competitors: string[]; competitionIntensity: string; differentiators: string[]; budgetReasoning: string[]; recommendedDailyBudgetCents: number; dataSource: string; }
-export interface MarketLocationAnalysis { recommendedRegion: string; alternativeRegions: string[]; marketTrends: string; competitionLevel: string; recommendedPlatform: "meta" | "google" | "tiktok"; placementRationale: string; dataSource: string; }
+export interface MarketLocationAnalysis { recommendedRegion: string; alternativeRegions: string[]; marketTrends: string; keyDrivers?: string[]; competitionLevel: string; recommendedPlatform: "meta" | "google" | "tiktok"; placementRationale: string; dataSource: string; }
 export interface AudiencePersona { name: string; ageRange: string; genderSplit: string; details: string; interests: string[]; }
 export interface ResearchSessionResult { site: ScrapedSite; product: ProductAnalysis; audience: AudienceAnalysis; competitorBudget: CompetitorBudgetAnalysis; marketLocation: MarketLocationAnalysis; personas: AudiencePersona[]; }
+export interface CampaignSuggestion {
+  id: string;
+  title: string;
+  description: string;
+  hashtags: string[];
+  platform: "meta" | "google" | "tiktok";
+  headline: string;
+  body: string;
+  callToAction: string;
+  imagePrompt: string;
+}
 export interface ResearchSession {
   id: string; workspaceId: string; businessId?: string; url: string;
   status: "queued" | "running" | "done" | "failed";
   currentStep?: string;
   blocks: DeepResearchBlock[];
   personas?: AudiencePersona[];
+  campaignSuggestions?: CampaignSuggestion[];
   result?: ResearchSessionResult;
   error?: string;
   searchCount: number;
@@ -117,7 +162,7 @@ export interface StrategistChatMessage { role: "user" | "assistant"; content: st
 
 export interface Notification { id: string; workspaceId: string; type: string; title: string; message: string; read: boolean; severity: "info" | "warning" | "success" | "error"; actionUrl?: string; createdAt: string; }
 export interface Asset { id: string; workspaceId: string; name: string; type: "image" | "video" | "logo" | "font" | "template"; url: string; thumbnailUrl?: string; size: number; mimeType: string; tags: string[]; usageCount: number; width?: number; height?: number; createdAt: string; }
-export interface Insight { id: string; workspaceId: string; type: "anomaly" | "recommendation" | "trend" | "opportunity"; title: string; description: string; metric?: string; change?: number; severity: "low" | "medium" | "high"; actionLabel?: string; actionUrl?: string; dismissed: boolean; createdAt: string; }
+export interface Insight { id: string; workspaceId: string; type: "anomaly" | "recommendation" | "trend" | "opportunity"; category: "budget" | "audience" | "creative" | "placement"; title: string; description: string; metric?: string; change?: number; severity: "low" | "medium" | "high"; actionLabel?: string; actionUrl?: string; dismissed: boolean; createdAt: string; }
 export interface Integration { id: string; workspaceId: string; platform: "meta" | "google" | "tiktok" | "shopify" | "pixel"; status: "connected" | "disconnected" | "error" | "pending"; accountName?: string; accountId?: string; permissions: string[]; settings: Record<string, unknown>; connectedAt?: string; errorMessage?: string; updatedAt: string; }
 export interface SavedAudience { id: string; workspaceId: string; name: string; ageMin: number; ageMax: number; gender: "all" | "male" | "female"; locations: string[]; interests: string[]; exclusions: string[]; estimatedReach?: string; createdAt: string; }
 export interface ReachEstimate { usersLowerBound: number; usersUpperBound: number; source: "meta" | "heuristic"; }
@@ -139,6 +184,7 @@ export interface CreativeInsightItem { id: string; headline: string; body: strin
 export interface AdInsightsResponse {
   network: AdInsightNetwork;
   isDemo: boolean;
+  totals: { spendCents: number; impressions: number; clicks: number; conversions: number; cpaCents: number | null; roas: number | null };
   audience: { distribution: DistributionSlice[]; top: AudienceInsightItem[] };
   pages: { distribution: DistributionSlice[]; top: PageInsightItem[] };
   creative: { scatter: { id: string; ctr: number; cpaCents: number }[]; topAds: CreativeInsightItem[] };
@@ -178,6 +224,8 @@ export const api = {
   createAsset: (workspaceId: string, input: Omit<Asset, "id" | "workspaceId" | "createdAt" | "usageCount">) =>
     request<Asset>(`/workspaces/${workspaceId}/assets`, { method: "POST", body: JSON.stringify(input) }),
   deleteAsset: (id: string) => request<void>(`/assets/${id}`, { method: "DELETE" }),
+  uploadAsset: (workspaceId: string, input: { name: string; type: Asset["type"]; mimeType: string; dataBase64: string; tags?: string[]; width?: number; height?: number }) =>
+    request<Asset>(`/workspaces/${workspaceId}/assets/upload`, { method: "POST", body: JSON.stringify(input) }),
   updateAssetTags: (id: string, tags: string[]) =>
     request<Asset>(`/assets/${id}/tags`, { method: "PATCH", body: JSON.stringify({ tags }) }),
 
@@ -204,6 +252,16 @@ export const api = {
   listProductCatalog: (workspaceId: string, source: ProductCatalogSource | "all") =>
     request<CatalogSourceResult[]>(`/workspaces/${workspaceId}/products?source=${source}`),
 
+  // Meta account/page/Instagram/pixel selectors for the campaign builder — full lists,
+  // distinct from listIntegrations' single workspace-level connection.
+  listMetaAdAccounts: (workspaceId: string) => request<MetaAdAccount[]>(`/workspaces/${workspaceId}/integrations/meta/ad-accounts`),
+  listMetaPages: (workspaceId: string) => request<MetaPage[]>(`/workspaces/${workspaceId}/integrations/meta/pages`),
+  listMetaInstagramAccounts: (workspaceId: string, pageId: string) =>
+    request<MetaInstagramAccount[]>(`/workspaces/${workspaceId}/integrations/meta/pages/${pageId}/instagram-accounts`),
+  listMetaPixels: (workspaceId: string) => request<MetaPixel[]>(`/workspaces/${workspaceId}/integrations/meta/pixels`),
+  listGoogleCustomers: (workspaceId: string) => request<GoogleCustomer[]>(`/workspaces/${workspaceId}/integrations/google/customers`),
+  listGoogleConversionActions: (workspaceId: string) => request<GoogleConversionAction[]>(`/workspaces/${workspaceId}/integrations/google/conversion-actions`),
+
   // Saved audiences
   listAudiences: (workspaceId: string) => request<SavedAudience[]>(`/workspaces/${workspaceId}/audiences`),
   createAudience: (workspaceId: string, input: Omit<SavedAudience, "id" | "workspaceId" | "createdAt" | "estimatedReach">) =>
@@ -211,6 +269,8 @@ export const api = {
   deleteAudience: (id: string) => request<void>(`/audiences/${id}`, { method: "DELETE" }),
   getReachEstimate: (workspaceId: string, audienceId: string) =>
     request<ReachEstimate>(`/workspaces/${workspaceId}/audiences/${audienceId}/reach-estimate`, { method: "POST" }),
+  getEphemeralReachEstimate: (workspaceId: string, input: { locations: string[]; interests?: string[]; ageMin?: number; ageMax?: number; gender?: "all" | "male" | "female" }) =>
+    request<ReachEstimate>(`/workspaces/${workspaceId}/reach-estimate`, { method: "POST", body: JSON.stringify(input) }),
 
   // AI creative generation
   createGenerationJob: (workspaceId: string, input: GenerationJobInput) =>
@@ -245,8 +305,8 @@ export const api = {
     request<AudienceAnalysis>("/onboarding/analyze-audience", { method: "POST", body: JSON.stringify({ site, product }) }),
   deepResearch: (url: string) =>
     request<DeepResearchResult>("/onboarding/deep-research", { method: "POST", body: JSON.stringify({ url }) }),
-  createResearchSession: (workspaceId: string, url: string, businessId?: string) =>
-    request<ResearchSession>(`/workspaces/${workspaceId}/research-sessions`, { method: "POST", body: JSON.stringify({ url, businessId }) }),
+  createResearchSession: (workspaceId: string, url: string, businessId?: string, force?: boolean) =>
+    request<ResearchSession>(`/workspaces/${workspaceId}/research-sessions${force ? "?force=true" : ""}`, { method: "POST", body: JSON.stringify({ url, businessId }) }),
   getResearchSession: (id: string) => request<ResearchSession>(`/research-sessions/${id}`),
 
   // Business
@@ -266,9 +326,11 @@ export const api = {
   // Campaigns
   createCampaign: (input: { strategyId: string; name: string; dailyBudgetCents: number }) =>
     request<Campaign>("/campaigns", { method: "POST", body: JSON.stringify(input) }),
+  createCampaignFromSuggestions: (researchSessionId: string, businessId: string, name: string, dailyBudgetCents: number) =>
+    request<Campaign>("/campaigns/from-suggestions", { method: "POST", body: JSON.stringify({ researchSessionId, businessId, name, dailyBudgetCents }) }),
   listCampaigns: (businessId: string) => request<Campaign[]>(`/businesses/${businessId}/campaigns`),
   getCampaign: (id: string) => request<Campaign>(`/campaigns/${id}`),
-  updateCampaign: (id: string, patch: { name?: string; dailyBudgetCents?: number }) =>
+  updateCampaign: (id: string, patch: CampaignBuilderPatch) =>
     request<Campaign>(`/campaigns/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   launchCampaign: (id: string, workspaceId: string = localStorage.getItem("adgo_workspace_id") ?? "demo") =>
     request<Campaign>(`/campaigns/${id}/launch`, { method: "POST", body: JSON.stringify({ workspaceId }) }),
@@ -280,6 +342,7 @@ export const api = {
     request<Campaign>(`/campaigns/${campaignId}/apply-creative-media`, { method: "POST", body: JSON.stringify(media) }),
   ingestMetrics: (id: string) => request<unknown[]>(`/campaigns/${id}/ingest`, { method: "POST" }),
   getPerformance: (id: string) => request<NormalizedPerformance[]>(`/campaigns/${id}/performance`),
+  getLiveInsights: (id: string) => request<LiveInsights>(`/campaigns/${id}/live-insights`),
   getCampaignTrend: (id: string) => request<TrendPoint[]>(`/campaigns/${id}/trend`),
   optimize: (id: string) => request<OptimizationDecision[]>(`/campaigns/${id}/optimize`, { method: "POST" }),
 

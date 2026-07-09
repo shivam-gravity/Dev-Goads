@@ -37,6 +37,11 @@ model Workspace {
   timezone  String?           @default("UTC")
   createdAt DateTime          @default(now())
   members   WorkspaceMember[]
+  // Stage E: outbound CRM webhook config. Kept off the general Workspace read path in
+  // workspaceService.ts (see crmWebhookService.ts) so the secret never rides along with
+  // normal workspace-profile reads, the same way OAuth tokens stay out of Integration's.
+  crmWebhookUrl    String?
+  crmWebhookSecret String?
 
   @@index([ownerId])
   @@map("workspaces")
@@ -270,6 +275,8 @@ model Lead {
   submittedAt DateTime
   data        Json
   createdAt   DateTime  @default(now())
+  contactId   String?
+  contact     Contact?  @relation(fields: [contactId], references: [id])
 
   @@unique([workspaceId, platform, externalId])
   @@index([workspaceId, submittedAt])
@@ -277,7 +284,31 @@ model Lead {
   @@index([leadFormId])
   @@index([campaignId])
   @@index([email])
+  @@index([contactId])
   @@map("leads")
+}
+
+// The Stage-C "Normalizer" output: one CRM-facing identity per (workspaceId, email-or-phone),
+// merged across platforms/forms from the raw Lead rows above. leadCount/firstSeenAt/lastSeenAt
+// are maintained by contactService.upsertContactForLead as new leads roll in.
+model Contact {
+  id          String   @id
+  workspaceId String
+  email       String?
+  phone       String?
+  fullName    String?
+  companyName String?
+  leadCount   Int      @default(1)
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
+  leads       Lead[]
+
+  @@index([workspaceId])
+  @@index([workspaceId, email])
+  @@index([workspaceId, phone])
+  @@map("contacts")
 }
 
 // Deep web-search-backed research on a promotional URL (product positioning, audience,
@@ -294,6 +325,7 @@ model ResearchSession {
   currentStep String?
   blocks      Json     @default("[]")
   personas    Json?
+  campaignSuggestions Json?
   result      Json?
   error       String?
   searchCount Int      @default(0)

@@ -1,7 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { openai, runStructured } from "../openaiClient.js";
 import type { NormalizedProduct, RawProductDraft, ScrapedProduct } from "../types.js";
-
-const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
 const PRODUCT_TOOL = {
   name: "emit_normalized_product",
@@ -43,16 +41,14 @@ function fallbackNormalizedProduct(draft: RawProductDraft, site: ScrapedProduct)
  * Fills gaps in the Product Parser's deterministic draft (e.g. price wasn't in
  * JSON-LD, category needs inferring, features need summarizing from page text)
  * and cleans up what's there. Falls back to a passthrough of the draft if
- * ANTHROPIC_API_KEY is unset.
+ * OPENAI_API_KEY is unset.
  */
 export async function normalizeProduct(draft: RawProductDraft, site: ScrapedProduct): Promise<NormalizedProduct> {
-  if (!anthropic) return fallbackNormalizedProduct(draft, site);
+  if (!openai) return fallbackNormalizedProduct(draft, site);
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1024,
-    tools: [PRODUCT_TOOL],
-    tool_choice: { type: "tool", name: "emit_normalized_product" },
+  const result = await runStructured<NormalizedProduct>({
+    maxTokens: 1024,
+    tool: PRODUCT_TOOL,
     messages: [
       {
         role: "user",
@@ -71,8 +67,6 @@ ${site.bodyText}`,
       },
     ],
   });
-
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) throw new Error("Product normalization: model did not return structured output");
-  return toolUse.input as NormalizedProduct;
+  if (!result) throw new Error("Product normalization: model did not return structured output");
+  return result;
 }

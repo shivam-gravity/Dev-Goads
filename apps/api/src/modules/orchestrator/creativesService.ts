@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
-import Anthropic from "@anthropic-ai/sdk";
+import { openai, runStructured } from "../../infra/openaiClient.js";
 import { prisma } from "../../db/prisma.js";
 import type { CreativeAsset, AdCreative } from "../../types/index.js";
-
-const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
 const CREATIVE_VARIATION_TOOL = {
   name: "emit_creative_variations",
@@ -110,13 +108,11 @@ function fallbackVariations(base: AdCreative): CreativeVariation[] {
 }
 
 export async function generateCreativeVariations(base: AdCreative): Promise<CreativeVariation[]> {
-  if (!anthropic) return fallbackVariations(base);
+  if (!openai) return fallbackVariations(base);
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1024,
-    tools: [CREATIVE_VARIATION_TOOL],
-    tool_choice: { type: "tool", name: "emit_creative_variations" },
+  const result = await runStructured<{ variations: CreativeVariation[] }>({
+    maxTokens: 1024,
+    tool: CREATIVE_VARIATION_TOOL,
     messages: [
       {
         role: "user",
@@ -129,10 +125,6 @@ Each variation should use a different persuasion angle (e.g. social proof, FOMO,
       },
     ],
   });
-
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) return fallbackVariations(base);
-
-  const result = toolUse.input as { variations: CreativeVariation[] };
+  if (!result) return fallbackVariations(base);
   return result.variations;
 }

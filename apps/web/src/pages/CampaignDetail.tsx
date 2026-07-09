@@ -1,20 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, Campaign, NormalizedPerformance, OptimizationDecision, TrendPoint } from "../api/client.js";
+import { api, Campaign, LiveInsights, NormalizedPerformance, OptimizationDecision, TrendPoint } from "../api/client.js";
 import StatusBadge, { NetworkBadge } from "../components/StatusBadge.js";
 import SparkChart from "../components/SparkChart.js";
 import Reveal from "../components/Reveal.js";
+
+const LIVE_INSIGHTS_POLL_MS = 30000;
 
 export default function CampaignDetail() {
   const { campaignId } = useParams<{ campaignId: string }>();
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [performance, setPerformance] = useState<NormalizedPerformance[]>([]);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
+  const [liveInsights, setLiveInsights] = useState<LiveInsights | null>(null);
   const [decisions, setDecisions] = useState<OptimizationDecision[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingBudget, setEditingBudget] = useState(false);
   const [newBudget, setNewBudget] = useState("");
+  const pollHandle = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function refresh() {
     if (!campaignId) return;
@@ -32,6 +36,19 @@ export default function CampaignDetail() {
   useEffect(() => {
     refresh().catch((err) => setError(err.message));
   }, [campaignId]);
+
+  // Live Insights Dashboard: poll while the campaign is actually spending, so the KPI row
+  // reflects the scheduled metricsIngestionWorker's fresh pulls without a manual refresh.
+  useEffect(() => {
+    if (!campaignId || campaign?.status !== "active") {
+      setLiveInsights(null);
+      return;
+    }
+    const poll = () => api.getLiveInsights(campaignId).then(setLiveInsights).catch(() => {});
+    poll();
+    pollHandle.current = setInterval(poll, LIVE_INSIGHTS_POLL_MS);
+    return () => { if (pollHandle.current) clearInterval(pollHandle.current); };
+  }, [campaignId, campaign?.status]);
 
   async function runIngest() {
     if (!campaignId) return;
@@ -113,10 +130,16 @@ export default function CampaignDetail() {
 
   const totalSpend = performance.reduce((s, p) => s + p.spendCents, 0);
   const totalImpressions = performance.reduce((s, p) => s + p.impressions, 0);
+  const totalReach = performance.reduce((s, p) => s + p.reach, 0);
   const totalClicks = performance.reduce((s, p) => s + p.clicks, 0);
   const totalConversions = performance.reduce((s, p) => s + p.conversions, 0);
   const overallCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
   const overallCpa = totalConversions > 0 ? totalSpend / totalConversions : null;
+  // liveInsights (from the scheduled worker's freshest pull) takes precedence once available;
+  // fall back to locally-aggregated performance so the KPI row isn't empty on first paint.
+  const displayReach = liveInsights?.reach ?? totalReach;
+  const displayCpmCents = liveInsights?.cpmCents ?? (totalImpressions > 0 ? Math.round((totalSpend / totalImpressions) * 1000) : null);
+  const displayRoas = liveInsights?.roas ?? (totalSpend > 0 && totalConversions > 0 ? (totalConversions * 5000) / totalSpend : null);
 
   const spendTrend = trend.map((t) => t.spendCents);
   const clicksTrend = trend.map((t) => t.clicks);
@@ -176,7 +199,9 @@ export default function CampaignDetail() {
 
       {error && <p className="error">{error}</p>}
 
-      {/* KPI row */}
+      {/* Live Insights Dashboard KPI row — Reach/CPM/ROAS refresh via liveInsights polling
+          while the campaign is active (see the poll effect above); the rest come from the
+          performance table fetched once on load/refresh. */}
       <div className="campaign-kpi-row">
         <div className="campaign-kpi">
           <span className="campaign-kpi-label">Total Spend</span>
@@ -187,12 +212,20 @@ export default function CampaignDetail() {
           <span className="campaign-kpi-value">{totalImpressions.toLocaleString()}</span>
         </div>
         <div className="campaign-kpi">
+          <span className="campaign-kpi-label">Reach</span>
+          <span className="campaign-kpi-value">{displayReach.toLocaleString()}</span>
+        </div>
+        <div className="campaign-kpi">
           <span className="campaign-kpi-label">Clicks</span>
           <span className="campaign-kpi-value">{totalClicks.toLocaleString()}</span>
         </div>
         <div className="campaign-kpi">
           <span className="campaign-kpi-label">CTR</span>
           <span className="campaign-kpi-value">{overallCtr.toFixed(2)}%</span>
+        </div>
+        <div className="campaign-kpi">
+          <span className="campaign-kpi-label">CPM</span>
+          <span className="campaign-kpi-value">{displayCpmCents !== null ? fmtMoney(displayCpmCents) : "—"}</span>
         </div>
         <div className="campaign-kpi">
           <span className="campaign-kpi-label">Conversions</span>
@@ -202,7 +235,12 @@ export default function CampaignDetail() {
           <span className="campaign-kpi-label">CPA</span>
           <span className="campaign-kpi-value">{overallCpa ? fmtMoney(overallCpa) : "—"}</span>
         </div>
+        <div className="campaign-kpi">
+          <span className="campaign-kpi-label">ROAS</span>
+          <span className="campaign-kpi-value">{displayRoas !== null ? `${displayRoas.toFixed(2)}x` : "—"}</span>
+        </div>
       </div>
+      {liveInsights?.isLive && <p className="muted-text campaign-live-note"><span className="live-dot" /> Live — refreshing every 30s</p>}
 
       {/* Trend charts */}
       {trend.length > 1 && (

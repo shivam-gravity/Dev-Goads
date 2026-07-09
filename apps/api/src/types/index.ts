@@ -7,6 +7,8 @@ export interface ScrapedSite {
   excerpt: string;
   images: string[];
   crawledPages: string[];
+  /** Total same-site pages found during discovery (sitemap.xml, or same-origin links on the homepage as a fallback) — always >= crawledPages.length, since only the top-scored subset gets actually fetched. */
+  pagesDiscovered: number;
   /** Above-the-fold JPEG screenshot (data URI) from the Playwright-backed scraper-service, when reachable — undefined if that service is down or the page failed to render. */
   screenshot?: string;
 }
@@ -19,6 +21,8 @@ export interface ProductAnalysis {
   keyFeatures: string[];
   /** Fields below are only populated by the deep-research pipeline (marketResearch.ts) — undefined from the plain analyzeProduct() path. */
   businessType?: string;
+  /** Distinct real-world scenarios where this product/service gets used — undefined from the scrapegraphai fallback path, which has no equivalent field. */
+  useCases?: { title: string; description: string }[];
   pricingModel?: string;
   pricingRange?: string;
   /** Human-readable source citation for the "💡 Data Source" line — real citation titles when web search found sources, an honest "AI estimate" label otherwise (never a fabricated report name). */
@@ -68,6 +72,8 @@ export interface MarketLocationAnalysis {
   recommendedRegion: string;
   alternativeRegions: string[];
   marketTrends: string;
+  /** Specific forces driving marketTrends — undefined from the scrapegraphai fallback path, which has no equivalent field. */
+  keyDrivers?: string[];
   competitionLevel: string;
   recommendedPlatform: AdNetwork;
   placementRationale: string;
@@ -113,6 +119,9 @@ export interface AdCreative {
   callToAction: string;
   imageUrl?: string;
   videoUrl?: string;
+  /** Up to 5 headline/primary-text variants for the campaign builder's Ad Copy panel — `headline`/`body` above stay the first entry for back-compat with callers that don't know about variants. */
+  headlines?: string[];
+  primaryTexts?: string[];
 }
 
 export interface AdStrategy {
@@ -124,6 +133,24 @@ export interface AdStrategy {
   audiences: string[];
   creatives: AdCreative[];
   createdAt: string;
+}
+
+/** One of 6+ distinct campaign angles generated from a completed research session — the user
+ * picks one (optionally generating a real image/video for it first) before it becomes an
+ * actual AdStrategy/Campaign via createStrategyFromSuggestion. */
+export interface CampaignSuggestion {
+  id: string;
+  /** Short internal label for the suggestion card, e.g. "Social proof — Feed". */
+  title: string;
+  /** 1-2 sentence pitch shown on the card. */
+  description: string;
+  hashtags: string[];
+  platform: AdNetwork;
+  headline: string;
+  body: string;
+  callToAction: string;
+  /** Fed into the creative-generation job's `prompt` field when the user generates media for this suggestion. */
+  imagePrompt: string;
 }
 
 export type CampaignStatus = "draft" | "launching" | "active" | "paused" | "completed" | "failed";
@@ -140,9 +167,18 @@ export interface CampaignVariant {
   adSetExternalId?: string;
 }
 
+export interface CreativeAssetRef {
+  id: string;
+  url: string;
+  type: "image" | "video";
+  source: "ai" | "upload";
+}
+
 export interface Campaign {
   id: string;
   businessId: string;
+  /** Set once the campaign is launched through a specific workspace (see launchCampaign) — used to route AI-generated insights (see optimizationEngine's recordOptimizationInsights) to the right workspace's feed. Undefined for campaigns that haven't been launched yet. */
+  workspaceId?: string;
   strategyId: string;
   name: string;
   status: CampaignStatus;
@@ -151,6 +187,32 @@ export interface Campaign {
   variants: CampaignVariant[];
   createdAt: string;
   updatedAt: string;
+  /** Fields below are only set by the manual campaign builder (CampaignBuilder.tsx) — undefined for campaigns created via the /wizard instant-generate flow, which keeps working off getMetaCredentials' workspace-level default connection. */
+  conversionEvent?: string;
+  finalUrl?: string;
+  startDate?: string;
+  endDate?: string;
+  locations?: string[];
+  advantagePlus?: boolean;
+  metaAdAccountId?: string;
+  pageId?: string;
+  instagramAccountId?: string;
+  pixelId?: string;
+  googleCustomerId?: string;
+  googleConversionActionId?: string;
+  /** Capped at 10 — enforced where assets are appended, not just in the UI. */
+  creativeAssets?: CreativeAssetRef[];
+  /**
+   * Real per-platform campaign-level IDs, set once launchMetaHierarchy/launchGoogleHierarchy
+   * actually create the campaign container on that network — grouped under one object
+   * (rather than separate top-level metaCampaignId/googleCampaignId fields) so later
+   * CRM-sync work (leads, insights, audiences, webhooks) can extend this same shape with
+   * more per-platform IDs without accumulating flat fields on Campaign each time.
+   */
+  externalIds?: {
+    meta?: string;
+    google?: string;
+  };
 }
 
 export interface PerformanceMetric {
@@ -160,6 +222,8 @@ export interface PerformanceMetric {
   network: AdNetwork;
   date: string;
   impressions: number;
+  /** Unique-user reach — real distinct metric on Meta; Google Search has no native per-ad reach, so it's estimated (see adapter comments). */
+  reach: number;
   clicks: number;
   conversions: number;
   spendCents: number;
@@ -170,11 +234,16 @@ export interface NormalizedPerformance {
   variantId: string;
   network: AdNetwork;
   impressions: number;
+  reach: number;
   clicks: number;
   conversions: number;
   spendCents: number;
   ctr: number;
   cpaCents: number | null;
+  cpmCents: number | null;
+  cpcCents: number | null;
+  /** Estimated — see ESTIMATED_REVENUE_CENTS_PER_CONVERSION in performancePipeline.ts. */
+  roas: number | null;
   conversionRate: number;
 }
 
@@ -282,6 +351,16 @@ export interface CreativeInsightItem {
 export interface AdInsightsResponse {
   network: AdInsightNetwork;
   isDemo: boolean;
+  /** Network-scoped aggregates for the Ads Manager overview's stat tiles. */
+  totals: {
+    spendCents: number;
+    impressions: number;
+    clicks: number;
+    conversions: number;
+    cpaCents: number | null;
+    /** Estimated — see ESTIMATED_REVENUE_CENTS_PER_CONVERSION in performancePipeline.ts. */
+    roas: number | null;
+  };
   audience: {
     distribution: DistributionSlice[];
     top: AudienceInsightItem[];

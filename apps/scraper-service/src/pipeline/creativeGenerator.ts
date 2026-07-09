@@ -1,7 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { openai, runStructured } from "../openaiClient.js";
 import type { AdCopyVariant, NormalizedProduct } from "../types.js";
 
-const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 const VARIANT_COUNT = 3;
 
 const AD_COPY_TOOL = {
@@ -33,15 +32,13 @@ function fallbackAdCopy(product: NormalizedProduct): AdCopyVariant[] {
   return [{ headline: product.name, body: product.description, callToAction: "Shop now" }];
 }
 
-/** Falls back to a single generic variant if ANTHROPIC_API_KEY is unset. */
+/** Falls back to a single generic variant if OPENAI_API_KEY is unset. */
 export async function generateAdCopy(product: NormalizedProduct): Promise<AdCopyVariant[]> {
-  if (!anthropic) return fallbackAdCopy(product);
+  if (!openai) return fallbackAdCopy(product);
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1024,
-    tools: [AD_COPY_TOOL],
-    tool_choice: { type: "tool", name: "emit_ad_copy_variants" },
+  const result = await runStructured<{ variants: AdCopyVariant[] }>({
+    maxTokens: 1024,
+    tool: AD_COPY_TOOL,
     messages: [
       {
         role: "user",
@@ -52,8 +49,6 @@ ${JSON.stringify(product, null, 2)}`,
       },
     ],
   });
-
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) throw new Error("Ad copy generation: model did not return structured output");
-  return (toolUse.input as { variants: AdCopyVariant[] }).variants;
+  if (!result) throw new Error("Ad copy generation: model did not return structured output");
+  return result.variants;
 }

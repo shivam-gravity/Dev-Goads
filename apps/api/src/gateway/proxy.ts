@@ -20,6 +20,7 @@ export function proxyTo(baseUrl: string): RequestHandler {
         method: req.method,
         headers: {
           "Content-Type": "application/json",
+          ...(req.headers.authorization ? { Authorization: req.headers.authorization } : {}),
           ...(INTERNAL_SERVICE_KEY ? { "X-Internal-Service-Key": INTERNAL_SERVICE_KEY } : {}),
         },
         body: ["GET", "HEAD"].includes(req.method) ? undefined : JSON.stringify(req.body ?? {}),

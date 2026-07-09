@@ -1,97 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, Campaign, AdSet, Ad } from "../api/client.js";
+import { api, Campaign, AdSet, Ad, AdInsightsResponse, Insight, LiveInsights } from "../api/client.js";
 import StatusBadge from "../components/StatusBadge.js";
 import Reveal from "../components/Reveal.js";
 
 type Mode = "campaigns" | "adsets" | "ads";
 type Network = "meta" | "google" | "tiktok";
-type Sentiment = "good" | "bad";
 
 interface BriefStat {
   label: string;
   value: string;
-  delta: string;
-  trend: "up" | "down";
-  sentiment: Sentiment;
 }
 
 const NETWORK_LABELS: Record<Network, string> = { meta: "Meta", google: "Google", tiktok: "Tiktok" };
 
-const INSIGHTS_BRIEF: Record<Network, { title: string; stats: BriefStat[] }> = {
-  meta: {
-    title: "Meta Ads Insights Brief",
-    stats: [
-      { label: "Spend", value: "$1580.38", delta: "-54.88%", trend: "down", sentiment: "bad" },
-      { label: "Purchase", value: "27", delta: "-25.00%", trend: "down", sentiment: "bad" },
-      { label: "Cost Per Purchase", value: "$58.53", delta: "-39.84%", trend: "down", sentiment: "good" },
-      { label: "ROAS", value: "2.44x", delta: "+87.69%", trend: "up", sentiment: "good" },
-    ],
-  },
-  google: {
-    title: "Google Ads Insights Brief",
-    stats: [
-      { label: "Spend", value: "$942.10", delta: "-18.32%", trend: "down", sentiment: "bad" },
-      { label: "Conversions", value: "41", delta: "+12.50%", trend: "up", sentiment: "good" },
-      { label: "Cost Per Conversion", value: "$22.98", delta: "-27.10%", trend: "down", sentiment: "good" },
-      { label: "ROAS", value: "3.12x", delta: "+21.40%", trend: "up", sentiment: "good" },
-    ],
-  },
-  tiktok: {
-    title: "Tiktok Ads Insights Brief",
-    stats: [
-      { label: "Spend", value: "$310.55", delta: "+64.20%", trend: "up", sentiment: "bad" },
-      { label: "Purchase", value: "9", delta: "-10.00%", trend: "down", sentiment: "bad" },
-      { label: "Cost Per Purchase", value: "$34.51", delta: "+8.75%", trend: "up", sentiment: "bad" },
-      { label: "ROAS", value: "1.62x", delta: "-14.90%", trend: "down", sentiment: "bad" },
-    ],
-  },
-};
-
-const AI_ANALYSIS: Record<Network, string> = {
-  meta: "Brand performance shows exceptional efficiency surge with CPA improving 62.6% to $23.30 (251% of target) and ROAS doubling to 481%, but conversion volume dropped 85% from 27 to 2 purchases while only utilizing 19% of available budget, indicating strong efficiency gains constrained by scaling limitations.",
-  google: "Search performance remains efficient with cost per conversion down 27.1% and ROAS up 21.4%, driven by higher-intent keyword traffic. Conversion volume grew alongside the efficiency gains, suggesting there is room to raise daily budgets without losing performance.",
-  tiktok: "Tiktok spend rose sharply while purchases and ROAS declined, pointing to creative fatigue on the top-spending ad. Cost per purchase is trending upward — pausing the weakest ad set is recommended before increasing budget further.",
-};
-
-const KEY_HIGHLIGHTS: Record<Network, string[]> = {
-  meta: [
-    "Outstanding CPA achievement: $23.30 vs target $58.41 (251% over-target), representing best performance in analysis period",
-    "ROAS more than doubled week-over-week, now sitting at 481% against a 250% target",
-    "Top ad set held frequency under 1.8, keeping creative fatigue risk low despite reduced spend",
-  ],
-  google: [
-    "Search conversions up 12.5% while cost per conversion fell 27.1% — the most efficient period in 30 days",
-    "Branded keyword segment now delivers the lowest CPA across all ad groups",
-    "Quality Score improved on 3 of 5 top keywords after the latest ad copy refresh",
-  ],
-  tiktok: [
-    "Top-performing video creative still holds a 2.1x ROAS despite the account-wide dip",
-    "Audience retargeting segment is outperforming cold prospecting by 3.4x on cost per purchase",
-    "Evening posting window (6-9pm) continues to drive the highest engagement rate",
-  ],
-};
-
-const POTENTIAL_RISKS: Record<Network, string[]> = {
-  meta: [
-    "Budget underutilization: only 19% of available daily budget spent during peak efficiency period — estimated $193+ revenue opportunity missed",
-    "Purchase volume fell 85% period over period — verify tracking and inventory before scaling budget back up",
-    "One ad set has not refreshed creative in 21 days; frequency is beginning to climb",
-  ],
-  google: [
-    "Two low-volume keywords are absorbing 8% of spend with no conversions in 14 days",
-    "Mobile placements convert 30% below desktop — consider a bid adjustment",
-    "Search impression share dropped 6pts this week, likely due to rising competitor bids",
-  ],
-  tiktok: [
-    "Spend increased 64% while ROAS fell — likely creative fatigue on the primary ad",
-    "Cost per purchase has risen for 3 consecutive days on the top ad set",
-    "Audience overlap between two ad sets may be inflating frequency and cost",
-  ],
-};
-
-function trendArrow(trend: "up" | "down") {
-  return trend === "up" ? "↗" : "↘";
+/** Builds the four overview stat tiles from a real, network-scoped AdInsightsResponse.totals —
+ * no historical comparison data exists yet, so there's deliberately no delta/trend arrow here
+ * (the old mock version fabricated week-over-week deltas that were never actually computed). */
+function statsFromInsights(insights: AdInsightsResponse | null): BriefStat[] {
+  if (!insights) return [];
+  const t = insights.totals;
+  return [
+    { label: "Spend", value: `$${(t.spendCents / 100).toFixed(2)}` },
+    { label: "Conversions", value: String(t.conversions) },
+    { label: "Cost Per Conversion", value: t.cpaCents !== null ? `$${(t.cpaCents / 100).toFixed(2)}` : "—" },
+    { label: "ROAS", value: t.roas !== null ? `${t.roas.toFixed(2)}x` : "—" },
+  ];
 }
 
 function ToggleSwitch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
@@ -144,14 +78,19 @@ function PagerCard({
 }
 
 export default function AdsManager({ businessId }: { businessId: string }) {
+  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
   const [mode, setMode] = useState<Mode>("campaigns");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [adSets, setAdSets] = useState<AdSet[]>([]);
   const [ads, setAds] = useState<Ad[]>([]);
+  const [liveInsightsByCampaign, setLiveInsightsByCampaign] = useState<Record<string, LiveInsights>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [network, setNetwork] = useState<Network>("meta");
+  const [adInsights, setAdInsights] = useState<AdInsightsResponse | null>(null);
+  const [aiInsights, setAiInsights] = useState<Insight[]>([]);
+  const [generatingAi, setGeneratingAi] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(true);
   const [applyMode, setApplyMode] = useState<"recommended" | "auto">("auto");
 
@@ -179,6 +118,9 @@ export default function AdsManager({ businessId }: { businessId: string }) {
 
       const adsBySet = await Promise.all(allSets.map((s) => api.listAds(s.id).catch(() => [])));
       setAds(adsBySet.flat());
+
+      const liveInsightsList = await Promise.all(camps.map((c) => api.getLiveInsights(c.id).catch(() => null)));
+      setLiveInsightsByCampaign(Object.fromEntries(camps.map((c, i) => [c.id, liveInsightsList[i]]).filter(([, v]) => v)));
     } catch (err) {
       setError("Failed to load Ads Manager hierarchy data.");
     } finally {
@@ -189,6 +131,44 @@ export default function AdsManager({ businessId }: { businessId: string }) {
   useEffect(() => {
     loadData();
   }, [businessId]);
+
+  useEffect(() => {
+    api.getAdInsights(businessId, network).then(setAdInsights).catch(() => setAdInsights(null));
+  }, [businessId, network]);
+
+  // Real AI-generated analysis (insightService.ts, OpenAI-backed) is generated lazily on first
+  // view rather than on a timer — avoids paying for a model call for every business regardless
+  // of whether anyone is actually looking at this page.
+  useEffect(() => {
+    let cancelled = false;
+    api.listInsights(wsId).then(async (list) => {
+      if (cancelled) return;
+      if (list.length > 0) {
+        setAiInsights(list);
+        return;
+      }
+      try {
+        const generated = await api.generateInsights(wsId, businessId);
+        if (!cancelled) setAiInsights(generated);
+      } catch {
+        // leave aiInsights empty — the overview falls back to a "no analysis yet" message
+      }
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId]);
+
+  async function handleRefreshAiAnalysis() {
+    setGeneratingAi(true);
+    try {
+      const generated = await api.generateInsights(wsId, businessId);
+      setAiInsights(generated);
+    } catch {
+      // keep showing whatever analysis was already on screen
+    } finally {
+      setGeneratingAi(false);
+    }
+  }
 
   useEffect(() => {
     setPage(1);
@@ -277,7 +257,14 @@ export default function AdsManager({ businessId }: { businessId: string }) {
   const totalBudgetCents = campaigns.reduce((sum, c) => sum + c.dailyBudgetCents, 0);
 
   const today = new Date().toISOString().slice(0, 10);
-  const brief = INSIGHTS_BRIEF[network];
+  const briefTitle = `${NETWORK_LABELS[network]} Ads Insights Brief`;
+  const briefStats = statsFromInsights(adInsights);
+  const activeAiInsights = aiInsights.filter((i) => !i.dismissed);
+  const mainNarrative = activeAiInsights[0]
+    ? `${activeAiInsights[0].title} — ${activeAiInsights[0].description}`
+    : "No AI analysis yet for this business — click refresh to generate one from current performance data.";
+  const highlights = activeAiInsights.filter((i) => i.type !== "anomaly").map((i) => `${i.title} — ${i.description}`);
+  const risks = activeAiInsights.filter((i) => i.type === "anomaly").map((i) => `${i.title} — ${i.description}`);
 
   return (
     <div className="adsgo-ads-page">
@@ -358,22 +345,19 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                   <div className="adsgo-brief-card-head">
                     <div>
                       <span className="adsgo-brief-title">
-                        {brief.title} <span className="adsgo-demo-badge">Demo</span>
+                        {briefTitle} {adInsights?.isDemo && <span className="adsgo-demo-badge">Demo</span>}
                       </span>
-                      <div className="adsgo-brief-period">Last 14 days</div>
+                      <div className="adsgo-brief-period">All time</div>
                     </div>
                     <button type="button" className="adsgo-icon-btn" onClick={loadData} aria-label="Refresh">
                       ↻
                     </button>
                   </div>
                   <div className="adsgo-stat-grid">
-                    {brief.stats.map((s) => (
+                    {briefStats.map((s) => (
                       <div className="adsgo-stat-tile" key={s.label}>
                         <div className="adsgo-stat-tile-head">
                           <span title={s.label}>{s.label}</span>
-                          <span className={`adsgo-trend-badge ${s.trend} ${s.sentiment}`}>
-                            {trendArrow(s.trend)} {s.delta}
-                          </span>
                         </div>
                         <div className="adsgo-stat-value">{s.value}</div>
                       </div>
@@ -386,12 +370,15 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                     <div className="adsgo-analysis-head">
                       <span className="adsgo-analysis-icon">✓</span>
                       <span>AI Analysis Insights</span>
+                      <button type="button" className="adsgo-icon-btn adsgo-ai-refresh-btn" onClick={handleRefreshAiAnalysis} disabled={generatingAi} aria-label="Refresh AI analysis">
+                        {generatingAi ? "…" : "↻"}
+                      </button>
                     </div>
-                    <p className="adsgo-analysis-body">{AI_ANALYSIS[network]}</p>
+                    <p className="adsgo-analysis-body">{mainNarrative}</p>
                   </div>
                   <div className="adsgo-side-cards">
-                    <PagerCard variant="highlight" icon="↗" title="Key Highlight" items={KEY_HIGHLIGHTS[network]} />
-                    <PagerCard variant="risk" icon="⚠" title="Potential Risk" items={POTENTIAL_RISKS[network]} />
+                    <PagerCard variant="highlight" icon="↗" title="Key Highlight" items={highlights.length > 0 ? highlights : ["No highlights yet — refresh to generate AI analysis."]} />
+                    <PagerCard variant="risk" icon="⚠" title="Potential Risk" items={risks.length > 0 ? risks : ["No risks identified from current data."]} />
                   </div>
                 </div>
               </div>
@@ -561,6 +548,12 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                         <th>Location</th>
                         <th>Goal</th>
                         <th>Daily Budget</th>
+                        <th>Spend</th>
+                        <th>Impressions</th>
+                        <th>Clicks</th>
+                        <th>CTR</th>
+                        <th>Conversions</th>
+                        <th>ROAS</th>
                         <th>Recommend</th>
                       </tr>
                     </thead>
@@ -576,6 +569,12 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                         <td>-</td>
                         <td>-</td>
                         <td>${(totalBudgetCents / 100).toFixed(2)}</td>
+                        <td>${(Object.values(liveInsightsByCampaign).reduce((s, li) => s + li.spendCents, 0) / 100).toFixed(2)}</td>
+                        <td>{Object.values(liveInsightsByCampaign).reduce((s, li) => s + li.impressions, 0).toLocaleString()}</td>
+                        <td>{Object.values(liveInsightsByCampaign).reduce((s, li) => s + li.clicks, 0).toLocaleString()}</td>
+                        <td>-</td>
+                        <td>{Object.values(liveInsightsByCampaign).reduce((s, li) => s + li.conversions, 0).toLocaleString()}</td>
+                        <td>-</td>
                         <td>-</td>
                       </tr>
                       {pagedCampaigns.map((c, i) => {
@@ -583,6 +582,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                         const bucket = bucketFor(c, globalIndex);
                         const recommendedCents = recommendedBudgetCents(c, globalIndex);
                         const hasSuggestion = bucket !== "maintain" && !acceptedIds.has(c.id) && !dismissedIds.has(c.id);
+                        const li = liveInsightsByCampaign[c.id];
                         return (
                           <tr key={c.id}>
                             <td>
@@ -611,6 +611,12 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                               <span className="adsgo-pill goal">OUTCOME_SALES</span>
                             </td>
                             <td>${(c.dailyBudgetCents / 100).toFixed(2)}</td>
+                            <td>{li ? `$${(li.spendCents / 100).toFixed(2)}` : "—"}</td>
+                            <td>{li ? li.impressions.toLocaleString() : "—"}</td>
+                            <td>{li ? li.clicks.toLocaleString() : "—"}</td>
+                            <td>{li ? `${li.ctr.toFixed(2)}%` : "—"}</td>
+                            <td>{li ? li.conversions.toLocaleString() : "—"}</td>
+                            <td>{li?.roas != null ? `${li.roas.toFixed(2)}x` : "—"}</td>
                             <td>
                               {hasSuggestion ? (
                                 <div className="adsgo-recommend-cell">
@@ -642,7 +648,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                       })}
                       {pagedCampaigns.length === 0 && (
                         <tr>
-                          <td colSpan={8}>
+                          <td colSpan={14}>
                             <div className="adsgo-table-empty">
                               <p>No campaigns match your filters.</p>
                             </div>

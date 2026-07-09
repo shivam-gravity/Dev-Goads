@@ -6,14 +6,16 @@ import {
   listLeadForms,
   listLeads,
   seedMockLeadData,
+  toCrmLeadPayload,
   type LeadPlatform,
 } from "../modules/leadgen/leadIngestionService.js";
+import { listContacts } from "../modules/leadgen/contactService.js";
 import { backfillMetaLeads } from "../modules/leadgen/metaLeadSync.js";
 import { syncGoogleLeadForms, syncGoogleLeadSubmissions } from "../modules/leadgen/googleLeadSyncService.js";
 import { getMetaCredentials, getOrCreateIntegrations } from "../modules/integrations/integrationService.js";
 import { getGoogleAdsCredentials } from "../modules/integrations/googleOAuth.js";
-import { getRawMetrics } from "../modules/pipeline/performancePipeline.js";
-import { listSavedAudiences } from "../modules/audience/savedAudienceService.js";
+import { getRawMetrics, ESTIMATED_REVENUE_CENTS_PER_CONVERSION } from "../modules/pipeline/performancePipeline.js";
+import { listSavedAudiences, type AudienceType } from "../modules/audience/savedAudienceService.js";
 import { estimateReachHeuristic } from "../modules/adapters/metaTargetingMapper.js";
 import { leadIngestionQueue } from "../infra/queue.js";
 import type { AdNetwork } from "../types/index.js";
@@ -91,12 +93,37 @@ adsDataRoutes.get(
 
     const { data, total } = await listLeads(workspaceId, { platform, formId, campaignId, page, pageSize });
     res.json({
-      data: data.map((l) => ({
-        id: l.id,
-        form_id: l.formExternalId,
-        field_data: l.data,
-        created_at: l.submittedAt.toISOString(),
-        platform: l.platform,
+      data: data.map(toCrmLeadPayload),
+      total,
+    });
+  })
+);
+
+/* ── Contacts (Stage C: Lead → Normalizer → CRM Contact) ───────────────── */
+
+adsDataRoutes.get(
+  "/workspaces/:id/ads-data/contacts",
+  asyncHandler(async (req, res) => {
+    const workspaceId = req.params.id;
+    const page = req.query.page ? Number(req.query.page) : undefined;
+    const pageSize = req.query.page_size ? Number(req.query.page_size) : undefined;
+
+    for (const p of ["meta", "google"] as LeadPlatform[]) {
+      await ensureMockDataIfDisconnected(workspaceId, p);
+    }
+
+    const { data, total } = await listContacts(workspaceId, { page, pageSize });
+    res.json({
+      data: data.map((c) => ({
+        id: c.id,
+        full_name: c.fullName,
+        email: c.email,
+        phone: c.phone,
+        company_name: c.companyName,
+        lead_count: c.leadCount,
+        first_seen_at: c.firstSeenAt.toISOString(),
+        last_seen_at: c.lastSeenAt.toISOString(),
+        platforms: c.platforms,
       })),
       total,
     });
@@ -149,35 +176,46 @@ adsDataRoutes.get(
 
     const campaigns = await prisma.campaign.findMany({ where: { workspaceId } });
 
-    type Row = { date: string; id: string; name: string; metrics: { impressions: number; clicks: number; cost_micros: number; conversions: number } };
+    type Row = {
+      date: string; id: string; name: string;
+      metrics: { impressions: number; reach: number; clicks: number; conversions: number; cost_micros: number; cpm_micros: number; cpc_micros: number; roas: number };
+    };
     const rows: Row[] = [];
 
     for (const c of campaigns) {
       const campaignData = c.data as any;
       const name: string = campaignData?.name ?? c.id;
       const metrics = await getRawMetrics(c.id);
-      const byDate = new Map<string, { impressions: number; clicks: number; conversions: number; spendCents: number }>();
+      const byDate = new Map<string, { impressions: number; reach: number; clicks: number; conversions: number; spendCents: number }>();
       for (const m of metrics) {
         if (network && m.network !== network) continue;
-        const acc = byDate.get(m.date) ?? { impressions: 0, clicks: 0, conversions: 0, spendCents: 0 };
+        const acc = byDate.get(m.date) ?? { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0 };
         acc.impressions += m.impressions;
+        acc.reach += m.reach;
         acc.clicks += m.clicks;
         acc.conversions += m.conversions;
         acc.spendCents += m.spendCents;
         byDate.set(m.date, acc);
       }
       for (const [date, acc] of byDate) {
+        // CRM/Google convention: cost in micros of the currency unit. AdGo stores spend in cents;
+        // 1 cent = 10,000 micros (1 currency unit = 100 cents = 1,000,000 micros). reach/roas are
+        // plain counts/ratios, same as impressions/clicks/conversions above — not currency, so no
+        // micros conversion applies to them.
+        const costMicros = acc.spendCents * 10_000;
         rows.push({
           date,
           id: c.id,
           name,
           metrics: {
             impressions: acc.impressions,
+            reach: acc.reach,
             clicks: acc.clicks,
             conversions: acc.conversions,
-            // CRM/Google convention: cost in micros of the currency unit. AdGo stores spend in cents;
-            // 1 cent = 10,000 micros (1 currency unit = 100 cents = 1,000,000 micros).
-            cost_micros: acc.spendCents * 10_000,
+            cost_micros: costMicros,
+            cpm_micros: acc.impressions > 0 ? Math.round((costMicros / acc.impressions) * 1000) : 0,
+            cpc_micros: acc.clicks > 0 ? Math.round(costMicros / acc.clicks) : 0,
+            roas: acc.spendCents > 0 && acc.conversions > 0 ? (acc.conversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / acc.spendCents : 0,
           },
         });
       }
@@ -188,6 +226,13 @@ adsDataRoutes.get(
 );
 
 /* ── Audiences ──────────────────────────────────────────────────────────── */
+
+const AUDIENCE_TYPE_LABELS: Record<AudienceType, string> = {
+  saved: "Saved Audience",
+  custom: "Custom Audience",
+  lookalike: "Lookalike Audience",
+  interest_group: "Interest Group",
+};
 
 adsDataRoutes.get(
   "/workspaces/:id/ads-data/audiences",
@@ -200,7 +245,8 @@ adsDataRoutes.get(
       const size = Math.round((reach.usersLowerBound + reach.usersUpperBound) / 2);
       return {
         name: a.name,
-        type: "Custom Audience",
+        type: AUDIENCE_TYPE_LABELS[a.type ?? "saved"],
+        platform: a.platform ?? null,
         status: "OPEN",
         size_search: size,
         size_display: size,
@@ -221,7 +267,16 @@ adsDataRoutes.get(
     res.json({
       data: campaigns.map((c) => {
         const d = c.data as any;
-        return { id: c.id, name: d?.name ?? c.id, networks: d?.networks ?? [], status: d?.status ?? "unknown" };
+        return {
+          id: c.id,
+          name: d?.name ?? c.id,
+          networks: d?.networks ?? [],
+          status: d?.status ?? "unknown",
+          daily_budget_cents: d?.dailyBudgetCents ?? 0,
+          // Real per-platform campaign IDs, set once launchMetaHierarchy/launchGoogleHierarchy
+          // actually create the campaign container on that network — empty until launched.
+          external_ids: d?.externalIds ?? {},
+        };
       }),
     });
   })

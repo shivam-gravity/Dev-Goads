@@ -1,10 +1,119 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { openai, runStructured, runWebSearch } from "../../infra/openaiClient.js";
+import { Agent } from "undici";
 import { logger } from "../logger/logger.js";
 import type { AudienceAnalysis, AudiencePersona, Citation, CompetitorBudgetAnalysis, DeepResearchBlock, MarketLocationAnalysis, ProductAnalysis, ScrapedSite } from "../../types/index.js";
 
-const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
+const SCRAPEGRAPH_SERVICE_URL = process.env.SCRAPEGRAPH_SERVICE_URL ?? "http://localhost:5055";
+const SCRAPEGRAPH_TIMEOUT_MS = 420_000; // 5 sequential local-model calls, each with its own ~300s internal budget for large inputs
+// The full site.excerpt can run well past 50k chars now that scraper.ts crawls up to
+// SMART_CRAWL_CAP pages — far more than a CPU-only 3B local model can churn through per call without tripping scrapegraphai's
+// internal per-call timeout (observed: 120s default was too short and degraded silently to junk
+// output). The highest-signal content (title, meta description, headings) is already front-loaded
+// in excerpt ordering, so truncating trades a bit of body-text depth for actually finishing in time.
+const SCRAPEGRAPH_TEXT_LIMIT = 4000;
+const SCRAPEGRAPH_CACHE_TTL_MS = 60 * 60 * 1000;
+const SCRAPEGRAPH_DATA_SOURCE = "scrapegraphai (local Ollama extraction from live site content — no external web search)";
 
-const MAX_USES_PER_CALL = 4;
+interface ScrapeGraphProduct {
+  productName: string; category: string; businessType: string; summary: string;
+  valueProposition: string; keyFeatures: string[]; pricingModel: string; pricingRange: string;
+}
+interface ScrapeGraphAudience {
+  primaryAudience: string; segments: { name: string; description: string }[];
+  painPoints: string[]; buyingMotivations: string[]; ageDistribution: string; genderRatio: string;
+  occupation: string; consumerCharacteristics: string; interestTags: string[];
+  recommendedObjective: string; recommendedPerformanceGoal: string;
+}
+interface ScrapeGraphCompetitor {
+  competitors: string[]; competitionIntensity: string; differentiators: string[];
+  budgetReasoning: string[]; recommendedDailyBudgetCents: number;
+}
+interface ScrapeGraphMarket {
+  recommendedRegion: string; alternativeRegions: string[]; marketTrends: string;
+  competitionLevel: string; recommendedPlatform: string; placementRationale: string;
+}
+interface ScrapeGraphPersona { name: string; ageRange: string; genderSplit: string; details: string; interests: string[]; }
+interface ScrapeGraphResult {
+  product: ScrapeGraphProduct; audience: ScrapeGraphAudience; competitor: ScrapeGraphCompetitor;
+  market: ScrapeGraphMarket; personas: ScrapeGraphPersona[];
+}
+
+const scrapeGraphCache = new Map<string, { result: ScrapeGraphResult | null; expiresAt: number }>();
+
+/**
+ * A local CPU-bound 3B model produces structurally valid JSON but sometimes can't fill
+ * a field at all (e.g. no market/competitor data grounded in the page) and returns an
+ * empty string/array or a literal placeholder like "NA" instead. Cheaper than validating
+ * every field individually — if at least half of a block's primitive fields look like
+ * that, the whole block is treated as unusable and the caller falls back to the existing
+ * static fallback text instead of showing junk.
+ */
+function isJunkString(v: unknown): boolean {
+  if (typeof v !== "string") return false;
+  const t = v.trim().toLowerCase();
+  return t === "" || t === "na" || t === "n/a" || t === "unknown" || t === "none" || t === "tbd";
+}
+
+function blockUsable(obj: object): boolean {
+  let junk = 0;
+  let checked = 0;
+  for (const v of Object.values(obj)) {
+    if (typeof v === "string") {
+      checked++;
+      if (isJunkString(v)) junk++;
+    } else if (Array.isArray(v)) {
+      checked++;
+      if (v.length === 0) junk++;
+    }
+  }
+  return checked === 0 || junk / checked < 0.5;
+}
+
+/**
+ * Runs the full 5-section scrapegraphai research pipeline (apps/scraper-service/python/research_server.py)
+ * once per URL and caches it — every analyze*Deep function below shares this one call instead
+ * of each triggering its own local-model run. Sends the already-scraped `site.excerpt` as the
+ * extraction source rather than the bare URL — letting scrapegraphai re-fetch the URL itself
+ * routes through its own headless-browser render, which has been observed to hang indefinitely
+ * on JS-heavy sites (e.g. stripe.com) past any configured timeout; reusing the fast, already-fetched
+ * cheerio text sidesteps that entirely. Never throws: any failure (service down, timeout, malformed
+ * response) degrades to null so callers fall back to the static fallback text, same mock-fallback
+ * contract as the rest of this module.
+ */
+async function fetchScrapeGraphResearch(site: ScrapedSite): Promise<ScrapeGraphResult | null> {
+  const cached = scrapeGraphCache.get(site.url);
+  if (cached && cached.expiresAt > Date.now()) return cached.result;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SCRAPEGRAPH_TIMEOUT_MS);
+  // Node's global fetch enforces its own ~300s undici "headers timeout" independent of
+  // AbortSignal — a 5-step local-model run can exceed that, so a dispatcher with a longer
+  // headers/body timeout is required or the request gets killed with UND_ERR_HEADERS_TIMEOUT
+  // well before our own SCRAPEGRAPH_TIMEOUT_MS abort would ever fire.
+  const dispatcher = new Agent({ headersTimeout: SCRAPEGRAPH_TIMEOUT_MS, bodyTimeout: SCRAPEGRAPH_TIMEOUT_MS });
+  try {
+    const res = await fetch(`${SCRAPEGRAPH_SERVICE_URL}/research`, {
+      method: "POST",
+      signal: controller.signal,
+      dispatcher,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: site.url, text: site.excerpt.slice(0, SCRAPEGRAPH_TEXT_LIMIT) }),
+    } as unknown as RequestInit);
+    if (!res.ok) throw new Error(`scrapegraphai service responded with ${res.status}`);
+    const result = (await res.json()) as ScrapeGraphResult;
+    scrapeGraphCache.set(site.url, { result, expiresAt: Date.now() + SCRAPEGRAPH_CACHE_TTL_MS });
+    return result;
+  } catch (err) {
+    logger.warn(`fetchScrapeGraphResearch: scrapegraphai service unreachable or failed for ${site.url} — falling back to static estimates`, err);
+    // Short negative-cache TTL (vs. the 1hr positive one) so a transient outage doesn't
+    // force static fallbacks on a retry once the service is back up.
+    scrapeGraphCache.set(site.url, { result: null, expiresAt: Date.now() + 60_000 });
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour — long enough to absorb a user retrying/resubmitting the same URL, short enough that market data doesn't go stale for long-lived dev sessions
 
 /**
@@ -59,51 +168,26 @@ function writeCache(prompt: string, result: WebResearchResult): void {
 
 /**
  * Runs one real, live web-search-backed research call — the one new primitive this
- * feature adds. Claude decides autonomously how many searches to run (up to
- * MAX_USES_PER_CALL) via Anthropic's server-side `web_search_20250305` tool (billed
- * through the existing ANTHROPIC_API_KEY, no separate search-provider account needed).
+ * feature adds. gpt-4o-search-preview decides autonomously what to search via OpenAI's
+ * server-side web search (billed through the existing OPENAI_API_KEY, no separate
+ * search-provider account needed).
  *
  * Cost controls live here since every caller goes through this one chokepoint:
- * - MAX_USES_PER_CALL hard-caps real searches spent per call.
  * - The process-local cache above skips repeat spend for an identical prompt.
- * - No ANTHROPIC_API_KEY -> EMPTY_RESULT immediately, zero cost, zero network calls —
+ * - No OPENAI_API_KEY -> EMPTY_RESULT immediately, zero cost, zero network calls —
  *   the same mock-fallback contract every other function in this module follows.
  *
  * Never throws — a failed/unreachable search degrades to EMPTY_RESULT so one flaky
  * block can't sink a whole research session.
  */
 export async function runWebResearch(prompt: string): Promise<WebResearchResult> {
-  if (!anthropic) return EMPTY_RESULT;
+  if (!openai) return EMPTY_RESULT;
 
   const cached = readCache(prompt);
   if (cached) return cached;
 
   try {
-    const msg = await anthropic.messages.create({
-      model: "claude-sonnet-5",
-      max_tokens: 2048,
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_USES_PER_CALL }],
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    let narrative = "";
-    const citationsByUrl = new Map<string, Citation>();
-    let searchesUsed = 0;
-
-    for (const block of msg.content) {
-      if (block.type === "text") {
-        narrative += block.text;
-        for (const citation of block.citations ?? []) {
-          if (citation.type === "web_search_result_location") {
-            citationsByUrl.set(citation.url, { url: citation.url, title: citation.title ?? citation.url });
-          }
-        }
-      } else if (block.type === "web_search_tool_result") {
-        searchesUsed += 1;
-      }
-    }
-
-    const result: WebResearchResult = { narrative: narrative.trim(), citations: [...citationsByUrl.values()], searchesUsed };
+    const result: WebResearchResult = await runWebSearch(prompt);
     writeCache(prompt, result);
     return result;
   } catch (err) {
@@ -112,7 +196,7 @@ export async function runWebResearch(prompt: string): Promise<WebResearchResult>
   }
 }
 
-const NO_SEARCH_DATA_SOURCE = "AI estimate — no live web search performed (ANTHROPIC_API_KEY not set)";
+const NO_SEARCH_DATA_SOURCE = "AI estimate — no live web search performed (OPENAI_API_KEY not set)";
 const NO_CITATIONS_DATA_SOURCE = "AI estimate based on site content and general market knowledge (no citable sources found)";
 
 function fallbackProductPositioning(site: ScrapedSite): ProductAnalysis {
@@ -123,11 +207,21 @@ function fallbackProductPositioning(site: ScrapedSite): ProductAnalysis {
     summary: site.description || `A business operating at ${site.url}, based on its website content.`,
     valueProposition: "Distinct offering worth exploring further in the strategy step.",
     keyFeatures: ["Core product/service", "Online presence", "Customer-facing website"],
+    useCases: [
+      { title: "General use", description: "Customers evaluating this business's core offering." },
+      { title: "Repeat engagement", description: "Returning customers deepening their use of the product/service." },
+    ],
     pricingModel: "Not publicly listed",
     pricingRange: "Unknown — verify directly with the business",
     dataSource: NO_SEARCH_DATA_SOURCE,
   };
 }
+
+// Applied to every free-text field the model fills in below (not just this tool) — asking for
+// inline **bold** on the 2-4 most important phrases turns a flat sentence into the same
+// skimmable, marketing-copy-style presentation the reference design uses, with zero extra
+// schema fields (the frontend just renders **x** as <strong>).
+const BOLD_HINT = "Wrap the 2-4 most important phrases (numbers, %, $ amounts, key terms) in **markdown bold**.";
 
 const PRODUCT_POSITIONING_TOOL = {
   name: "emit_product_positioning",
@@ -138,20 +232,34 @@ const PRODUCT_POSITIONING_TOOL = {
       productName: { type: "string" },
       category: { type: "string", description: "e.g. SaaS, e-commerce, local service, mobile app, enterprise software" },
       businessType: { type: "string", description: "e.g. Solution & Online Service, E-commerce, Local Service" },
-      summary: { type: "string", description: "2-3 sentences on what the business does and who it targets" },
-      valueProposition: { type: "string" },
+      summary: { type: "string", description: `2-3 sentences on what the business does and who it targets. ${BOLD_HINT}` },
+      valueProposition: { type: "string", description: BOLD_HINT },
       keyFeatures: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 6 },
+      useCases: {
+        type: "array",
+        minItems: 2,
+        maxItems: 4,
+        description: "Distinct real-world scenarios where this product/service gets used, e.g. by team or workflow",
+        items: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "e.g. \"Product Development Teams\"" },
+            description: { type: "string", description: "1 sentence on how this use case applies" },
+          },
+          required: ["title", "description"],
+        },
+      },
       pricingModel: { type: "string", description: "e.g. Custom/enterprise pricing, Subscription, One-time purchase" },
       pricingRange: { type: "string", description: "e.g. \"$5,000-$50,000+/year\" or \"$29-$99/month\"" },
     },
-    required: ["productName", "category", "businessType", "summary", "valueProposition", "keyFeatures", "pricingModel", "pricingRange"],
+    required: ["productName", "category", "businessType", "summary", "valueProposition", "keyFeatures", "useCases", "pricingModel", "pricingRange"],
   },
 };
 
 /**
  * The first deep-research block: real web-search-backed product/pricing positioning.
- * Two Claude calls — one to gather live research (runWebResearch, real citations when
- * ANTHROPIC_API_KEY is set), one to shape that narrative + the site's own content into
+ * Two OpenAI calls — one to gather live research (runWebResearch, real citations when
+ * OPENAI_API_KEY is set), one to shape that narrative + the site's own content into
  * the structured schema above (same forced-tool-choice pattern as analysis.ts's
  * analyzeProduct). Falls back to fallbackProductPositioning with zero API calls when no
  * key is set — same mock-fallback contract as every other function in this module.
@@ -159,7 +267,11 @@ const PRODUCT_POSITIONING_TOOL = {
 export async function analyzeProductDeep(site: ScrapedSite, allowSearch = true): Promise<DeepResearchBlock<ProductAnalysis>> {
   const label = RESEARCH_STEPS.productPositioning;
 
-  if (!anthropic) {
+  if (!openai) {
+    const sg = await fetchScrapeGraphResearch(site);
+    if (sg && blockUsable(sg.product)) {
+      return { key: "productPositioning", label, citations: [], data: { ...sg.product, dataSource: SCRAPEGRAPH_DATA_SOURCE } };
+    }
     return { key: "productPositioning", label, citations: [], data: fallbackProductPositioning(site) };
   }
 
@@ -171,11 +283,9 @@ export async function analyzeProductDeep(site: ScrapedSite, allowSearch = true):
       )
     : EMPTY_RESULT;
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1024,
-    tools: [PRODUCT_POSITIONING_TOOL],
-    tool_choice: { type: "tool", name: "emit_product_positioning" },
+  const result = await runStructured<ProductAnalysis>({
+    maxTokens: 1024,
+    tool: PRODUCT_POSITIONING_TOOL,
     messages: [
       {
         role: "user",
@@ -186,11 +296,9 @@ export async function analyzeProductDeep(site: ScrapedSite, allowSearch = true):
       },
     ],
   });
+  if (!result) throw new Error("Product positioning analysis: model did not return structured output");
 
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) throw new Error("Product positioning analysis: model did not return structured output");
-
-  const data = toolUse.input as ProductAnalysis;
+  const data = result;
   data.dataSource = research.citations.length > 0 ? research.citations.map((c) => c.title).join(" + ") : NO_CITATIONS_DATA_SOURCE;
 
   return { key: "productPositioning", label, citations: research.citations, data };
@@ -220,7 +328,7 @@ const AUDIENCE_DEEP_TOOL = {
   input_schema: {
     type: "object" as const,
     properties: {
-      primaryAudience: { type: "string" },
+      primaryAudience: { type: "string", description: BOLD_HINT },
       segments: {
         type: "array", minItems: 2, maxItems: 4,
         items: { type: "object", properties: { name: { type: "string" }, description: { type: "string" } }, required: ["name", "description"] },
@@ -230,7 +338,7 @@ const AUDIENCE_DEEP_TOOL = {
       ageDistribution: { type: "string", description: "e.g. \"30-39 years 42%, 40-49 years 35%, 50-60 years 18%, 25-29 years 5%\"" },
       genderRatio: { type: "string", description: "e.g. \"Male 68%, Female 32%\"" },
       occupation: { type: "string", description: "e.g. \"Primarily C-Suite (CIO, CTO, COO) 45%, IT Directors/Managers 30%\"" },
-      consumerCharacteristics: { type: "string", description: "budget, price sensitivity, brand loyalty, buying cycle" },
+      consumerCharacteristics: { type: "string", description: `budget, price sensitivity, brand loyalty, buying cycle. ${BOLD_HINT}` },
       interestTags: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 10 },
       recommendedObjective: { type: "string", description: "e.g. Leads, Sales, Traffic, Awareness" },
       recommendedPerformanceGoal: { type: "string", description: "e.g. \"Leads within landing-page\"" },
@@ -243,7 +351,23 @@ const AUDIENCE_DEEP_TOOL = {
 export async function analyzeAudienceDeep(site: ScrapedSite, product: ProductAnalysis, allowSearch = true): Promise<DeepResearchBlock<AudienceAnalysis>> {
   const label = RESEARCH_STEPS.audienceProfile;
 
-  if (!anthropic) {
+  if (!openai) {
+    const sg = await fetchScrapeGraphResearch(site);
+    if (sg && blockUsable(sg.audience)) {
+      const data: AudienceAnalysis = {
+        primaryAudience: sg.audience.primaryAudience,
+        segments: sg.audience.segments,
+        painPoints: sg.audience.painPoints,
+        buyingMotivations: sg.audience.buyingMotivations,
+        demographics: { ageDistribution: sg.audience.ageDistribution, genderRatio: sg.audience.genderRatio, occupation: sg.audience.occupation },
+        consumerCharacteristics: sg.audience.consumerCharacteristics,
+        interestTags: sg.audience.interestTags,
+        recommendedObjective: sg.audience.recommendedObjective,
+        recommendedPerformanceGoal: sg.audience.recommendedPerformanceGoal,
+        dataSource: SCRAPEGRAPH_DATA_SOURCE,
+      };
+      return { key: "audienceProfile", label, citations: [], data };
+    }
     return { key: "audienceProfile", label, citations: [], data: fallbackAudienceDeep(product) };
   }
 
@@ -255,11 +379,9 @@ export async function analyzeAudienceDeep(site: ScrapedSite, product: ProductAna
       )
     : EMPTY_RESULT;
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1024,
-    tools: [AUDIENCE_DEEP_TOOL],
-    tool_choice: { type: "tool", name: "emit_audience_deep" },
+  const result = await runStructured<any>({
+    maxTokens: 1024,
+    tool: AUDIENCE_DEEP_TOOL,
     messages: [
       {
         role: "user",
@@ -270,11 +392,9 @@ export async function analyzeAudienceDeep(site: ScrapedSite, product: ProductAna
       },
     ],
   });
+  if (!result) throw new Error("Audience analysis: model did not return structured output");
 
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) throw new Error("Audience analysis: model did not return structured output");
-
-  const raw = toolUse.input as any;
+  const raw = result;
   const data: AudienceAnalysis = {
     primaryAudience: raw.primaryAudience,
     segments: raw.segments,
@@ -309,9 +429,12 @@ const COMPETITOR_BUDGET_TOOL = {
     type: "object" as const,
     properties: {
       competitors: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6, description: "Named real competitors, if found" },
-      competitionIntensity: { type: "string", description: "e.g. \"High (CPC: $8-$15 for B2B enterprise software...)\"" },
+      competitionIntensity: { type: "string", description: `e.g. "High (CPC: $8-$15 for B2B enterprise software...)". ${BOLD_HINT}` },
       differentiators: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 5, description: "How this business could differentiate vs. the named competitors" },
-      budgetReasoning: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 6, description: "The step-by-step math: product value -> CPA target -> CVR -> clicks needed -> blended CPC -> daily budget" },
+      budgetReasoning: {
+        type: "array", items: { type: "string" }, minItems: 2, maxItems: 6,
+        description: `The step-by-step math, ONE reasoning step per array item in order: product value -> CPA target -> CVR -> clicks needed -> blended CPC -> daily budget. ${BOLD_HINT}`,
+      },
       recommendedDailyBudgetCents: { type: "integer", description: "The final recommended daily budget in cents, e.g. 15000 for $150/day" },
     },
     required: ["competitors", "competitionIntensity", "differentiators", "budgetReasoning", "recommendedDailyBudgetCents"],
@@ -322,7 +445,11 @@ const COMPETITOR_BUDGET_TOOL = {
 export async function analyzeCompetitorsAndBudget(site: ScrapedSite, product: ProductAnalysis, allowSearch = true): Promise<DeepResearchBlock<CompetitorBudgetAnalysis>> {
   const label = RESEARCH_STEPS.competitorBudget;
 
-  if (!anthropic) {
+  if (!openai) {
+    const sg = await fetchScrapeGraphResearch(site);
+    if (sg && blockUsable(sg.competitor)) {
+      return { key: "competitorBudget", label, citations: [], data: { ...sg.competitor, dataSource: SCRAPEGRAPH_DATA_SOURCE } };
+    }
     return { key: "competitorBudget", label, citations: [], data: fallbackCompetitorBudget() };
   }
 
@@ -334,11 +461,9 @@ export async function analyzeCompetitorsAndBudget(site: ScrapedSite, product: Pr
       )
     : EMPTY_RESULT;
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1536,
-    tools: [COMPETITOR_BUDGET_TOOL],
-    tool_choice: { type: "tool", name: "emit_competitor_budget" },
+  const result = await runStructured<CompetitorBudgetAnalysis>({
+    maxTokens: 1536,
+    tool: COMPETITOR_BUDGET_TOOL,
     messages: [
       {
         role: "user",
@@ -350,11 +475,9 @@ export async function analyzeCompetitorsAndBudget(site: ScrapedSite, product: Pr
       },
     ],
   });
+  if (!result) throw new Error("Competitor/budget analysis: model did not return structured output");
 
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) throw new Error("Competitor/budget analysis: model did not return structured output");
-
-  const data = toolUse.input as CompetitorBudgetAnalysis;
+  const data = result;
   data.dataSource = research.citations.length > 0 ? research.citations.map((c) => c.title).join(" + ") : NO_CITATIONS_DATA_SOURCE;
 
   return { key: "competitorBudget", label, citations: research.citations, data };
@@ -365,6 +488,7 @@ function fallbackMarketLocation(): MarketLocationAnalysis {
     recommendedRegion: "United States",
     alternativeRegions: ["United Kingdom", "Canada"],
     marketTrends: "Unknown — no live research performed.",
+    keyDrivers: ["No live research performed — revisit once real market data is available"],
     competitionLevel: "Unknown — no live research performed",
     recommendedPlatform: "meta",
     placementRationale: "Meta is recommended as a low-cost, high-reach default for early-stage campaigns absent live CPC/ROAS data — revisit once real performance data is available.",
@@ -380,12 +504,13 @@ const MARKET_LOCATION_TOOL = {
     properties: {
       recommendedRegion: { type: "string" },
       alternativeRegions: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 5 },
-      marketTrends: { type: "string", description: "Growth rate, market size, adoption trends for this category" },
+      marketTrends: { type: "string", description: `Growth rate, market size, adoption trends for this category. ${BOLD_HINT}` },
+      keyDrivers: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 5, description: "Specific forces driving the market trend above, e.g. regulatory changes, technology shifts, buyer behavior changes" },
       competitionLevel: { type: "string", description: "e.g. \"High (Platform competition index 8/10)...\"" },
       recommendedPlatform: { type: "string", enum: ["meta", "google", "tiktok"] },
-      placementRationale: { type: "string", description: "Why this platform, with specific CPC/CPM/ROAS reasoning where available" },
+      placementRationale: { type: "string", description: `Why this platform, with specific CPC/CPM/ROAS reasoning where available. ${BOLD_HINT}` },
     },
-    required: ["recommendedRegion", "alternativeRegions", "marketTrends", "competitionLevel", "recommendedPlatform", "placementRationale"],
+    required: ["recommendedRegion", "alternativeRegions", "marketTrends", "keyDrivers", "competitionLevel", "recommendedPlatform", "placementRationale"],
   },
 };
 
@@ -393,7 +518,12 @@ const MARKET_LOCATION_TOOL = {
 export async function analyzeMarketAndLocation(site: ScrapedSite, product: ProductAnalysis, allowSearch = true): Promise<DeepResearchBlock<MarketLocationAnalysis>> {
   const label = RESEARCH_STEPS.marketLocation;
 
-  if (!anthropic) {
+  if (!openai) {
+    const sg = await fetchScrapeGraphResearch(site);
+    const platform = sg?.market.recommendedPlatform.trim().toLowerCase();
+    if (sg && blockUsable(sg.market) && (platform === "meta" || platform === "google" || platform === "tiktok")) {
+      return { key: "marketLocation", label, citations: [], data: { ...sg.market, recommendedPlatform: platform, dataSource: SCRAPEGRAPH_DATA_SOURCE } };
+    }
     return { key: "marketLocation", label, citations: [], data: fallbackMarketLocation() };
   }
 
@@ -405,11 +535,9 @@ export async function analyzeMarketAndLocation(site: ScrapedSite, product: Produ
       )
     : EMPTY_RESULT;
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1536,
-    tools: [MARKET_LOCATION_TOOL],
-    tool_choice: { type: "tool", name: "emit_market_location" },
+  const result = await runStructured<MarketLocationAnalysis>({
+    maxTokens: 1536,
+    tool: MARKET_LOCATION_TOOL,
     messages: [
       {
         role: "user",
@@ -420,11 +548,9 @@ export async function analyzeMarketAndLocation(site: ScrapedSite, product: Produ
       },
     ],
   });
+  if (!result) throw new Error("Market/location analysis: model did not return structured output");
 
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) throw new Error("Market/location analysis: model did not return structured output");
-
-  const data = toolUse.input as MarketLocationAnalysis;
+  const data = result;
   data.dataSource = research.citations.length > 0 ? research.citations.map((c) => c.title).join(" + ") : NO_CITATIONS_DATA_SOURCE;
 
   return { key: "marketLocation", label, citations: research.citations, data };
@@ -473,27 +599,30 @@ const PERSONA_MINING_TOOL = {
 
 /**
  * Fifth block: pure reasoning over the already-gathered analysis — deliberately NO web
- * search here. Claude's training data already covers common Meta ad-interest taxonomy
+ * search here. The model's training data already covers common Meta ad-interest taxonomy
  * well enough for this, and skipping search keeps this block's cost/latency near zero
  * even on a fully "live" run, which matters since 4-6 personas x real searches would be
  * the single most expensive part of a session otherwise.
  */
 export async function mineAudiencePersonas(
+  site: ScrapedSite,
   product: ProductAnalysis,
   audience: AudienceAnalysis,
   competitor: CompetitorBudgetAnalysis
 ): Promise<DeepResearchBlock<AudiencePersona[]>> {
   const label = RESEARCH_STEPS.audiencePersonas;
 
-  if (!anthropic) {
+  if (!openai) {
+    const sg = await fetchScrapeGraphResearch(site);
+    if (sg && sg.personas.length > 0 && sg.personas.every((p) => !isJunkString(p.name) && p.interests.length > 0)) {
+      return { key: "audiencePersonas", label, citations: [], data: sg.personas };
+    }
     return { key: "audiencePersonas", label, citations: [], data: fallbackPersonas(audience, product) };
   }
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 2048,
-    tools: [PERSONA_MINING_TOOL],
-    tool_choice: { type: "tool", name: "emit_audience_personas" },
+  const result = await runStructured<{ personas: AudiencePersona[] }>({
+    maxTokens: 2048,
+    tool: PERSONA_MINING_TOOL,
     messages: [
       {
         role: "user",
@@ -507,10 +636,7 @@ export async function mineAudiencePersonas(
       },
     ],
   });
+  if (!result) throw new Error("Persona mining: model did not return structured output");
 
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) throw new Error("Persona mining: model did not return structured output");
-
-  const data = (toolUse.input as { personas: AudiencePersona[] }).personas;
-  return { key: "audiencePersonas", label, citations: [], data };
+  return { key: "audiencePersonas", label, citations: [], data: result.personas };
 }

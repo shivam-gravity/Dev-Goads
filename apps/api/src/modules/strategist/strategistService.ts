@@ -1,9 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { openai, runText } from "../../infra/openaiClient.js";
 import { getBusiness } from "../business/businessService.js";
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
 import { getAnalyticsSummary } from "../analytics/analyticsService.js";
-
-const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
 export interface StrategistChatMessage {
   role: "user" | "assistant";
@@ -42,15 +40,12 @@ export async function chatWithStrategist(businessId: string, messages: Strategis
   const business = await getBusiness(businessId);
   const campaigns = await listCampaignsForBusiness(businessId);
 
-  if (!anthropic) return fallbackReply(business, campaigns.length);
+  if (!openai) return fallbackReply(business, campaigns.length);
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1024,
+  const text = await runText({
+    maxTokens: 1024,
     system: await buildSystemPrompt(businessId),
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
   });
-
-  const textBlock = msg.content.find((b): b is Anthropic.TextBlock => b.type === "text");
-  return textBlock?.text ?? fallbackReply(business, campaigns.length);
+  return text ?? fallbackReply(business, campaigns.length);
 }

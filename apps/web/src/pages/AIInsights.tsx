@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api, AudienceAnalysis, Insight, ProductAnalysis, ScrapedSite } from "../api/client.js";
 import Reveal from "../components/Reveal.js";
 import { ClockIcon, GlobeIcon, SparkleIcon, XIcon } from "../components/icons.js";
@@ -8,6 +9,14 @@ const SEVERITY_COLORS = {
   medium: "var(--accent)",
   low: "var(--muted)"
 };
+
+const CATEGORY_FILTERS: { value: "all" | Insight["category"]; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "budget", label: "Budget" },
+  { value: "audience", label: "Audience" },
+  { value: "creative", label: "Creative" },
+  { value: "placement", label: "Placement" },
+];
 
 interface KnowledgeItem {
   id: string;
@@ -70,11 +79,13 @@ const KNOWLEDGE_BASE_ITEMS: KnowledgeItem[] = [
 ];
 
 export default function AIInsights({ businessId }: { businessId: string }) {
+  const navigate = useNavigate();
   const [insights, setInsights] = useState<Insight[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [runningAction, setRunningAction] = useState<string | null>(null);
-  
+  const [categoryFilter, setCategoryFilter] = useState<"all" | Insight["category"]>("all");
+
   // Tabs & Search State
   const [activeTab, setActiveTab] = useState<"insights" | "kb">("insights");
   const [searchQuery, setSearchQuery] = useState("");
@@ -119,9 +130,7 @@ export default function AIInsights({ businessId }: { businessId: string }) {
     if (!insight.actionLabel) return;
     setRunningAction(insight.id);
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      if (insight.metric === "Budget") {
+      if (insight.category === "budget") {
         const camps = await api.listCampaigns(businessId);
         const activeCamps = camps.filter(c => c.status === "active");
         if (activeCamps[0]) {
@@ -129,10 +138,15 @@ export default function AIInsights({ businessId }: { businessId: string }) {
           const newBudget = Math.round(currentBudget * 1.15); // +15%
           await api.updateCampaign(activeCamps[0].id, { dailyBudgetCents: newBudget });
         }
+        await handleDismiss(insight.id);
+      } else {
+        // Audience/creative/placement suggestions don't have a one-click mutation here —
+        // surface the recommendation by taking the user to where they'd act on it
+        // (Audience Builder, Creative Studio, or the campaign itself for placement changes)
+        // rather than faking a delay and pretending something happened.
+        if (insight.actionUrl) navigate(insight.actionUrl);
+        await handleDismiss(insight.id);
       }
-      
-      alert(`Applied optimization: ${insight.actionLabel}`);
-      await handleDismiss(insight.id);
     } catch (err) {
       setError("Failed to apply optimization.");
     } finally {
@@ -211,12 +225,27 @@ export default function AIInsights({ businessId }: { businessId: string }) {
         </button>
       </nav>
 
+      {activeTab === "insights" && (
+        <div className="insights-category-filters mb-3">
+          {CATEGORY_FILTERS.map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              className={`btn btn-sm ${categoryFilter === f.value ? "btn-primary" : "btn-secondary"}`}
+              onClick={() => setCategoryFilter(f.value)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {activeTab === "insights" ? (
         loading ? (
           <div className="campaigns-loading">
             {[1, 2, 3].map(i => <div key={i} className="campaign-row-skeleton" />)}
           </div>
-        ) : insights.length === 0 ? (
+        ) : insights.filter((i) => categoryFilter === "all" || i.category === categoryFilter).length === 0 ? (
           <div className="empty-state">
             <span className="empty-icon">💡</span>
             <p>No new insights found. Check back once your active campaigns accumulate data.</p>
@@ -224,7 +253,7 @@ export default function AIInsights({ businessId }: { businessId: string }) {
         ) : (
           <Reveal>
             <div className="insights-feed flex-col gap-4">
-              {insights.map((ins) => (
+              {insights.filter((i) => categoryFilter === "all" || i.category === categoryFilter).map((ins) => (
                 <div key={ins.id} className="card insight-card">
                   <div className="insight-card-header flex justify-between items-start gap-4">
                     <div className="flex gap-3 items-center">
@@ -235,7 +264,10 @@ export default function AIInsights({ businessId }: { businessId: string }) {
                       />
                       <h3 className="insight-title">{ins.title}</h3>
                     </div>
-                    <span className="pill text-uppercase font-size-11" style={{ background: "rgba(112, 51, 245, 0.08)", color: "#7033f5", fontWeight: 700 }}>{ins.type}</span>
+                    <div className="flex gap-2 items-center">
+                      <span className="pill text-uppercase font-size-11" style={{ background: "rgba(16, 185, 129, 0.08)", color: "#10b981", fontWeight: 700 }}>{ins.category}</span>
+                      <span className="pill text-uppercase font-size-11" style={{ background: "rgba(112, 51, 245, 0.08)", color: "#7033f5", fontWeight: 700 }}>{ins.type}</span>
+                    </div>
                   </div>
 
                   <p className="insight-description mt-3">{ins.description}</p>

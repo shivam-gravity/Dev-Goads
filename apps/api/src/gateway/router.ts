@@ -37,8 +37,11 @@ import { listNotifications, markRead, markAllRead, unreadCount, seedDemoNotifica
 import { listAssets, createAsset, deleteAsset, updateAssetTags, seedDemoAssets } from "../modules/assets/assetService.js";
 import { listInsights, dismissInsight, generateInsights, seedDemoInsights } from "../modules/insights/insightService.js";
 import { getOrCreateIntegrations, connectIntegration, disconnectIntegration, updateIntegrationSettings, getMetaCredentials, sanitizeIntegration, setMetaManualConnection, setGoogleManualConnection } from "../modules/integrations/integrationService.js";
+import { listAdAccounts as listMetaAdAccountsGraph, listPages as listMetaPagesGraph, listInstagramAccounts as listMetaInstagramAccountsGraph, listPixels as listMetaPixelsGraph } from "../modules/integrations/metaOAuth.js";
+import { listAccessibleCustomers as listGoogleCustomersApi, listConversionActions as listGoogleConversionActionsApi } from "../modules/integrations/googleOAuth.js";
 import { getProductCatalog } from "../modules/integrations/productCatalogService.js";
 import { createGenerationJob, getGenerationJob } from "../modules/generation/generationJobService.js";
+import { getCrmWebhookConfig, setCrmWebhookConfig, clearCrmWebhookConfig } from "../modules/crm/crmWebhookService.js";
 import { creativeGenerationQueue, researchSessionQueue } from "../infra/queue.js";
 import {
   listSavedAudiences,
@@ -194,6 +197,7 @@ router.get("/workspaces/:workspaceId/insights", asyncHandler(async (req, res) =>
 router.post("/workspaces/:workspaceId/insights/generate", asyncHandler(async (req, res) => {
   const { businessId } = req.query as { businessId?: string };
   if (!businessId) return res.status(400).json({ error: "businessId query param required" });
+  if (!(await getBusiness(businessId))) return res.status(404).json({ error: "Business not found" });
   try {
     res.json(await generateInsights(req.params.workspaceId, businessId));
   } catch (err) {
@@ -212,8 +216,11 @@ router.patch("/insights/:id/dismiss", asyncHandler(async (req, res) => {
 
 router.get("/workspaces/:id/integrations", asyncHandler(async (req, res) => res.json((await getOrCreateIntegrations(req.params.id)).map(sanitizeIntegration))));
 
+const INTEGRATION_PLATFORMS = ["meta", "google", "tiktok", "shopify", "woocommerce", "pixel"] as const;
+
 router.post("/workspaces/:id/integrations/:platform/connect", asyncHandler(async (req, res) => {
   const platform = req.params.platform as any;
+  if (!INTEGRATION_PLATFORMS.includes(platform)) return res.status(400).json({ error: `Unknown platform "${platform}"` });
   const { accountName } = req.body;
   try {
     res.json(sanitizeIntegration(await connectIntegration(req.params.id, platform, accountName ?? "My Ad Account")));
@@ -268,12 +275,48 @@ router.post("/workspaces/:id/integrations/google/connect-manual", asyncHandler(a
   }
 }));
 
+// Full account/page/Instagram/pixel lists for the campaign builder's selector dropdowns —
+// distinct from the single-account picker the OAuth callback stores (metaOAuth.ts). Falls
+// back to mock data when there's no live Meta connection so the builder always has options.
+router.get("/workspaces/:id/integrations/meta/ad-accounts", asyncHandler(async (req, res) => {
+  try { res.json(await listMetaAdAccountsGraph(req.params.id)); }
+  catch (err) { sendError(res, err, 502, "Failed to list Meta ad accounts"); }
+}));
+
+router.get("/workspaces/:id/integrations/meta/pages", asyncHandler(async (req, res) => {
+  try { res.json(await listMetaPagesGraph(req.params.id)); }
+  catch (err) { sendError(res, err, 502, "Failed to list Meta pages"); }
+}));
+
+router.get("/workspaces/:id/integrations/meta/pages/:pageId/instagram-accounts", asyncHandler(async (req, res) => {
+  try { res.json(await listMetaInstagramAccountsGraph(req.params.id, req.params.pageId)); }
+  catch (err) { sendError(res, err, 502, "Failed to list Instagram accounts"); }
+}));
+
+router.get("/workspaces/:id/integrations/meta/pixels", asyncHandler(async (req, res) => {
+  try { res.json(await listMetaPixelsGraph(req.params.id)); }
+  catch (err) { sendError(res, err, 502, "Failed to list Meta pixels"); }
+}));
+
+router.get("/workspaces/:id/integrations/google/customers", asyncHandler(async (req, res) => {
+  try { res.json(await listGoogleCustomersApi(req.params.id)); }
+  catch (err) { sendError(res, err, 502, "Failed to list Google Ads customers"); }
+}));
+
+router.get("/workspaces/:id/integrations/google/conversion-actions", asyncHandler(async (req, res) => {
+  try { res.json(await listGoogleConversionActionsApi(req.params.id)); }
+  catch (err) { sendError(res, err, 502, "Failed to list Google conversion actions"); }
+}));
+
 /* ═══════════════════════════════════════════════
    SAVED AUDIENCES / DEMOGRAPHIC TARGETING
    ═══════════════════════════════════════════════ */
 
-const savedAudienceSchema = z.object({
+const savedAudienceFields = z.object({
   name: z.string().trim().min(1),
+  type: z.enum(["saved", "custom", "lookalike", "interest_group"]).default("saved"),
+  platform: z.enum(["meta", "google"]).nullable().optional(),
+  lookalikeSourceId: z.string().nullable().optional(),
   ageMin: z.number().int().min(13).max(65),
   ageMax: z.number().int().min(13).max(65),
   gender: z.enum(["all", "male", "female"]).default("all"),
@@ -281,6 +324,13 @@ const savedAudienceSchema = z.object({
   interests: z.array(z.string()).default([]),
   exclusions: z.array(z.string()).default([]),
 });
+
+const ageRangeValid = (data: { ageMin?: number; ageMax?: number }) =>
+  data.ageMin === undefined || data.ageMax === undefined || data.ageMin <= data.ageMax;
+const ageRangeRefinement = { message: "ageMin must be less than or equal to ageMax", path: ["ageMax"] };
+
+const savedAudienceSchema = savedAudienceFields.refine(ageRangeValid, ageRangeRefinement);
+const savedAudienceUpdateSchema = savedAudienceFields.partial().refine(ageRangeValid, ageRangeRefinement);
 
 router.get("/workspaces/:id/audiences", asyncHandler(async (req, res) => res.json(await listSavedAudiences(req.params.id))));
 
@@ -291,7 +341,9 @@ router.post("/workspaces/:id/audiences", asyncHandler(async (req, res) => {
 }));
 
 router.patch("/audiences/:id", asyncHandler(async (req, res) => {
-  try { res.json(await updateSavedAudience(req.params.id, savedAudienceSchema.partial().parse(req.body))); }
+  const parsed = savedAudienceUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try { res.json(await updateSavedAudience(req.params.id, parsed.data)); }
   catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
@@ -314,6 +366,59 @@ router.post("/workspaces/:id/audiences/:audienceId/reach-estimate", asyncHandler
   } catch (err) {
     sendError(res, err, 502, "Meta reach estimate failed");
   }
+}));
+
+const ephemeralReachEstimateSchema = z.object({
+  locations: z.array(z.string()).default([]),
+  interests: z.array(z.string()).default([]),
+  ageMin: z.number().int().min(13).max(65).default(18),
+  ageMax: z.number().int().min(13).max(65).default(65),
+  gender: z.enum(["all", "male", "female"]).default("all"),
+});
+
+// Same reach-estimate machinery as above, but for the campaign builder's audience gauge
+// where the targeting hasn't been (and may never be) saved as a SavedAudience.
+router.post("/workspaces/:id/reach-estimate", asyncHandler(async (req, res) => {
+  const parsed = ephemeralReachEstimateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const audience = { id: "ephemeral", workspaceId: req.params.id, name: "ephemeral", exclusions: [], createdAt: new Date().toISOString(), ...parsed.data };
+
+  const credentials = await getMetaCredentials(req.params.id);
+  if (!credentials) return res.json(estimateReachHeuristic(audience));
+
+  try {
+    const targeting = await buildMetaTargetingSpec(credentials.accessToken, audience);
+    res.json(await fetchMetaReachEstimate(credentials.accessToken, credentials.adAccountId, targeting));
+  } catch (err) {
+    sendError(res, err, 502, "Meta reach estimate failed");
+  }
+}));
+
+/* ═══════════════════════════════════════════════
+   CRM OUTBOUND WEBHOOK CONFIG (Stage E)
+   ═══════════════════════════════════════════════ */
+
+const crmWebhookConfigSchema = z.object({
+  url: z.string().url(),
+  secret: z.string().min(1).nullable().optional(),
+});
+
+router.get("/workspaces/:id/crm-webhook", asyncHandler(async (req, res) => {
+  const config = await getCrmWebhookConfig(req.params.id);
+  // Never return the secret — same treatment as an OAuth token, only "is one set" matters here.
+  res.json({ url: config?.url ?? null, configured: Boolean(config) });
+}));
+
+router.put("/workspaces/:id/crm-webhook", asyncHandler(async (req, res) => {
+  const parsed = crmWebhookConfigSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  await setCrmWebhookConfig(req.params.id, parsed.data);
+  res.status(204).send();
+}));
+
+router.delete("/workspaces/:id/crm-webhook", asyncHandler(async (req, res) => {
+  await clearCrmWebhookConfig(req.params.id);
+  res.status(204).send();
 }));
 
 /* ═══════════════════════════════════════════════
@@ -504,6 +609,7 @@ router.post("/businesses/:id/strategies/from-research", asyncHandler(async (req,
   }
 }));
 
+
 router.get("/businesses/:id/strategies", asyncHandler(async (req, res) => res.json(await listStrategiesForBusiness(req.params.id))));
 router.get("/strategies/:id", asyncHandler(async (req, res) => {
   const strategy = await getStrategy(req.params.id);
@@ -581,6 +687,7 @@ router.post("/creatives/variations", asyncHandler(async (req, res) => {
 // not core campaign CRUD/orchestration.
 const campaignProxy = proxyTo(CAMPAIGN_SERVICE_URL);
 router.post("/campaigns", campaignProxy);
+router.post("/campaigns/from-suggestions", campaignProxy);
 router.get("/businesses/:id/campaigns", campaignProxy);
 router.get("/campaigns/:id", campaignProxy);
 router.patch("/campaigns/:id", campaignProxy);
@@ -590,6 +697,7 @@ router.post("/campaigns/:id/variants/:variantId/activate", campaignProxy);
 router.post("/campaigns/:id/apply-creative-media", campaignProxy);
 router.post("/campaigns/:id/ingest", campaignProxy);
 router.get("/campaigns/:id/performance", campaignProxy);
+router.get("/campaigns/:id/live-insights", campaignProxy);
 router.get("/campaigns/:id/trend", asyncHandler(async (req, res) => res.json(await getCampaignTrend(req.params.id))));
 router.post("/campaigns/:id/optimize", campaignProxy);
 
@@ -613,6 +721,7 @@ const productAnalysisSchema = z.object({
   excerpt: z.string(),
   images: z.array(z.string()).default([]),
   crawledPages: z.array(z.string()).default([]),
+  pagesDiscovered: z.number().default(0),
 });
 router.post("/onboarding/analyze-product", asyncHandler(async (req, res) => {
   const parsed = productAnalysisSchema.safeParse(req.body);

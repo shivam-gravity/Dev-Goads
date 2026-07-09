@@ -35,6 +35,7 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
   const [savedAudiences, setSavedAudiences] = useState<SavedAudience[]>([]);
   const [reachByAudience, setReachByAudience] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     api.listAudiences(wsId).then((list) => {
@@ -70,9 +71,10 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
 
   async function handleSaveAudience() {
     if (!audienceName.trim()) {
-      alert("Please name your audience segment.");
+      setSaveError("Please name your audience segment.");
       return;
     }
+    setSaveError(null);
     setSaving(true);
     try {
       const saved = await api.createAudience(wsId, {
@@ -90,7 +92,7 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
         .then((estimate) => setReachByAudience((prev) => ({ ...prev, [saved.id]: formatReach(estimate) })))
         .catch(() => {});
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save audience.");
+      setSaveError(err instanceof Error ? err.message : "Failed to save audience.");
     } finally {
       setSaving(false);
     }
@@ -185,7 +187,7 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
                   {locations.map((loc) => (
                     <span key={loc} className="audience-pill-saved">
                       {loc}
-                      <button type="button" onClick={() => setLocations(locations.filter(x => x !== loc))}>×</button>
+                      <button type="button" className="audience-pill-remove" onClick={() => setLocations(locations.filter(x => x !== loc))}>×</button>
                     </span>
                   ))}
                 </div>
@@ -208,7 +210,7 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
                   {interests.map((int) => (
                     <span key={int} className="audience-pill-saved">
                       {int}
-                      <button type="button" onClick={() => setInterests(interests.filter(x => x !== int))}>×</button>
+                      <button type="button" className="audience-pill-remove" onClick={() => setInterests(interests.filter(x => x !== int))}>×</button>
                     </span>
                   ))}
                 </div>
@@ -231,7 +233,7 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
                   {exclusions.map((ex) => (
                     <span key={ex} className="audience-pill-saved">
                       {ex}
-                      <button type="button" onClick={() => setExclusions(exclusions.filter(x => x !== ex))}>×</button>
+                      <button type="button" className="audience-pill-remove" onClick={() => setExclusions(exclusions.filter(x => x !== ex))}>×</button>
                     </span>
                   ))}
                 </div>
@@ -296,6 +298,7 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
               </div>
             </div>
 
+            {saveError && <p className="error mt-2">{saveError}</p>}
             <button className="btn btn-primary btn-full mt-4" onClick={handleSaveAudience} disabled={saving}>
               {saving ? "Saving…" : "Save Target Segment"}
             </button>

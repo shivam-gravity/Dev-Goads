@@ -247,11 +247,15 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
 
     if (!hasLiveCredentials) {
       const impressions = Math.floor(1500 + Math.random() * 9000);
+      // Google Search campaigns don't report a native unique-reach metric (that's a
+      // Display/Video concept) — estimated the same plausible-fraction way as the mock
+      // branch above, not queried, even once real credentials exist (see below).
+      const reach = Math.floor(impressions * (0.5 + Math.random() * 0.3));
       const clicks = Math.floor(impressions * (0.015 + Math.random() * 0.035));
       const conversions = Math.floor(clicks * (0.03 + Math.random() * 0.07));
       const spendCents = Math.floor(clicks * (40 + Math.random() * 80));
       logger.info(`Offline mode. Generated mock insights metrics for ${externalId}`);
-      return { impressions, clicks, conversions, spendCents };
+      return { impressions, reach, clicks, conversions, spendCents };
     }
 
     try {
@@ -273,12 +277,16 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
       // Response validation
       if (!json || !json.results || !json.results[0]) {
         logger.warn(`No search results returned for Google Ads resource: ${externalId}. Returning zero metrics.`);
-        return { impressions: 0, clicks: 0, conversions: 0, spendCents: 0 };
+        return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0 };
       }
 
       const metrics = json.results[0].metrics || {};
+      const impressions = Number(metrics.impressions ?? 0);
       const stats = {
-        impressions: Number(metrics.impressions ?? 0),
+        impressions,
+        // No ad_group_ad-level reach field exists in the Google Ads API for Search — same
+        // estimate as the mock branch, applied to the real impressions count.
+        reach: Math.floor(impressions * 0.65),
         clicks: Number(metrics.clicks ?? 0),
         conversions: Number(metrics.conversions ?? 0),
         spendCents: Math.round(Number(metrics.costMicros ?? 0) / 10000),
@@ -333,6 +341,20 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
           ...(targeting.languageConstant ? [{ create: { campaign: campaignResourceName, language: { languageConstant: targeting.languageConstant } } }] : []),
         ];
         if (criteriaOps.length) await adsMutate(customerId, developerToken, accessToken, "campaignCriteria", criteriaOps);
+      }
+
+      if (input.conversionActionResourceName) {
+        try {
+          await adsMutate(customerId, developerToken, accessToken, "campaignConversionGoals", [
+            { update: { campaign: campaignResourceName, conversionAction: input.conversionActionResourceName, biddable: true }, updateMask: "biddable" },
+          ]);
+        } catch (err) {
+          // Real Google Ads conversion-goal mutations have account-state constraints
+          // (e.g. requires the conversion action to already be attached at the account
+          // level) — best-effort like the age/gender ad-group criteria above, doesn't
+          // fail the whole campaign launch.
+          logger.warn("Google campaign conversion-goal mutation failed — campaign created without a linked conversion action", err);
+        }
       }
     } catch (err) {
       // The budget above was already created live on the account — clean it up rather

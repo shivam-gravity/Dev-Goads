@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { openai, runStructured } from "../../infra/openaiClient.js";
 import { randomUUID } from "node:crypto";
 import { objectStorage } from "../../infra/objectStorage.js";
 import { createAsset } from "../assets/assetService.js";
@@ -16,8 +16,6 @@ import {
   type GenerationJobResult,
 } from "./generationJobService.js";
 import { logger } from "../logger/logger.js";
-
-const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
 const CREATIVE_BRIEF_TOOL = {
   name: "emit_creative_brief",
@@ -51,19 +49,14 @@ function fallbackBrief(context: string): CreativeBrief {
 }
 
 async function generateCreativeBrief(context: string): Promise<CreativeBrief> {
-  if (!anthropic) return fallbackBrief(context);
+  if (!openai) return fallbackBrief(context);
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1024,
-    tools: [CREATIVE_BRIEF_TOOL],
-    tool_choice: { type: "tool", name: "emit_creative_brief" },
+  const result = await runStructured<CreativeBrief>({
+    maxTokens: 1024,
+    tool: CREATIVE_BRIEF_TOOL,
     messages: [{ role: "user", content: `Write ad copy and an image prompt for this product/business:\n${context}` }],
   });
-
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) return fallbackBrief(context);
-  return toolUse.input as CreativeBrief;
+  return result ?? fallbackBrief(context);
 }
 
 async function resolveContext(input: GenerationJobInput): Promise<string> {

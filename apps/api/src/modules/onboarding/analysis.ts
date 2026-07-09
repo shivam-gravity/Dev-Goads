@@ -1,9 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { openai, runStructured } from "../../infra/openaiClient.js";
 import type { AudienceAnalysis, ProductAnalysis, ScrapedSite } from "../../types/index.js";
 import { scrapeUrl } from "./scraper.js";
 import { vectorStore, hashEmbedding } from "../../infra/vectorStore.js";
-
-const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
 const PRODUCT_TOOL = {
   name: "emit_product_analysis",
@@ -71,13 +69,11 @@ function fallbackAudienceAnalysis(product: ProductAnalysis): AudienceAnalysis {
 }
 
 export async function analyzeProduct(site: ScrapedSite): Promise<ProductAnalysis> {
-  if (!anthropic) return fallbackProductAnalysis(site);
+  if (!openai) return fallbackProductAnalysis(site);
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1024,
-    tools: [PRODUCT_TOOL],
-    tool_choice: { type: "tool", name: "emit_product_analysis" },
+  const result = await runStructured<ProductAnalysis>({
+    maxTokens: 1024,
+    tool: PRODUCT_TOOL,
     messages: [
       {
         role: "user",
@@ -85,20 +81,16 @@ export async function analyzeProduct(site: ScrapedSite): Promise<ProductAnalysis
       },
     ],
   });
-
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) throw new Error("Product analysis: model did not return structured output");
-  return toolUse.input as ProductAnalysis;
+  if (!result) throw new Error("Product analysis: model did not return structured output");
+  return result;
 }
 
 export async function analyzeAudience(site: ScrapedSite, product: ProductAnalysis): Promise<AudienceAnalysis> {
-  if (!anthropic) return fallbackAudienceAnalysis(product);
+  if (!openai) return fallbackAudienceAnalysis(product);
 
-  const msg = await anthropic.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 1024,
-    tools: [AUDIENCE_TOOL],
-    tool_choice: { type: "tool", name: "emit_audience_analysis" },
+  const result = await runStructured<AudienceAnalysis>({
+    maxTokens: 1024,
+    tool: AUDIENCE_TOOL,
     messages: [
       {
         role: "user",
@@ -106,10 +98,8 @@ export async function analyzeAudience(site: ScrapedSite, product: ProductAnalysi
       },
     ],
   });
-
-  const toolUse = msg.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-  if (!toolUse) throw new Error("Audience analysis: model did not return structured output");
-  return toolUse.input as AudienceAnalysis;
+  if (!result) throw new Error("Audience analysis: model did not return structured output");
+  return result;
 }
 
 export interface DeepResearchResult {

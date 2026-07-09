@@ -1,5 +1,5 @@
 import { logger } from "../logger/logger.js";
-import { connectIntegration, setMetaOAuthConnection } from "./integrationService.js";
+import { getMetaCredentials, setMetaOAuthConnection } from "./integrationService.js";
 import { signOAuthState, verifyOAuthState } from "./oauthState.js";
 
 const GRAPH_VERSION = "v22.0";
@@ -23,6 +23,27 @@ export function getMetaAuthUrl(workspaceId: string): string {
   return `https://www.facebook.com/${GRAPH_VERSION}/dialog/oauth?${params.toString()}`;
 }
 
+// Realistic-shaped mock connection (Business/Ad Account/Page/Instagram all populated) so
+// the Advertising Accounts page looks right even in local/demo mode with no real Meta App
+// registered — not just a bare accountId/accountName like the generic connectIntegration mock.
+async function mockConnectMeta(workspaceId: string): Promise<void> {
+  await setMetaOAuthConnection(workspaceId, {
+    accessToken: "mock-access-token",
+    expiresInSeconds: 60 * 60 * 24 * 60,
+    adAccountId: "act_1000000001",
+    adAccountName: "Polluxa Ads (mock)",
+    currency: "USD",
+    timezoneName: "America/Los_Angeles",
+    accountStatus: "ACTIVE",
+    pageId: "200000000001",
+    pageName: "Polluxa (mock)",
+    businessName: "Polluxa Marketing (mock)",
+    instagramAccountId: "300000000001",
+    instagramUsername: "polluxa",
+    mock: true,
+  });
+}
+
 /**
  * Entry point for the "Connect" button. With no Meta App registered there's nothing
  * real to redirect to — Facebook would reject an OAuth dialog with a blank client_id —
@@ -32,7 +53,7 @@ export function getMetaAuthUrl(workspaceId: string): string {
 export async function startMetaConnect(workspaceId: string): Promise<{ redirectUrl: string } | { mockConnected: true }> {
   if (!hasLiveMetaAppCredentials) {
     logger.warn("META_APP_ID/META_APP_SECRET not set — mock-connecting Meta instead of redirecting to Facebook");
-    await connectIntegration(workspaceId, "meta", "AdGo Meta Business Manager (mock)");
+    await mockConnectMeta(workspaceId);
     return { mockConnected: true };
   }
   return { redirectUrl: getMetaAuthUrl(workspaceId) };
@@ -72,8 +93,8 @@ async function exchangeForLongLivedToken(shortLivedToken: string): Promise<{ acc
 
 const ACCOUNT_STATUS_LABELS: Record<number, string> = { 1: "ACTIVE", 2: "DISABLED", 3: "UNSETTLED", 7: "PENDING_RISK_REVIEW", 8: "PENDING_SETTLEMENT", 9: "IN_GRACE_PERIOD", 100: "PENDING_CLOSURE", 101: "CLOSED", 201: "ANY_ACTIVE", 202: "ANY_CLOSED" };
 
-async function fetchFirstAdAccount(accessToken: string): Promise<{ id: string; name: string; currency: string; timezoneName?: string; accountStatus?: string } | null> {
-  const json = await graphGet("/me/adaccounts", { fields: "id,name,currency,timezone_name,account_status", access_token: accessToken });
+async function fetchFirstAdAccount(accessToken: string): Promise<{ id: string; name: string; currency: string; timezoneName?: string; accountStatus?: string; businessName?: string } | null> {
+  const json = await graphGet("/me/adaccounts", { fields: "id,name,currency,timezone_name,account_status,business{name}", access_token: accessToken });
   const first = (json.data ?? [])[0];
   if (!first) return null;
   return {
@@ -82,6 +103,8 @@ async function fetchFirstAdAccount(accessToken: string): Promise<{ id: string; n
     currency: first.currency ?? "USD",
     timezoneName: first.timezone_name,
     accountStatus: ACCOUNT_STATUS_LABELS[first.account_status] ?? undefined,
+    // Business Manager name, when the ad account belongs to one — absent for personal ad accounts.
+    businessName: first.business?.name,
   };
 }
 
@@ -89,6 +112,12 @@ async function fetchFirstPage(accessToken: string): Promise<{ id: string; name: 
   const json = await graphGet("/me/accounts", { fields: "id,name", access_token: accessToken });
   const first = (json.data ?? [])[0];
   return first ? { id: first.id, name: first.name } : null;
+}
+
+async function fetchInstagramForPage(accessToken: string, pageId: string): Promise<{ id: string; username: string } | null> {
+  const json = await graphGet(`/${pageId}`, { fields: "instagram_business_account{id,username}", access_token: accessToken });
+  const ig = json.instagram_business_account;
+  return ig ? { id: ig.id, username: ig.username } : null;
 }
 
 /**
@@ -103,7 +132,7 @@ export async function handleMetaOAuthCallback(code: string, state: string): Prom
 
   if (!hasLiveMetaAppCredentials) {
     logger.warn("META_APP_ID/META_APP_SECRET not set — completing Meta OAuth callback with mock connect");
-    await connectIntegration(workspaceId, "meta", "AdGo Meta Business Manager (mock)");
+    await mockConnectMeta(workspaceId);
     return { workspaceId };
   }
 
@@ -116,6 +145,8 @@ export async function handleMetaOAuthCallback(code: string, state: string): Prom
 
   if (!adAccount) throw new Error("No ad account found on this Meta user — grant access to at least one ad account and retry");
 
+  const instagram = page ? await fetchInstagramForPage(longLived.accessToken, page.id) : null;
+
   await setMetaOAuthConnection(workspaceId, {
     accessToken: longLived.accessToken,
     expiresInSeconds: longLived.expiresIn,
@@ -126,7 +157,54 @@ export async function handleMetaOAuthCallback(code: string, state: string): Prom
     accountStatus: adAccount.accountStatus,
     pageId: page?.id,
     pageName: page?.name,
+    businessName: adAccount.businessName,
+    instagramAccountId: instagram?.id,
+    instagramUsername: instagram?.username,
   });
 
   return { workspaceId };
+}
+
+// Mock lists returned when there's no real Meta OAuth connection (getMetaCredentials
+// returns null for mock-connected or disconnected workspaces) — same "(mock)" naming
+// convention as connectIntegration's mock connect above, so the campaign builder always
+// has something to show in local/demo mode.
+const MOCK_AD_ACCOUNTS = [{ id: "act_1000000001", name: "AdGo Meta Business Manager (mock)", currency: "USD", timezoneName: "America/Los_Angeles", accountStatus: "ACTIVE" }];
+const MOCK_PAGES = [{ id: "200000000001", name: "AdGo Demo Page (mock)" }];
+const MOCK_INSTAGRAM_ACCOUNTS = [{ id: "300000000001", username: "adgo_demo_mock" }];
+const MOCK_PIXELS = [{ id: "400000000001", name: "AdGo Demo Pixel (mock)" }];
+
+export async function listAdAccounts(workspaceId: string): Promise<{ id: string; name: string; currency: string; timezoneName?: string; accountStatus?: string }[]> {
+  const credentials = await getMetaCredentials(workspaceId);
+  if (!credentials) return MOCK_AD_ACCOUNTS;
+  const json = await graphGet("/me/adaccounts", { fields: "id,name,currency,timezone_name,account_status", access_token: credentials.accessToken });
+  return (json.data ?? []).map((a: any) => ({
+    id: a.id,
+    name: a.name,
+    currency: a.currency ?? "USD",
+    timezoneName: a.timezone_name,
+    accountStatus: ACCOUNT_STATUS_LABELS[a.account_status] ?? undefined,
+  }));
+}
+
+export async function listPages(workspaceId: string): Promise<{ id: string; name: string }[]> {
+  const credentials = await getMetaCredentials(workspaceId);
+  if (!credentials) return MOCK_PAGES;
+  const json = await graphGet("/me/accounts", { fields: "id,name", access_token: credentials.accessToken });
+  return (json.data ?? []).map((p: any) => ({ id: p.id, name: p.name }));
+}
+
+export async function listInstagramAccounts(workspaceId: string, pageId: string): Promise<{ id: string; username: string }[]> {
+  const credentials = await getMetaCredentials(workspaceId);
+  if (!credentials) return MOCK_INSTAGRAM_ACCOUNTS;
+  const json = await graphGet(`/${pageId}`, { fields: "instagram_business_account{id,username}", access_token: credentials.accessToken });
+  const ig = json.instagram_business_account;
+  return ig ? [{ id: ig.id, username: ig.username }] : [];
+}
+
+export async function listPixels(workspaceId: string): Promise<{ id: string; name: string }[]> {
+  const credentials = await getMetaCredentials(workspaceId);
+  if (!credentials) return MOCK_PIXELS;
+  const json = await graphGet(`/act_${credentials.adAccountId}/adspixels`, { fields: "id,name", access_token: credentials.accessToken });
+  return (json.data ?? []).map((p: any) => ({ id: p.id, name: p.name }));
 }

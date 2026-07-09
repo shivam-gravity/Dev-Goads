@@ -151,11 +151,12 @@ export const tiktokAdapter: AdAdapter = {
 
     if (!hasLiveCredentials) {
       const impressions = Math.floor(1800 + Math.random() * 9500);
+      const reach = Math.floor(impressions * (0.55 + Math.random() * 0.3));
       const clicks = Math.floor(impressions * (0.02 + Math.random() * 0.04));
       const conversions = Math.floor(clicks * (0.02 + Math.random() * 0.06));
       const spendCents = Math.floor(clicks * (25 + Math.random() * 65));
       logger.info(`Offline mode. Generated mock insights metrics for ${externalId}`);
-      return { impressions, clicks, conversions, spendCents };
+      return { impressions, reach, clicks, conversions, spendCents };
     }
 
     try {
@@ -169,7 +170,7 @@ export const tiktokAdapter: AdAdapter = {
         body: JSON.stringify({
           advertiser_id: TIKTOK_ADVERTISER_ID,
           dimensions: ["ad_id"],
-          metrics: ["impressions", "clicks", "conversions", "spend"],
+          metrics: ["impressions", "reach", "clicks", "conversions", "spend"],
           filters: [{ field_name: "ad_id", filter_type: "IN", filter_value: JSON.stringify([externalId]) }],
         }),
       });
@@ -179,11 +180,12 @@ export const tiktokAdapter: AdAdapter = {
 
       if (!row) {
         logger.warn(`No metrics returned for TikTok Ads resource: ${externalId}. Returning zero metrics.`);
-        return { impressions: 0, clicks: 0, conversions: 0, spendCents: 0 };
+        return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0 };
       }
 
       const stats = {
         impressions: Number(row.impressions ?? 0),
+        reach: Number(row.reach ?? 0),
         clicks: Number(row.clicks ?? 0),
         conversions: Number(row.conversions ?? 0),
         spendCents: Math.round(Number(row.spend ?? 0) * 100),

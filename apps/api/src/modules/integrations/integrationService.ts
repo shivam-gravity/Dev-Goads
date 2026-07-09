@@ -89,6 +89,19 @@ export interface MetaOAuthConnectionInput {
   accountStatus?: string;
   pageId?: string;
   pageName?: string;
+  /** Business Manager name owning the ad account — distinct from the ad account's own name (e.g. "Polluxa Marketing" vs. "Polluxa Ads"). */
+  businessName?: string;
+  instagramAccountId?: string;
+  instagramUsername?: string;
+  /**
+   * Set by metaOAuth.ts's mockConnectMeta — a mock connection has no real, usable access
+   * token, so it must NOT be encrypted/stored the way a real one is. getMetaCredentials
+   * treats a missing accessTokenEncrypted as "not connected" and returns null, which is
+   * exactly what every call site (campaign builder selectors, reach estimates, launches)
+   * needs in order to correctly fall back to their own mock/heuristic data instead of
+   * attempting a real Graph API call with a fake token.
+   */
+  mock?: boolean;
 }
 
 /** Persists a real Meta OAuth connection (encrypted token) after metaOAuth.ts completes the handshake. */
@@ -108,13 +121,20 @@ export async function setMetaOAuthConnection(workspaceId: string, input: MetaOAu
     errorMessage: undefined,
     settings: {
       ...existing.settings,
-      accessTokenEncrypted: encryptToken(input.accessToken),
-      tokenExpiresAt: new Date(Date.now() + input.expiresInSeconds * 1000).toISOString(),
+      // Explicitly cleared (not just omitted) for a mock connection — existing.settings may
+      // carry a stale real/mock token from a previous connect, which would otherwise survive
+      // the spread above and make getMetaCredentials think this is a usable real connection.
+      ...(input.mock
+        ? { accessTokenEncrypted: undefined, tokenExpiresAt: undefined }
+        : { accessTokenEncrypted: encryptToken(input.accessToken), tokenExpiresAt: new Date(Date.now() + input.expiresInSeconds * 1000).toISOString() }),
       currency: input.currency,
       timezoneName: input.timezoneName,
       accountStatus: input.accountStatus,
       pageId: input.pageId,
       pageName: input.pageName,
+      businessName: input.businessName,
+      instagramAccountId: input.instagramAccountId,
+      instagramUsername: input.instagramUsername,
     },
     updatedAt: new Date().toISOString(),
   };
@@ -196,6 +216,8 @@ export interface GoogleOAuthConnectionInput {
   expiresInSeconds: number;
   customerId: string;
   customerName?: string;
+  /** Set by googleOAuth.ts's mockConnectGoogle — see MetaOAuthConnectionInput.mock for why a mock connection must not store an encrypted (fake) token. */
+  mock?: boolean;
 }
 
 /** Persists a real Google OAuth connection (encrypted tokens) after googleOAuth.ts completes the handshake. */
@@ -215,9 +237,16 @@ export async function setGoogleOAuthConnection(workspaceId: string, input: Googl
     errorMessage: undefined,
     settings: {
       ...existing.settings,
-      refreshTokenEncrypted: encryptToken(input.refreshToken),
-      accessTokenEncrypted: encryptToken(input.accessToken),
-      tokenExpiresAt: new Date(Date.now() + input.expiresInSeconds * 1000).toISOString(),
+      // Explicitly cleared (not just omitted) for a mock connection — see the identical
+      // comment in setMetaOAuthConnection for why a stale token from existing.settings must
+      // not survive the spread above.
+      ...(input.mock
+        ? { accessTokenEncrypted: undefined, refreshTokenEncrypted: undefined, tokenExpiresAt: undefined }
+        : {
+            refreshTokenEncrypted: encryptToken(input.refreshToken),
+            accessTokenEncrypted: encryptToken(input.accessToken),
+            tokenExpiresAt: new Date(Date.now() + input.expiresInSeconds * 1000).toISOString(),
+          }),
     },
     updatedAt: new Date().toISOString(),
   };

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../db/prisma.js";
-import type { AudiencePersona, DeepResearchBlock } from "../../types/index.js";
+import type { AudiencePersona, CampaignSuggestion, DeepResearchBlock } from "../../types/index.js";
 
 export type ResearchSessionStatus = "queued" | "running" | "done" | "failed";
 
@@ -23,6 +23,7 @@ export interface ResearchSession {
   currentStep?: string;
   blocks: DeepResearchBlock[];
   personas?: AudiencePersona[];
+  campaignSuggestions?: CampaignSuggestion[];
   result?: unknown;
   error?: string;
   searchCount: number;
@@ -33,7 +34,7 @@ export interface ResearchSession {
 
 function fromRow(row: {
   id: string; workspaceId: string; businessId: string | null; url: string; status: string; currentStep: string | null;
-  blocks: unknown; personas: unknown; result: unknown; error: string | null; searchCount: number; cacheHit: boolean;
+  blocks: unknown; personas: unknown; campaignSuggestions: unknown; result: unknown; error: string | null; searchCount: number; cacheHit: boolean;
   createdAt: Date; updatedAt: Date;
 }): ResearchSession {
   return {
@@ -45,6 +46,7 @@ function fromRow(row: {
     currentStep: row.currentStep ?? undefined,
     blocks: (row.blocks as unknown as DeepResearchBlock[]) ?? [],
     personas: (row.personas as unknown as AudiencePersona[]) ?? undefined,
+    campaignSuggestions: (row.campaignSuggestions as unknown as CampaignSuggestion[]) ?? undefined,
     result: row.result ?? undefined,
     error: row.error ?? undefined,
     searchCount: row.searchCount,
@@ -82,6 +84,7 @@ export async function cloneSessionFromCache(workspaceId: string, url: string, so
       currentStep: source.currentStep,
       blocks: source.blocks as any,
       personas: (source.personas ?? null) as any,
+      campaignSuggestions: (source.campaignSuggestions ?? null) as any,
       result: (source.result ?? null) as any,
       searchCount: 0,
       cacheHit: true,
@@ -118,6 +121,14 @@ export async function appendResearchBlock(id: string, block: DeepResearchBlock, 
 
 export async function setResearchSessionPersonas(id: string, personas: AudiencePersona[]): Promise<void> {
   await prisma.researchSession.update({ where: { id }, data: { personas: personas as any } });
+}
+
+/** Persists the 6+ generated campaign suggestions once, right after research completes — the
+ * /research-sessions/:id/campaign-suggestions route checks this before calling
+ * generateCampaignSuggestions again, so re-visiting the page never regenerates them. */
+export async function setResearchSessionCampaignSuggestions(id: string, suggestions: CampaignSuggestion[]): Promise<ResearchSession> {
+  const row = await prisma.researchSession.update({ where: { id }, data: { campaignSuggestions: suggestions as any } });
+  return fromRow(row);
 }
 
 export async function markResearchSessionDone(id: string, result: unknown): Promise<void> {

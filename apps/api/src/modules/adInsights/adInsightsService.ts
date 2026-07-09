@@ -1,5 +1,5 @@
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
-import { normalizePerformance } from "../pipeline/performancePipeline.js";
+import { normalizePerformance, ESTIMATED_REVENUE_CENTS_PER_CONVERSION } from "../pipeline/performancePipeline.js";
 import type {
   AdInsightNetwork,
   AdInsightsResponse,
@@ -28,6 +28,24 @@ async function collectJoinedRows(businessId: string, network: AdInsightNetwork):
     }
   }
   return rows;
+}
+
+function computeTotals(rows: JoinedRow[]): AdInsightsResponse["totals"] {
+  let spendCents = 0, impressions = 0, clicks = 0, conversions = 0;
+  for (const { perf } of rows) {
+    spendCents += perf.spendCents;
+    impressions += perf.impressions;
+    clicks += perf.clicks;
+    conversions += perf.conversions;
+  }
+  return {
+    spendCents,
+    impressions,
+    clicks,
+    conversions,
+    cpaCents: conversions > 0 ? Math.round(spendCents / conversions) : null,
+    roas: spendCents > 0 && conversions > 0 ? (conversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / spendCents : null,
+  };
 }
 
 function shareOf(map: Map<string, number>): DistributionSlice[] {
@@ -116,6 +134,7 @@ function buildRealInsights(rows: JoinedRow[], network: AdInsightNetwork): AdInsi
   return {
     network,
     isDemo: false,
+    totals: computeTotals(rows),
     audience: { distribution: shareOf(audienceSpend), top: topAudiences },
     pages: { distribution: shareOf(pageSpend), top: topPages },
     creative: { scatter, topAds },
@@ -125,9 +144,19 @@ function buildRealInsights(rows: JoinedRow[], network: AdInsightNetwork): AdInsi
 const PLACEHOLDER_IMAGE = (seed: string) => `https://placehold.co/600x400/7033f5/ffffff?text=${encodeURIComponent(seed)}`;
 
 function buildDemoInsights(network: AdInsightNetwork): AdInsightsResponse {
+  const demoSpendCents = 158038;
+  const demoConversions = 27;
   return {
     network,
     isDemo: true,
+    totals: {
+      spendCents: demoSpendCents,
+      impressions: 420_000,
+      clicks: 9800,
+      conversions: demoConversions,
+      cpaCents: Math.round(demoSpendCents / demoConversions),
+      roas: (demoConversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / demoSpendCents,
+    },
     audience: {
       distribution: [
         { label: "High-Intent Shoppers", sharePct: 42 },

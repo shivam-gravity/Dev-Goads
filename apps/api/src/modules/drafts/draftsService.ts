@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../db/prisma.js";
+import { openai, runText } from "../../infra/openaiClient.js";
+import { logger } from "../logger/logger.js";
 
 export interface Draft {
   id: string;
@@ -16,6 +18,21 @@ export interface Draft {
   updatedAt: string;
 }
 
+async function generateAiRecommendation(name: string, type: Draft["type"], data: Record<string, unknown>): Promise<string | undefined> {
+  if (!openai) return undefined;
+  try {
+    const reply = await runText({
+      maxTokens: 220,
+      system: "You are an ad strategist reviewing a draft campaign before launch. In 2-3 sentences, give one concrete, specific recommendation to improve performance (budget, targeting, creative, or timing). Be direct and reference real numbers/details from the draft when present. No preamble.",
+      messages: [{ role: "user", content: `Draft name: ${name}\nType: ${type}\nDetails: ${JSON.stringify(data)}` }],
+    });
+    return reply?.trim() || undefined;
+  } catch (err) {
+    logger.error("Failed to generate draft AI recommendation", err);
+    return undefined;
+  }
+}
+
 async function save(d: Draft): Promise<void> {
   await prisma.draft.upsert({
     where: { id: d.id },
@@ -30,6 +47,7 @@ export async function listDrafts(workspaceId: string): Promise<Draft[]> {
 }
 
 export async function createDraft(workspaceId: string, input: Pick<Draft, "name" | "type" | "data" | "aiRecommendation" | "score" | "scheduledAt">): Promise<Draft> {
+  const aiRecommendation = input.aiRecommendation ?? (await generateAiRecommendation(input.name, input.type, input.data));
   const d: Draft = {
     id: randomUUID(),
     workspaceId,
@@ -37,6 +55,7 @@ export async function createDraft(workspaceId: string, input: Pick<Draft, "name"
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...input,
+    aiRecommendation,
   };
   await save(d);
   return d;
@@ -45,7 +64,9 @@ export async function createDraft(workspaceId: string, input: Pick<Draft, "name"
 export async function updateDraft(id: string, patch: Partial<Omit<Draft, "id" | "workspaceId" | "createdAt">>): Promise<Draft> {
   const row = await prisma.draft.findUnique({ where: { id } });
   if (!row) throw new Error("Draft not found");
-  const d: Draft = { ...(row.data as unknown as Draft), ...patch, updatedAt: new Date().toISOString() };
+  const existing = row.data as unknown as Draft;
+  const aiRecommendation = patch.aiRecommendation ?? (patch.data ? await generateAiRecommendation(patch.name ?? existing.name, existing.type, patch.data) : existing.aiRecommendation);
+  const d: Draft = { ...existing, ...patch, aiRecommendation, updatedAt: new Date().toISOString() };
   await save(d);
   return d;
 }

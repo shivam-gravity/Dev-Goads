@@ -59,7 +59,7 @@ const worker = new Worker(
       // No search budget check here — persona mining never spends real searches
       // (see mineAudiencePersonas's doc comment), so it always runs regardless of budgetOk().
       await setResearchSessionCurrentStep(sessionId, RESEARCH_STEPS.audiencePersonas);
-      const personasBlock = await mineAudiencePersonas(productBlock.data, audienceBlock.data, competitorBlock.data);
+      const personasBlock = await mineAudiencePersonas(site, productBlock.data, audienceBlock.data, competitorBlock.data);
       const session = await appendResearchBlock(sessionId, personasBlock, 0);
       await setResearchSessionPersonas(sessionId, personasBlock.data);
 
