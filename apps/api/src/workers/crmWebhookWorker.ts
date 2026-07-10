@@ -3,6 +3,8 @@ import { createHmac } from "node:crypto";
 import { Worker, type Job } from "bullmq";
 import { redisConnection, CRM_WEBHOOK_QUEUE } from "../infra/queue.js";
 import { getCrmWebhookConfig } from "../modules/crm/crmWebhookService.js";
+import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
+import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
 
 // 30s, 2m, 10m, 30m, 2h — matches the queue's `attempts: 5` in infra/queue.ts.
@@ -60,8 +62,20 @@ const worker = new Worker<CrmWebhookJobData>(
   }
 );
 
-worker.on("failed", (job: Job | undefined, err: Error) =>
-  logger.error(`crm webhook job failed workspace=${job?.data?.workspaceId} event=${job?.data?.event}`, err)
-);
+worker.on("failed", (job: Job<CrmWebhookJobData> | undefined, err: Error) => {
+  logger.error(`crm webhook job failed workspace=${job?.data?.workspaceId} event=${job?.data?.event}`, err);
+  // Redacted, not the real job — job.data.payload can carry lead PII (name, email,
+  // phone), which has no business landing in a queryable DLQ table any more than it
+  // would in a log line (see the standing "never let secrets/PII leak into observability
+  // surfaces" rule this repo follows for outbound webhook infra).
+  if (job && isFinalFailure(job)) {
+    void sendToDeadLetter(
+      CRM_WEBHOOK_QUEUE,
+      { name: job.name, attemptsMade: job.attemptsMade, data: { workspaceId: job.data.workspaceId, event: job.data.event, payloadRedacted: true } },
+      err
+    );
+  }
+});
 
+registerGracefulShutdown(worker, "crmWebhookWorker");
 logger.info("CRM webhook worker listening for jobs");

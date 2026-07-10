@@ -42,9 +42,11 @@ import { listAccessibleCustomers as listGoogleCustomersApi, listConversionAction
 import { getProductCatalog } from "../modules/integrations/productCatalogService.js";
 import { createGenerationJob, getGenerationJob } from "../modules/generation/generationJobService.js";
 import { getCrmWebhookConfig, setCrmWebhookConfig, clearCrmWebhookConfig } from "../modules/crm/crmWebhookService.js";
-import { creativeGenerationQueue, researchSessionQueue, researchOrchestratorQueue } from "../infra/queue.js";
+import { creativeGenerationQueue, researchSessionQueue, researchOrchestratorQueue, campaignGenerationQueue } from "../infra/queue.js";
 import { createResearchJob, getResearchJob as getResearchOrchestratorJob, getResearchJobWithExecutions } from "../research/research-orchestrator/index.js";
 import { toStrategyInput } from "../research/knowledge/toStrategyInput.js";
+import { createCampaignGenerationJob, getCampaignGenerationJob } from "../modules/orchestrator/campaignGenerationService.js";
+import { listDeadLetterEntries } from "../infra/deadLetterQueue.js";
 import {
   listSavedAudiences,
   createSavedAudience,
@@ -897,6 +899,73 @@ router.get("/research/:id/status", asyncHandler(async (req, res) => {
     completedAt: job.completedAt,
     updatedAt: job.updatedAt,
   });
+}));
+
+/* ═══════════════════════════════════════════════
+   CAMPAIGN GENERATION (Campaign Route) — the full agent-pipeline, wired end to end:
+   Gateway -> Campaign Route -> Research Orchestrator -> Knowledge Aggregator -> AI Agent
+   Coordinator (10 agents) -> Campaign Builder -> Persist -> Return Response. One POST
+   kicks off a single async job (campaignGenerationPipeline.ts, driven by
+   workers/campaignGenerationWorker.ts) that supersedes nothing existing — every route
+   above and the campaign-service proxy below keep working unchanged.
+   ═══════════════════════════════════════════════ */
+
+const campaignGenerateSchema = z.object({
+  workspaceId: z.string().min(1),
+  businessId: z.string().min(1),
+  url: z.string().min(1),
+  name: z.string().min(1).optional(),
+  dailyBudgetCents: z.number().int().positive().max(MAX_BUDGET_CENTS).optional(),
+});
+
+router.post("/campaigns/generate", asyncHandler(async (req, res) => {
+  const parsed = campaignGenerateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { workspaceId, businessId, url, name, dailyBudgetCents } = parsed.data;
+
+  const business = await getBusiness(businessId);
+  if (!business) return res.status(404).json({ error: "Business not found" });
+
+  try {
+    const job = await createCampaignGenerationJob({ workspaceId, businessId, url, name, dailyBudgetCents });
+    await campaignGenerationQueue.add("campaign-generate", { jobId: job.id });
+    res.status(202).json(job);
+  } catch (err) {
+    sendError(res, err, 422, "Failed to start campaign generation");
+  }
+}));
+
+router.get("/campaigns/generate/:id", asyncHandler(async (req, res) => {
+  const job = await getCampaignGenerationJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Campaign generation job not found" });
+  res.json(job);
+}));
+
+router.get("/campaigns/generate/:id/status", asyncHandler(async (req, res) => {
+  const job = await getCampaignGenerationJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Campaign generation job not found" });
+  res.json({
+    id: job.id,
+    status: job.status,
+    researchJobId: job.researchJobId,
+    strategyId: job.strategyId,
+    campaignId: job.campaignId,
+    decisionContext: job.decisionContext,
+    error: job.error,
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+    updatedAt: job.updatedAt,
+  });
+}));
+
+/* ═══════════════════════════════════════════════
+   OPS — operational visibility into infra that has no other queryable surface.
+   ═══════════════════════════════════════════════ */
+
+router.get("/ops/dead-letter", asyncHandler(async (req, res) => {
+  const queue = typeof req.query.queue === "string" ? req.query.queue : undefined;
+  const limit = req.query.limit ? Math.min(Number(req.query.limit), 200) : 50;
+  res.json(await listDeadLetterEntries(queue, limit));
 }));
 
 /* ═══════════════════════════════════════════════

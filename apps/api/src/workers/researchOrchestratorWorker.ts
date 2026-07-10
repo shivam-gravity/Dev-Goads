@@ -2,6 +2,8 @@ import "dotenv/config";
 import { Worker, type Job } from "bullmq";
 import { redisConnection, RESEARCH_ORCHESTRATOR_QUEUE } from "../infra/queue.js";
 import { runResearchOrchestrator } from "../research/research-orchestrator/ResearchOrchestrator.js";
+import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
+import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
 
 /**
@@ -24,6 +26,10 @@ const worker = new Worker(
 );
 
 worker.on("completed", (job: Job) => logger.info(`Research orchestrator job completed: ${job.data?.jobId}`));
-worker.on("failed", (job: Job | undefined, err: Error) => logger.error(`Research orchestrator job failed: ${job?.data?.jobId}`, err));
+worker.on("failed", (job: Job | undefined, err: Error) => {
+  logger.error(`Research orchestrator job failed: ${job?.data?.jobId}`, err);
+  if (job && isFinalFailure(job)) void sendToDeadLetter(RESEARCH_ORCHESTRATOR_QUEUE, job, err);
+});
 
+registerGracefulShutdown(worker, "researchOrchestratorWorker");
 logger.info("Research orchestrator worker listening for jobs");

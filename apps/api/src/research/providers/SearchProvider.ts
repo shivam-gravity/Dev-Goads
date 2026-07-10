@@ -21,7 +21,7 @@ export class SearchProvider implements ResearchProvider<GeneralSearchData> {
   readonly priority = 20;
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<GeneralSearchData>> {
-    return runProviderStep(this.name, 1, async () => {
+    return runProviderStep(this.name, 1, input, async () => {
       if (!openai) {
         return { status: "partial", data: { narrative: "", searchesUsed: 0, dataSource: NO_KEY_DATA_SOURCE } };
       }

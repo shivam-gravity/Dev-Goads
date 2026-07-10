@@ -1,4 +1,5 @@
 import { openai, runStructured, runWebSearch, type JsonSchemaTool } from "../../infra/openaiClient.js";
+import { withSpan } from "../../infra/telemetry.js";
 import type { Citation } from "../../types/index.js";
 import type { ProviderResult, ResearchEvidenceItem, ResearchProviderStatus } from "../types/index.js";
 
@@ -11,29 +12,64 @@ interface ProviderOutcome<T> {
 }
 
 /**
+ * A citation counts as "relevant" if it's actually traceable to the target business —
+ * either it's hosted on the target's own domain, or its title namedrops the target (by
+ * businessName if given, else the hostname's own name, e.g. "stripe" from "stripe.com").
+ * Deliberately cheap (no extra model call) and generic (every provider already has
+ * target.url in scope) rather than exhaustive: a real roundup article ("Top Stripe
+ * Alternatives") passes; a citation that never mentions the target at all doesn't. The
+ * known failure mode this exists to catch: a web search for a target that doesn't
+ * actually have citable coverage can still return SOME unrelated citation, which the old
+ * count-only heuristic scored as if it were real grounding — see isRelevantCitation's
+ * caller below for how that's now penalized rather than rewarded.
+ */
+function isRelevantCitation(citation: { url?: string; title?: string }, target: { url: string; businessName?: string }): boolean {
+  const targetHost = hostnameOf(target.url).replace(/^www\./i, "").toLowerCase();
+  const keyword = (target.businessName ?? targetHost.split(".")[0]).toLowerCase().trim();
+  const citationHost = citation.url ? hostnameOf(citation.url).replace(/^www\./i, "").toLowerCase() : "";
+  const title = (citation.title ?? "").toLowerCase();
+
+  if (citationHost && citationHost === targetHost) return true;
+  if (keyword.length >= 3 && title.includes(keyword)) return true;
+  return false;
+}
+
+/**
  * Generic 0-1 confidence score computed from signals every provider already reports —
  * deliberately provider-agnostic (no provider-specific branching) so a 10th provider gets
  * scoring for free. Reads `data.dataSource` opportunistically (every provider's data shape
  * includes it by convention, see research/types/index.ts) purely to detect the two known
  * "no real live data" fallback strings — anything else (a real citation-title join, a
- * deterministic signature-detection source, etc.) is treated as real grounding.
+ * deterministic signature-detection source, etc.) is treated as real grounding, UNLESS the
+ * citations themselves don't check out (see below).
  *   - failed                          -> 0
  *   - base: success 0.6, partial 0.3
  *   - -0.25 if data came from a no-live-data fallback (no OPENAI_API_KEY, or a search
  *     that returned no citable sources)
- *   - up to +0.3 for evidence/citations (0.04 per item, diminishing via the cap — a
- *     provider with 8+ real sources tops out rather than scoring above a single-source one)
+ *   - -0.25 if it's NOT a labeled fallback but has citations, and NONE of them are
+ *     relevant to the target (see isRelevantCitation) — a "success" dressed up with an
+ *     unrelated source is functionally the same as having no real grounding, and scoring
+ *     it as if the citation count alone proved something was exactly the bug this
+ *     replaced: a fabricated result with one spurious citation used to outscore an honest,
+ *     labeled fallback.
+ *   - up to +0.3 for evidence/citations, weighted by relevance (0.06/relevant item,
+ *     0.01/irrelevant item, diminishing via the cap) — quality over quantity, so 8+ real
+ *     sources top out rather than scoring above a single-source one, and a pile of
+ *     irrelevant citations can't out-earn one relevant one.
  *   - -0.1 if it needed a retry (attempt > 1) — it got there, but wasn't stable on try 1
  * Clamped to [0, 1] and rounded to 2 decimals so persisted/displayed values don't carry
  * false precision.
  */
-function computeConfidence(outcome: {
-  status: ResearchProviderStatus;
-  data: unknown;
-  citations?: unknown[];
-  evidence?: unknown[];
-  attempt: number;
-}): number {
+function computeConfidence(
+  outcome: {
+    status: ResearchProviderStatus;
+    data: unknown;
+    citations?: unknown[];
+    evidence?: unknown[];
+    attempt: number;
+  },
+  target: { url: string; businessName?: string }
+): number {
   if (outcome.status === "failed") return 0;
 
   const dataSource = (outcome.data as { dataSource?: string } | null)?.dataSource;
@@ -42,8 +78,14 @@ function computeConfidence(outcome: {
   let score = outcome.status === "success" ? 0.6 : 0.3;
   if (isFallback) score -= 0.25;
 
-  const evidenceCount = Math.max(outcome.evidence?.length ?? 0, outcome.citations?.length ?? 0);
-  score += Math.min(evidenceCount * 0.04, 0.3);
+  const citations = (outcome.citations?.length ? outcome.citations : outcome.evidence ?? []) as { url?: string; title?: string }[];
+  const relevantCount = citations.filter((c) => isRelevantCitation(c, target)).length;
+
+  if (!isFallback && citations.length > 0 && relevantCount === 0) {
+    score -= 0.25;
+  }
+
+  score += Math.min(relevantCount * 0.06 + (citations.length - relevantCount) * 0.01, 0.3);
 
   if (outcome.attempt > 1) score -= 0.1;
 
@@ -59,12 +101,13 @@ function computeConfidence(outcome: {
 export async function runProviderStep<T>(
   name: string,
   attempt: number,
+  target: { url: string; businessName?: string },
   fn: () => Promise<ProviderOutcome<T>>
 ): Promise<ProviderResult<T>> {
   const startedAt = new Date().toISOString();
   const start = Date.now();
   try {
-    const outcome = await fn();
+    const outcome = await withSpan(`research.provider.${name}`, fn, { "research.provider.attempt": attempt });
     return {
       provider: name,
       status: outcome.status,
@@ -76,7 +119,7 @@ export async function runProviderStep<T>(
       durationMs: Date.now() - start,
       attempt,
       error: outcome.error,
-      confidence: computeConfidence({ status: outcome.status, data: outcome.data, citations: outcome.citations, evidence: outcome.evidence, attempt }),
+      confidence: computeConfidence({ status: outcome.status, data: outcome.data, citations: outcome.citations, evidence: outcome.evidence, attempt }, target),
     };
   } catch (err) {
     return {

@@ -32,6 +32,26 @@ async function main() {
     }
   }
 
+  // A default Business (BusinessProfile) so the app never has to show the onboarding
+  // wizard just to reach the dashboard — apps/web's AuthContext defaults businessId to
+  // this id the same way it defaults workspaceId to "demo-workspace".
+  await prisma.business.upsert({
+    where: { id: "demo-business" },
+    create: {
+      id: "demo-business",
+      workspaceId: "demo-workspace",
+      createdAt: now,
+      data: {
+        id: "demo-business",
+        name: "AdsGo Demo Business",
+        industry: "General",
+        monthlyBudgetCents: 100000,
+        goals: ["Leads"],
+      },
+    },
+    update: {},
+  });
+
   console.log("Seed complete.");
 }
 

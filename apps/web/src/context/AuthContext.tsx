@@ -1,5 +1,14 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { api, User, Workspace, AuthResult, setToken, getToken } from "../api/client.js";
+import { api, User, Workspace } from "../api/client.js";
+
+// There is no login flow — every session is the single seeded demo identity
+// (apps/api/prisma/seed.ts). The gateway/auth-service dev-mode bypass resolves any
+// request with no Authorization header to that demo user outside production, so the
+// frontend never needs to obtain or send a token. DEMO_BUSINESS_ID means a fresh browser
+// session lands straight on the dashboard instead of the "set up your business" wizard —
+// onboarding still runs for anyone who explicitly creates a different business.
+const DEMO_WORKSPACE_ID = "demo-workspace";
+const DEMO_BUSINESS_ID = "demo-business";
 
 interface AuthState {
   user: User | null;
@@ -7,13 +16,9 @@ interface AuthState {
   workspaceId: string | null;
   businessId: string | null;
   isLoading: boolean;
-  isAuthenticated: boolean;
 }
 
 interface AuthContextValue extends AuthState {
-  login: (email: string, password: string) => Promise<void>;
-  signup: (name: string, email: string, password: string) => Promise<void>;
-  logout: () => void;
   setBusinessId: (id: string) => void;
   setWorkspace: (ws: Workspace) => void;
   refreshWorkspace: () => Promise<void>;
@@ -24,53 +29,9 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [workspace, setWorkspaceState] = useState<Workspace | null>(null);
-  const [workspaceId, setWorkspaceId] = useState<string | null>(localStorage.getItem("adgo_workspace_id"));
-  const [businessId, setBusinessIdState] = useState<string | null>(localStorage.getItem("businessId"));
-  const [isLoading, setIsLoading] = useState(Boolean(getToken()));
-
-  async function applyAuthResult(result: AuthResult) {
-    setToken(result.token);
-    setUser(result.user);
-    if (result.workspaceId) {
-      setWorkspaceId(result.workspaceId);
-      localStorage.setItem("adgo_workspace_id", result.workspaceId);
-      try {
-        const ws = await api.getWorkspace(result.workspaceId);
-        setWorkspaceState(ws);
-      } catch { /* non-fatal */ }
-    }
-  }
-
-  async function login(email: string, password: string) {
-    setIsLoading(true);
-    try {
-      const result = await api.login(email, password);
-      await applyAuthResult(result);
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  async function signup(name: string, email: string, password: string) {
-    setIsLoading(true);
-    try {
-      const result = await api.register({ name, email, password });
-      await applyAuthResult(result);
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  function logout() {
-    setToken(null);
-    setUser(null);
-    setWorkspaceState(null);
-    setWorkspaceId(null);
-    setBusinessIdState(null);
-    localStorage.removeItem("adgo_workspace_id");
-    localStorage.removeItem("businessId");
-    localStorage.removeItem("adgo_token");
-  }
+  const [workspaceId, setWorkspaceId] = useState<string | null>(localStorage.getItem("adgo_workspace_id") ?? DEMO_WORKSPACE_ID);
+  const [businessId, setBusinessIdState] = useState<string | null>(localStorage.getItem("businessId") ?? DEMO_BUSINESS_ID);
+  const [isLoading, setIsLoading] = useState(true);
 
   function setBusinessId(id: string) {
     setBusinessIdState(id);
@@ -91,20 +52,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch { /* non-fatal */ }
   }
 
-  // Restore session from token on mount
+  // Resolve the demo identity on mount instead of restoring a session from a token.
   useEffect(() => {
-    const token = getToken();
-    if (!token) { setIsLoading(false); return; }
+    if (!localStorage.getItem("adgo_workspace_id")) {
+      localStorage.setItem("adgo_workspace_id", DEMO_WORKSPACE_ID);
+    }
+    if (!localStorage.getItem("businessId")) {
+      localStorage.setItem("businessId", DEMO_BUSINESS_ID);
+    }
     api.me()
       .then((u) => {
         setUser(u);
-        if (workspaceId) return api.getWorkspace(workspaceId).then(setWorkspaceState).catch(() => {});
+        return api.getWorkspace(workspaceId ?? DEMO_WORKSPACE_ID).then(setWorkspaceState).catch(() => {});
       })
-      .catch(() => logout())
+      .catch(() => { /* backend unreachable — app still renders, just without user/workspace display data */ })
       .finally(() => setIsLoading(false));
   }, []);
-
-  const isAuthenticated = Boolean(user);
 
   return (
     <AuthContext.Provider value={{
@@ -113,10 +76,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       workspaceId,
       businessId,
       isLoading,
-      isAuthenticated,
-      login,
-      signup,
-      logout,
       setBusinessId,
       setWorkspace,
       refreshWorkspace,

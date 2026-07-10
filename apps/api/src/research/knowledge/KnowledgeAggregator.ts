@@ -1,5 +1,6 @@
 import { logger } from "../../modules/logger/logger.js";
 import type { ProviderResult, ResearchContext } from "../types/index.js";
+import { fuseKnowledge } from "./KnowledgeFusionEngine.js";
 import {
   audienceSchema,
   companySchema,
@@ -95,6 +96,7 @@ export function aggregateResearch(input: AggregateInput): ResearchContext {
       generalSearch,
       confidenceByProvider,
       overallConfidence,
+      fusion: fuseKnowledge(input.results),
     },
   };
 }

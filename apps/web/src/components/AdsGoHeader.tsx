@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ClockIcon, GlobeIcon, BellIcon, UserIcon, CreditCardIcon, LinkIcon, LogOutIcon } from "./icons.js";
+import { ClockIcon, GlobeIcon, BellIcon, UserIcon, CreditCardIcon, LinkIcon } from "./icons.js";
 import { useAuth } from "../context/AuthContext.js";
 
 export default function AdsGoHeader({ breadcrumb }: { breadcrumb: string[] }) {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [profileOpen, setProfileOpen] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
@@ -22,12 +22,6 @@ export default function AdsGoHeader({ breadcrumb }: { breadcrumb: string[] }) {
 
   const name = user?.name ?? "Guest";
   const initials = name.slice(0, 2).toUpperCase();
-
-  function handleLogout() {
-    setProfileOpen(false);
-    logout();
-    navigate("/login");
-  }
 
   function goTo(path: string) {
     setProfileOpen(false);
@@ -86,9 +80,6 @@ export default function AdsGoHeader({ breadcrumb }: { breadcrumb: string[] }) {
               <div className="header-profile-menu-section-label">Setting</div>
               <button type="button" className="header-profile-menu-item" onClick={() => goTo("/profile/ad-platform-connection")}>
                 <LinkIcon /> Advertising Accounts
-              </button>
-              <button type="button" className="header-profile-menu-item danger" onClick={handleLogout}>
-                <LogOutIcon /> Log out
               </button>
             </div>
           )}

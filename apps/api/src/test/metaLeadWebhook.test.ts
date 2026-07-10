@@ -1,31 +1,19 @@
 import { test, after } from "node:test";
 import assert from "node:assert";
 import { createHmac } from "node:crypto";
+import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
 
 process.env.META_APP_SECRET = "test-app-secret";
 
 const { isValidSignature } = await import(`../gateway/metaLeadWebhookRoutes.js?t=${Date.now()}`);
-// metaLeadWebhookRoutes.js transitively imports infra/queue.js, which eagerly opens ALL
-// FIVE BullMQ queues' Redis connections at module load (this file only uses
-// leadIngestionQueue) — each holds an open socket that keeps the event loop alive, hanging
-// `node --test` after the last test finishes regardless of whether Redis is reachable.
-// Closing all of them here lets the process exit; it's a no-op for the assertions above,
-// which never touch any queue.
-const { leadIngestionQueue, creativeGenerationQueue, researchSessionQueue, metricsIngestionQueue, crmWebhookQueue } = await import("../infra/queue.js");
-after(async () => {
-  // queue.close() always closes with force=false internally, which can leave an
-  // in-flight initial-connection promise dangling — it later rejects with "Connection is
-  // closed" as an unhandled rejection *after* node:test considers the file done. disconnect()
-  // instead waits for the client's own 'end'/'error' event and tears down listeners
-  // cleanly, which doesn't have that gap.
-  await Promise.allSettled([
-    leadIngestionQueue.disconnect(),
-    creativeGenerationQueue.disconnect(),
-    researchSessionQueue.disconnect(),
-    metricsIngestionQueue.disconnect(),
-    crmWebhookQueue.disconnect(),
-  ]);
-});
+// metaLeadWebhookRoutes.js transitively imports infra/queue.js, which eagerly opens every
+// BullMQ queue's Redis connection at module load (this file only uses leadIngestionQueue)
+// — each holds an open socket that keeps the event loop alive, hanging `node --test`
+// after the last test finishes regardless of whether Redis is reachable. See
+// testUtils/disconnectInfra.ts for why this is centralized rather than a hardcoded list
+// here (a hardcoded list is exactly how this hung before — a queue added later without
+// updating this file's list).
+after(disconnectTestInfra);
 
 function fakeRequest(body: string, signature?: string): any {
   return {

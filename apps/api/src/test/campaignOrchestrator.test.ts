@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert";
 import { prisma } from "../db/prisma.js";
 import {
@@ -9,6 +9,13 @@ import {
   activateVariant,
   applyCreativeMedia,
 } from "../modules/orchestrator/campaignOrchestrator.js";
+import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
+
+// launchCampaign publishes "campaign.launched" via infra/eventBus.js, which is Redis
+// Streams-backed (see redisStreamEventBus.ts) — that opens a real connection on this
+// file's first launchCampaign call, same class of "open handle hangs node --test after
+// the last test finishes" issue as metaLeadWebhook.test.ts's queue imports.
+after(disconnectTestInfra);
 
 // Setup helper to insert strategy
 async function seedTestStrategy(id: string, businessId: string) {

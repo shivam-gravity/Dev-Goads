@@ -2,6 +2,8 @@ import "dotenv/config";
 import { Worker, type Job } from "bullmq";
 import { redisConnection, CREATIVE_GENERATION_QUEUE } from "../infra/queue.js";
 import { runGenerationJob } from "../modules/generation/creativeGenerationService.js";
+import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
+import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
 
 /**
@@ -19,6 +21,10 @@ const worker = new Worker(
 );
 
 worker.on("completed", (job: Job) => logger.info(`Generation job completed: ${job.data?.jobId}`));
-worker.on("failed", (job: Job | undefined, err: Error) => logger.error(`Generation job failed: ${job?.data?.jobId}`, err));
+worker.on("failed", (job: Job | undefined, err: Error) => {
+  logger.error(`Generation job failed: ${job?.data?.jobId}`, err);
+  if (job && isFinalFailure(job)) void sendToDeadLetter(CREATIVE_GENERATION_QUEUE, job, err);
+});
 
+registerGracefulShutdown(worker, "creativeGenerationWorker");
 logger.info("Creative generation worker listening for jobs");

@@ -1,15 +1,8 @@
 const BASE_URL = "/api";
 
-// ── Token management ──────────────────────────────────────────────────────────
-let _token: string | null = localStorage.getItem("adgo_token");
-
-export function setToken(t: string | null) {
-  _token = t;
-  if (t) localStorage.setItem("adgo_token", t);
-  else localStorage.removeItem("adgo_token");
-}
-
-export function getToken() { return _token; }
+// There is no login flow, so no bearer token is ever attached — every request relies on
+// the gateway/auth-service's dev-mode bypass (see apps/auth-service/src/requireUser.ts),
+// which resolves an unauthenticated request to the seeded demo user outside production.
 
 // Defense-in-depth: the backend should never send internals in an error message
 // (see docs/architecture-roadmap.md and the 2026-07-06 QA report), but if it ever
@@ -38,7 +31,6 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...(_token ? { Authorization: `Bearer ${_token}` } : {}),
       ...options.headers,
     },
   });
@@ -55,7 +47,6 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 export interface User { id: string; email: string; name: string; avatar?: string; createdAt: string; }
 export interface Workspace { id: string; name: string; ownerId: string; plan: "starter" | "pro" | "agency"; logoUrl?: string; timezone: string; createdAt: string; }
 export interface WorkspaceMember { id: string; workspaceId: string; userId: string; role: "owner" | "admin" | "member" | "viewer"; invitedAt: string; joinedAt?: string; user?: { name: string; email: string; avatar?: string }; }
-export interface AuthResult { user: User; token: string; workspaceId?: string; }
 export interface BusinessProfile { id: string; name: string; website?: string; industry: string; monthlyBudgetCents: number; goals: string[]; targetAudience?: string; brandName?: string; logoUrls?: string[]; }
 export interface AdCreative { headline: string; body: string; callToAction: string; imageUrl?: string; videoUrl?: string; headlines?: string[]; primaryTexts?: string[]; }
 export interface AdStrategy { id: string; businessId: string; summary: string; recommendedNetworks: ("meta" | "google")[]; budgetSplit: Record<string, number>; audiences: string[]; creatives: AdCreative[]; createdAt: string; }
@@ -137,6 +128,41 @@ export interface CampaignSuggestion {
   callToAction: string;
   imagePrompt: string;
 }
+// ── Decision Intelligence (research/decision/*.ts on the backend) ─────────────────────────
+export type RecommendationCategory = "positioning" | "audience" | "channel" | "budget" | "creative" | "offer" | "messaging";
+export interface RankedRecommendation {
+  id: string; title: string; category: RecommendationCategory; priority: string; impact: string;
+  confidence: number; reason: string; evidence: string[]; affectedAudience: string;
+  estimatedDifficulty: string; expectedOutcome: string; finalScore: number;
+}
+export interface CampaignStrategyOption {
+  id: string; label: string; targetAudience: string; platforms: string[]; objective: string;
+  budgetDailyCents: number; creativeDirection: string; messaging: string; offer: string;
+  expectedKpi: string; strengths: string[]; weaknesses: string[]; confidence: number;
+}
+export interface StrategySimulationResult {
+  strategyId: string; strategyLabel: string; reach: number; competition: number; expectedRoi: number;
+  risk: number; confidence: number; budgetEfficiency: number; overallScore: number; rank: number;
+}
+export interface AudiencePersonaCard {
+  name: string; description: string; ageRange?: string; genderSplit?: string; interests: string[];
+}
+export interface DecisionContext {
+  businessSummary: string; websiteScreenshot?: string; audiencePersonas: AudiencePersonaCard[];
+  topOpportunities: string[]; topRisks: string[];
+  recommendedPositioning: string; recommendedAudiencePriority: string; recommendedChannels: string[];
+  recommendedBudgetAllocation: Record<string, number>; recommendedCreativeDirection: string;
+  recommendedOffer: string; recommendedMessaging: string; confidence: number; evidence: string[];
+  tradeoffs: string[]; recommendations: RankedRecommendation[]; strategies: CampaignStrategyOption[];
+  simulations: StrategySimulationResult[]; generatedAt: string;
+}
+export type CampaignGenerationPipelineStatus = "pending" | "researching" | "aggregating" | "running_agents" | "building_campaign" | "completed" | "failed";
+export interface CampaignGenerationJobStatus {
+  id: string; status: CampaignGenerationPipelineStatus; researchJobId?: string; strategyId?: string;
+  campaignId?: string; decisionContext: DecisionContext | null; error?: string;
+  startedAt?: string; completedAt?: string; updatedAt: string;
+}
+
 export interface ResearchSession {
   id: string; workspaceId: string; businessId?: string; url: string;
   status: "queued" | "running" | "done" | "failed";
@@ -189,13 +215,8 @@ export interface AdInsightsResponse {
 
 // ── API methods ───────────────────────────────────────────────────────────────
 export const api = {
-  // Auth
-  register: (input: { email: string; password: string; name: string }) =>
-    request<AuthResult>("/auth/register", { method: "POST", body: JSON.stringify(input) }),
-  login: (email: string, password: string) =>
-    request<AuthResult>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
-  googleAuth: (name: string, email: string, googleId: string) =>
-    request<AuthResult>("/auth/google", { method: "POST", body: JSON.stringify({ name, email, googleId }) }),
+  // Auth — no login/register/googleAuth: there is no login flow, every session resolves
+  // to the seeded demo user via the backend's dev-mode auth bypass.
   me: () => request<User>("/auth/me"),
   updateMe: (patch: { name?: string; avatar?: string }) =>
     request<User>("/auth/me", { method: "PATCH", body: JSON.stringify(patch) }),
@@ -307,6 +328,13 @@ export const api = {
   createResearchSession: (workspaceId: string, url: string, businessId?: string, force?: boolean) =>
     request<ResearchSession>(`/workspaces/${workspaceId}/research-sessions${force ? "?force=true" : ""}`, { method: "POST", body: JSON.stringify({ url, businessId }) }),
   getResearchSession: (id: string) => request<ResearchSession>(`/research-sessions/${id}`),
+
+  // Decision Intelligence campaign generation (Research Orchestrator -> Decision Engine
+  // + AI Agent Coordinator -> Campaign Builder, all in one pipeline run — see
+  // modules/orchestrator/campaignGenerationPipeline.ts)
+  generateCampaign: (input: { workspaceId: string; businessId: string; url: string; name?: string; dailyBudgetCents?: number }) =>
+    request<CampaignGenerationJobStatus>("/campaigns/generate", { method: "POST", body: JSON.stringify(input) }),
+  getCampaignGenerationStatus: (id: string) => request<CampaignGenerationJobStatus>(`/campaigns/generate/${id}/status`),
 
   // Business
   createBusiness: (input: Omit<BusinessProfile, "id">) =>

@@ -26,7 +26,7 @@ export class CompanyProvider implements ResearchProvider<CompanyData> {
   readonly priority = 30;
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<CompanyData>> {
-    return runProviderStep(this.name, 1, async () => {
+    return runProviderStep(this.name, 1, input, async () => {
       const label = input.businessName ? `"${input.businessName}" (${input.url})` : input.url;
       const { status, data, citations } = await webSearchThenStructure<CompanyData>({
         maxTokens: 768,

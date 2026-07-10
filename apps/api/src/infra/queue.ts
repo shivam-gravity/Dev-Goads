@@ -124,3 +124,24 @@ export const crmWebhookQueue = new Queue(CRM_WEBHOOK_QUEUE, {
     removeOnFail: { age: 30 * 24 * 60 * 60 },
   },
 });
+
+/**
+ * The full agent-pipeline (Gateway -> Campaign Route -> Research Orchestrator ->
+ * Knowledge Aggregator -> AI Agent Coordinator -> Campaign Builder), driven end to end
+ * by workers/campaignGenerationWorker.ts from a single POST /campaigns/generate call.
+ * attempts: 1 for the same reason as RESEARCH_ORCHESTRATOR_QUEUE: by the time this job
+ * fails, it may have already paid for real web searches (9 providers) and real OpenAI
+ * calls (10 agents) — a BullMQ-level retry would re-run all of it and double-spend.
+ * Retries within each phase already happen at the right granularity: per-provider inside
+ * runResearchOrchestrator, per-agent inside runAgentCoordinator.
+ */
+export const CAMPAIGN_GENERATION_QUEUE = "campaign-generation";
+
+export const campaignGenerationQueue = new Queue(CAMPAIGN_GENERATION_QUEUE, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 1,
+    removeOnComplete: { age: 24 * 60 * 60 },
+    removeOnFail: { age: 7 * 24 * 60 * 60 },
+  },
+});

@@ -496,6 +496,84 @@ model ResearchEvidence {
   @@map("research_evidence")
 }
 
+// Dead-letter store for permanently-failed BullMQ jobs (every attempt exhausted) — a
+// queryable record of what failed and why, distinct from BullMQ's own internal "failed"
+// set (Redis-only, not visible through this app's own API/DB). Written by each worker's
+// `.on("failed", ...)` handler via infra/deadLetterQueue.ts once isFinalFailure(job) is
+// true, i.e. this is the LAST attempt failing, not every intermediate retry.
+model DeadLetterEntry {
+  id           String   @id
+  queue        String
+  jobName      String
+  jobData      Json
+  error        String
+  attemptsMade Int
+  failedAt     DateTime @default(now())
+
+  @@index([queue])
+  @@map("dead_letter_entries")
+}
+
+// Research Memory (RAG store for Competitor Intelligence and future consumers) — one
+// row per embedded chunk (e.g. one competitor entry, or a whole research summary),
+// scoped by workspace/kind so retrieval can be filtered before ranking. `embedding` is
+// a plain float array rather than a pgvector `vector(N)` column: this Postgres instance
+// doesn't have the pgvector extension installed (native Windows Postgres install, no
+// admin-level install path available in this environment — see ResearchMemoryStore.ts
+// for the full note). Every read goes through application-side cosine similarity
+// (fine at this table's expected size); swapping to real pgvector later only requires
+// changing this column's type and ResearchMemoryStore's query implementation — every
+// caller (CompetitorProvider today) keeps working unchanged since it only depends on
+// ResearchMemoryStore's exported function signatures, not the storage mechanism.
+model ResearchMemoryEntry {
+  id          String   @id
+  workspaceId String
+  businessId  String?
+  kind        String   // "competitor" today; extensible (e.g. "company", "market")
+  sourceUrl   String
+  content     String   // the raw text that was embedded — kept for inspection/debugging
+  metadata    Json     // structured payload (e.g. a CompetitorEntry or an industry tag)
+  embedding   Float[]
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@index([kind])
+  @@map("research_memory_entries")
+}
+
+// Tracks one full run of the agent-pipeline (Research Orchestrator -> Knowledge
+// Aggregator -> AI Agent Coordinator -> Campaign Builder) end to end — created by
+// POST /campaigns/generate, driven by workers/campaignGenerationWorker.ts. Distinct
+// from ResearchJob (which only tracks the research phase) since a single generation
+// run spans research, all 10 agents, and campaign persistence; `researchJobId` links
+// back to the ResearchJob this run's research phase produced for full drill-down via
+// GET /research/:id, and `strategyId`/`campaignId` link forward once the pipeline
+// completes. No FK relations (same schemaless-blob convention as Campaign/Strategy
+// above) since those ids don't exist yet while this row is still mid-pipeline.
+model CampaignGenerationJob {
+  id               String    @id
+  workspaceId      String
+  businessId       String
+  url              String
+  name             String?
+  dailyBudgetCents Int?
+  status           String    @default("pending") // pending | researching | aggregating | running_agents | building_campaign | completed | failed
+  researchJobId    String?
+  strategyId       String?
+  campaignId       String?
+  agentResults     Json?     // Record<string, AgentResult<unknown>>, populated once running_agents completes
+  decisionContext  Json?     // DecisionContext (research/decision/types.ts) — populated as soon as the research phase completes, well before agentResults/campaignId
+  error            String?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([workspaceId])
+  @@index([businessId])
+  @@map("campaign_generation_jobs")
+}
+
 // AI Evaluation harness (see src/eval/) — one row per golden-dataset run against either
 // the research providers or the AI agents layer. Deliberately one row per RUN, not one
 // row per case: `cases` holds the full per-case breakdown as Json, mirroring how
@@ -538,4 +616,90 @@ model OptimizationGoal {
   updatedAt DateTime @updatedAt
 
   @@map("optimization_goals")
+}
+
+// Campaign Intelligence & Learning System (src/campaign-intelligence/) — closes the loop
+// from Decision Engine recommendation -> campaign generation -> real performance ->
+// Research Memory. None of these 3 models touch/replace the existing Metric/analyticsStore
+// time-series (that stays the raw per-day, per-variant source of truth this layer reads
+// from via performancePipeline.ts's normalizePerformance, unmodified) — these are the new,
+// higher-level rollups this system adds on top: one point-in-time campaign-level snapshot,
+// one row per Decision-Engine recommendation tracking what happened to it, and one row per
+// detected recurring winning combination.
+
+// `industry`/`platform` are denormalized onto the fact row (not just buried in `metadata`)
+// specifically so the Benchmark Engine's "average CTR by industry" / "average CPC by
+// platform" aggregations can group by an indexed column instead of unpacking JSON per row.
+model CampaignPerformanceSnapshot {
+  id           String   @id
+  campaignId   String
+  workspaceId  String
+  businessId   String?
+  industry     String?
+  platform     String?
+  impressions  Int
+  clicks       Int
+  conversions  Int
+  spendCents   Int
+  revenueCents Int
+  ctr          Float
+  cpcCents     Float?
+  cpaCents     Float?
+  roas         Float?
+  frequency    Float?
+  metadata     Json     // variant-level breakdown, source strategy id, etc — extensible without a migration
+  capturedAt   DateTime @default(now())
+
+  @@index([campaignId])
+  @@index([workspaceId])
+  @@index([industry])
+  @@index([platform])
+  @@map("campaign_performance_snapshots")
+}
+
+// One row per Decision Engine recommendation a human/system actually acted on (or didn't).
+// `recommendationId` is the Decision Engine's per-run Recommendation.id (positional, e.g.
+// "rec-1" — NOT stable across runs), so identity for re-linking a later outcome to the same
+// underlying suggestion is (workspaceId, category, title) — the same dedup key convention
+// decision-engine.ts already uses when it writes to Research Memory.
+model RecommendationFeedback {
+  id                 String   @id
+  workspaceId        String
+  businessId         String?
+  recommendationId   String
+  category           String
+  title              String
+  status             String   // "accepted" | "ignored" | "implemented"
+  campaignId         String?
+  outcomeSummary     String?
+  effectivenessScore Float?   // 0-1, set once a linked campaign's performance snapshot lands
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@index([campaignId])
+  @@index([workspaceId, category, title])
+  @@map("recommendation_feedback")
+}
+
+// A detected recurring winning combination (audience + creative + offer + platform ->
+// high ROAS) — success-patterns.ts upserts these as more campaigns close the loop, so
+// `occurrences`/`avgRoas`/`confidence` strengthen over time rather than being recomputed
+// from scratch on every read.
+model SuccessPattern {
+  id          String   @id
+  workspaceId String
+  audience    String
+  creative    String
+  offer       String
+  platform    String
+  occurrences Int      @default(1)
+  avgRoas     Float?
+  avgCtr      Float?
+  confidence  Float
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([workspaceId])
+  @@map("success_patterns")
 }

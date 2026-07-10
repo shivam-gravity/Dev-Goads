@@ -16,7 +16,7 @@ export class WebsiteProvider implements ResearchProvider<WebsiteData> {
   readonly priority = 10;
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<WebsiteData>> {
-    return runProviderStep(this.name, 1, async () => {
+    return runProviderStep(this.name, 1, input, async () => {
       const site = await scrapeUrl(input.url);
       const data: WebsiteData = {
         title: site.title,

@@ -12,6 +12,8 @@ import {
   setResearchSessionPersonas,
   MAX_SEARCHES_PER_SESSION,
 } from "../modules/onboarding/researchSessionService.js";
+import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
+import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
 
 /**
@@ -81,6 +83,10 @@ const worker = new Worker(
 );
 
 worker.on("completed", (job: Job) => logger.info(`Research session completed: ${job.data?.sessionId}`));
-worker.on("failed", (job: Job | undefined, err: Error) => logger.error(`Research session failed: ${job?.data?.sessionId}`, err));
+worker.on("failed", (job: Job | undefined, err: Error) => {
+  logger.error(`Research session failed: ${job?.data?.sessionId}`, err);
+  if (job && isFinalFailure(job)) void sendToDeadLetter(RESEARCH_SESSION_QUEUE, job, err);
+});
 
+registerGracefulShutdown(worker, "researchSessionWorker");
 logger.info("Research session worker listening for jobs");

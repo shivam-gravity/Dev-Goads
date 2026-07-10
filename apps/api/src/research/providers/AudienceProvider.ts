@@ -41,7 +41,7 @@ export class AudienceProvider implements ResearchProvider<AudienceData> {
   readonly priority = 60;
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<AudienceData>> {
-    return runProviderStep(this.name, 1, async () => {
+    return runProviderStep(this.name, 1, input, async () => {
       const industry = input.industry ?? "this category";
       const { status, data: raw, citations } = await webSearchThenStructure<AudienceToolOutput>({
         maxTokens: 1024,

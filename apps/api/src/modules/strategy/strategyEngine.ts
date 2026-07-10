@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { openai, runStructured } from "../../infra/openaiClient.js";
 import { prisma } from "../../db/prisma.js";
 import type { AdCreative, AdNetwork, AdStrategy, AudienceAnalysis, AudiencePersona, BusinessProfile, CampaignSuggestion, CompetitorBudgetAnalysis, MarketLocationAnalysis, ProductAnalysis } from "../../types/index.js";
+import type { CampaignAgentOutput } from "../../agents/types/index.js";
 
 async function persistStrategy(strategy: AdStrategy): Promise<AdStrategy> {
   await prisma.strategy.create({
@@ -159,6 +160,37 @@ export async function createStrategyFromResearch(businessId: string, input: Rese
     budgetSplit: { [network]: 1 } as Partial<Record<AdNetwork, number>>,
     audiences: personas.length > 0 ? personas.map((p) => p.name) : [audience.primaryAudience],
     creatives,
+  };
+
+  return persistStrategy(strategy);
+}
+
+/**
+ * Builds and persists an AdStrategy directly from the AI Agent Coordinator's
+ * CampaignAgentOutput — the "AI Agents" step for the new agent-pipeline (see
+ * agents/AgentCoordinator.ts + workers/campaignGenerationWorker.ts), sibling to
+ * createStrategyFromResearch above which serves the older, non-agent
+ * ResearchStrategyInput path. Same Strategy shape/persistence either way, so
+ * buildCampaignFromStrategy and every downstream campaign-launch/optimization code
+ * path work identically regardless of which pipeline produced the strategy.
+ */
+export async function createStrategyFromAgentResults(businessId: string, output: CampaignAgentOutput): Promise<AdStrategy> {
+  const budgetSplit: Partial<Record<AdNetwork, number>> = {};
+  for (const [network, fraction] of Object.entries(output.budgetSplit)) {
+    if (network === "meta" || network === "google" || network === "tiktok") {
+      budgetSplit[network] = fraction;
+    }
+  }
+
+  const strategy: AdStrategy = {
+    id: randomUUID(),
+    businessId,
+    createdAt: new Date().toISOString(),
+    summary: output.summary,
+    recommendedNetworks: output.recommendedNetworks,
+    budgetSplit,
+    audiences: output.audiences,
+    creatives: sanitizeCreatives(output.creatives),
   };
 
   return persistStrategy(strategy);

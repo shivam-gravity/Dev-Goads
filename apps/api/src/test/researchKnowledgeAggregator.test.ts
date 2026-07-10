@@ -52,6 +52,13 @@ test("KnowledgeAggregator - maps each provider's valid data onto its ResearchCon
     "audience", "company", "competitor", "market", "news", "search", "seo", "technology", "website",
   ]);
   assert.deepStrictEqual(context.metadata.providersFailed, []);
+
+  // Knowledge Fusion Engine output is attached additively — every provider here reported
+  // "success" at confidence 0.6 (above the low-grounding threshold) with a "medium" vs.
+  // "high" competition reading (not opposite extremes), so no conflicts should fire.
+  assert.strictEqual(context.metadata.fusion?.explainability.length, 9);
+  assert.strictEqual(context.metadata.fusion?.authorityByProvider.website, 0.95);
+  assert.deepStrictEqual(context.metadata.fusion?.conflicts, []);
 });
 
 test("KnowledgeAggregator - a failed provider becomes a null field and lands in providersFailed", () => {

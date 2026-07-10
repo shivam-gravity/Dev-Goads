@@ -1,7 +1,14 @@
 import "dotenv/config";
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert";
 import { ingestLead, listLeads, listLeadForms, seedMockLeadData, upsertLeadForm } from "../modules/leadgen/leadIngestionService.js";
+import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
+
+// leadIngestionService.js transitively imports crmWebhookService.js, which imports
+// infra/queue.js — that eagerly opens every BullMQ queue's Redis connection at module
+// load, regardless of whether this file's tests ever dispatch a webhook. Same "open
+// handle hangs node --test" issue as metaLeadWebhook.test.ts/campaignOrchestrator.test.ts.
+after(disconnectTestInfra);
 
 test("Lead ingestion - ingestLead upserts idempotently on redelivery", async () => {
   const workspaceId = `ws_lead_test_${Date.now()}`;

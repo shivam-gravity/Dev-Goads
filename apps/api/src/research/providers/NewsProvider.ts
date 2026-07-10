@@ -17,7 +17,7 @@ export class NewsProvider implements ResearchProvider<NewsData> {
   readonly priority = 90;
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<NewsData>> {
-    return runProviderStep(this.name, 1, async () => {
+    return runProviderStep(this.name, 1, input, async () => {
       if (!openai) {
         return { status: "partial", data: { articles: [], summary: "", dataSource: NO_KEY_DATA_SOURCE } };
       }

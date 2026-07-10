@@ -5,6 +5,8 @@ import { listActiveCampaigns } from "../modules/orchestrator/campaignOrchestrato
 import { ingestCampaignMetrics } from "../modules/pipeline/performancePipeline.js";
 import { runOptimizationPass } from "../modules/optimization/optimizationEngine.js";
 import { recordOptimizationInsights } from "../modules/insights/insightService.js";
+import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
+import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
 
 const INGEST_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
@@ -44,11 +46,15 @@ const worker = new Worker(
 );
 
 worker.on("completed", () => logger.info("Metrics ingestion tick completed"));
-worker.on("failed", (job: Job | undefined, err: Error) => logger.error(`Metrics ingestion job failed: ${job?.name}`, err));
+worker.on("failed", (job: Job | undefined, err: Error) => {
+  logger.error(`Metrics ingestion job failed: ${job?.name}`, err);
+  if (job && isFinalFailure(job)) void sendToDeadLetter(METRICS_INGESTION_QUEUE, job, err);
+});
 
 // Registering a repeatable job with the same jobId is idempotent — BullMQ replaces the
 // existing schedule rather than stacking duplicates, so restarting this worker never
 // produces multiple concurrent tickers.
 await metricsIngestionQueue.add(REPEATABLE_JOB_NAME, {}, { repeat: { every: INGEST_INTERVAL_MS }, jobId: REPEATABLE_JOB_NAME });
 
+registerGracefulShutdown(worker, "metricsIngestionWorker");
 logger.info(`Metrics ingestion worker listening for jobs (every ${INGEST_INTERVAL_MS / 60000} minutes)`);

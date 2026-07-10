@@ -12,6 +12,9 @@ import { crmInternalAuth } from "./gateway/middleware/crmInternalAuth.js";
 import { apiRateLimiter } from "./gateway/middleware/rateLimit.js";
 import { requireAuth } from "./gateway/middleware/auth.js";
 import { registerEventHandlers } from "./infra/eventHandlers.js";
+import { prisma } from "./db/prisma.js";
+import { redisClient } from "./infra/redisClient.js";
+import { logger } from "./modules/logger/logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -26,7 +29,31 @@ app.use(cors());
 app.use(express.json({ verify: (req: Request & { rawBody?: Buffer }, _res, buf) => { req.rawBody = buf; } }));
 app.use(apiRateLimiter);
 
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
+// Real connectivity checks, not a static "ok" — a gateway that can't reach Postgres or
+// Redis is not actually healthy even though the Express process itself is up, and a
+// load balancer/orchestrator relying on this endpoint needs to know that to route traffic
+// (or restart the pod) accordingly. Each check is independent so one down dependency's
+// failure doesn't throw before the other is checked.
+app.get("/health", async (_req, res) => {
+  const checks: Record<string, "ok" | "error"> = { postgres: "ok", redis: "ok" };
+
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch (err) {
+    checks.postgres = "error";
+    logger.error("Health check: Postgres unreachable", err);
+  }
+
+  try {
+    await redisClient.ping();
+  } catch (err) {
+    checks.redis = "error";
+    logger.error("Health check: Redis unreachable", err);
+  }
+
+  const healthy = Object.values(checks).every((status) => status === "ok");
+  res.status(healthy ? 200 : 503).json({ status: healthy ? "ok" : "degraded", checks });
+});
 
 // Serves blobs written via LocalFileObjectStorage (src/infra/objectStorage.ts) — a real
 // S3/GCS/R2-backed implementation drops this static route in favor of signed URLs.
@@ -58,6 +85,37 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
   res.status(500).json({ error: "Internal server error" });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`AdGo API gateway listening on http://localhost:${PORT}`);
 });
+
+// Stop accepting new connections and let in-flight requests finish before exiting —
+// without this, a deploy/restart (SIGTERM) or Ctrl+C (SIGINT) kills requests mid-flight,
+// which for this gateway can mean a client never learns whether a campaign launch or
+// research job it just triggered actually started. A second signal (or the timeout)
+// still forces the process down rather than hanging forever on one stuck connection.
+const SHUTDOWN_FORCE_EXIT_MS = 10_000;
+let shuttingDown = false;
+
+function gracefulShutdown(signal: string) {
+  if (shuttingDown) {
+    logger.warn(`Received ${signal} again during shutdown — forcing exit`);
+    process.exit(1);
+  }
+  shuttingDown = true;
+  logger.info(`Received ${signal} — closing gracefully (in-flight requests get ${SHUTDOWN_FORCE_EXIT_MS}ms to finish)`);
+
+  const forceExit = setTimeout(() => {
+    logger.error(`Graceful shutdown timed out after ${SHUTDOWN_FORCE_EXIT_MS}ms — forcing exit`);
+    process.exit(1);
+  }, SHUTDOWN_FORCE_EXIT_MS);
+  forceExit.unref();
+
+  server.close((err) => {
+    if (err) logger.error("Error while closing HTTP server", err);
+    process.exit(err ? 1 : 0);
+  });
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));

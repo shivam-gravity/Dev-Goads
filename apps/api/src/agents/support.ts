@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import { openai, runStructured, type JsonSchemaTool } from "../infra/openaiClient.js";
 import { logger } from "../modules/logger/logger.js";
+import { withSpan } from "../infra/telemetry.js";
 import { promptRegistry } from "./prompts/PromptRegistry.js";
 import type { AgentEvidenceItem, AgentResult, ResearchContext } from "./types/index.js";
 // Side-effect import: registers all 10 agents' prompts before any agent can call
@@ -107,7 +108,7 @@ interface AgentStepOutcome<T> {
 export async function runAgentStep<T>(name: string, fn: () => Promise<AgentStepOutcome<T>>): Promise<AgentResult<T>> {
   const start = Date.now();
   try {
-    const outcome = await fn();
+    const outcome = await withSpan(`agent.${name}`, fn);
     return {
       agent: name,
       promptId: outcome.promptId,

@@ -66,7 +66,7 @@ export class TechnologyProvider implements ResearchProvider<TechnologyData> {
   readonly priority = 70;
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<TechnologyData>> {
-    return runProviderStep(this.name, 1, async () => {
+    return runProviderStep(this.name, 1, input, async () => {
       const url = normalizeUrl(input.url);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);

@@ -4,6 +4,7 @@ export const openai = process.env.OPENAI_API_KEY ? new OpenAI() : null;
 
 const DEFAULT_MODEL = "gpt-4o";
 const SEARCH_MODEL = "gpt-4o-search-preview";
+const EMBEDDING_MODEL = "text-embedding-3-small";
 
 export interface JsonSchemaTool {
   name: string;
@@ -110,4 +111,13 @@ export async function runWebSearch(prompt: string): Promise<WebSearchOutcome> {
   }
 
   return { narrative: narrative.trim(), citations: [...citationsByUrl.values()], searchesUsed: citationsByUrl.size > 0 ? 1 : 0 };
+}
+
+/** text-embedding-3-small — 1536 dimensions, used by research/memory/ResearchMemoryStore.ts
+ * for Research Memory / RAG retrieval (currently backing Competitor Intelligence). */
+export async function createEmbedding(text: string): Promise<number[]> {
+  if (!openai) throw new Error("OPENAI_API_KEY is not set");
+
+  const result = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: text });
+  return result.data[0].embedding;
 }

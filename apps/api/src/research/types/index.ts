@@ -1,4 +1,5 @@
 import type { Citation } from "../../types/index.js";
+import type { KnowledgeFusionReport } from "../knowledge/KnowledgeFusionEngine.js";
 
 /**
  * The new parallel-provider research pipeline's own type surface — deliberately
@@ -167,6 +168,11 @@ export interface ResearchContextMetadata {
   /** Unweighted average of confidenceByProvider across every provider that ran (failed
    * providers count as 0) — one number for "how much should I trust this research overall". */
   overallConfidence: number;
+  /** Knowledge Fusion Engine output (research/knowledge/KnowledgeFusionEngine.ts) —
+   * authority-weighted confidence, cross-provider conflict detection, and a per-provider
+   * explainability trail. Optional/additive: nothing that reads confidenceByProvider/
+   * overallConfidence above needs to change. */
+  fusion?: KnowledgeFusionReport;
 }
 
 /**

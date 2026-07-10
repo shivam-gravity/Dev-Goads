@@ -26,8 +26,6 @@ import Contact from "./pages/Contact.js";
 import Blog from "./pages/Blog.js";
 
 // New Pages Imports
-import Login from "./pages/Login.js";
-import Signup from "./pages/Signup.js";
 import CampaignGenerator from "./pages/CampaignGenerator.js";
 import CreativeStudio from "./pages/CreativeStudio.js";
 import AudienceBuilder from "./pages/AudienceBuilder.js";
@@ -64,7 +62,7 @@ const MARKETING_ROUTES: Record<string, JSX.Element> = {
 };
 
 function AuthenticatedApp() {
-  const { businessId, logout } = useAuth();
+  const { businessId } = useAuth();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [brandMenuOpen, setBrandMenuOpen] = useState(false);
@@ -301,114 +299,48 @@ function AuthenticatedApp() {
         </header>
 
         <main className="sidebar-content adsgo-content">
+          {/* businessId is guaranteed non-null here — RequireAuth (below) already redirects
+              to /get-started before AuthenticatedApp ever mounts without one. */}
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route
-              path="/dashboard"
-              element={businessId ? <Dashboard businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/campaigns"
-              element={businessId ? <Campaigns businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/campaigns/new"
-              element={businessId ? <NewCampaign /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/campaigns/:campaignId/builder"
-              element={businessId ? <CampaignBuilder /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/campaigns/:campaignId"
-              element={businessId ? <CampaignDetail /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/analytics"
-              element={businessId ? <Analytics businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/audiences"
-              element={businessId ? <AudienceBuilder businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/creatives"
-              element={businessId ? <Creatives businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/billing"
-              element={businessId ? <Billing businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            
+            <Route path="/dashboard" element={<Dashboard businessId={businessId!} />} />
+            <Route path="/campaigns" element={<Campaigns businessId={businessId!} />} />
+            <Route path="/campaigns/new" element={<NewCampaign />} />
+            <Route path="/campaigns/:campaignId/builder" element={<CampaignBuilder />} />
+            <Route path="/campaigns/:campaignId" element={<CampaignDetail />} />
+            <Route path="/analytics" element={<Analytics businessId={businessId!} />} />
+            <Route path="/audiences" element={<AudienceBuilder businessId={businessId!} />} />
+            <Route path="/creatives" element={<Creatives businessId={businessId!} />} />
+            <Route path="/billing" element={<Billing businessId={businessId!} />} />
+
             {/* New Routes */}
-            <Route
-              path="/wizard"
-              element={businessId ? <CampaignGenerator businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/studio"
-              element={businessId ? <CreativeStudio businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/manager"
-              element={businessId ? <AdsManager businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/drafts"
-              element={businessId ? <Drafts businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/insights"
-              element={businessId ? <AIInsights businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/assets"
-              element={businessId ? <AssetLibrary businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
+            <Route path="/wizard" element={<CampaignGenerator businessId={businessId!} />} />
+            <Route path="/studio" element={<CreativeStudio businessId={businessId!} />} />
+            <Route path="/manager" element={<AdsManager businessId={businessId!} />} />
+            <Route path="/drafts" element={<Drafts businessId={businessId!} />} />
+            <Route path="/insights" element={<AIInsights businessId={businessId!} />} />
+            <Route path="/assets" element={<AssetLibrary businessId={businessId!} />} />
             <Route path="/integrations" element={<Navigate to="/profile/ad-platform-connection" replace />} />
-            <Route
-              path="/profile/*"
-              element={businessId ? <UserCenter businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/notifications"
-              element={businessId ? <Notifications businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/help"
-              element={businessId ? <HelpCenter /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/admin/*"
-              element={businessId ? <Admin businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/rules"
-              element={businessId ? <AutomationRules businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/media-plan"
-              element={businessId ? <MediaPlan businessId={businessId} /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/goal"
-              element={businessId ? <OptimizeGoal /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/brand"
-              element={businessId ? <BrandProfile /> : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/products"
-              element={businessId ? <Products /> : <Navigate to="/login" replace />}
-            />
+            <Route path="/profile/*" element={<UserCenter businessId={businessId!} />} />
+            <Route path="/notifications" element={<Notifications businessId={businessId!} />} />
+            <Route path="/help" element={<HelpCenter />} />
+            <Route path="/admin/*" element={<Admin businessId={businessId!} />} />
+            <Route path="/rules" element={<AutomationRules businessId={businessId!} />} />
+            <Route path="/media-plan" element={<MediaPlan businessId={businessId!} />} />
+            <Route path="/goal" element={<OptimizeGoal />} />
+            <Route path="/brand" element={<BrandProfile />} />
+            <Route path="/products" element={<Products />} />
+            {/* Any unmatched path (including the old /login, /signup) lands on the dashboard
+                instead of a blank pane or a 404 — there's no separate "logged out" state to
+                send them to anymore. */}
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </main>
       </div>
 
       {/* Global AI Copilot Drawer Overlay */}
       <CopilotDrawer />
-      
+
       {/* Global AI Copilot Floating Chat Trigger */}
       <CopilotFab />
     </div>
@@ -427,25 +359,18 @@ function CopilotFab() {
   );
 }
 
-function LoggedOutRoute({ children }: { children: JSX.Element }) {
-  const { isAuthenticated, isLoading } = useAuth();
-  if (isLoading) return null;
-  if (isAuthenticated) return <Navigate to="/dashboard" replace />;
-  return children;
-}
-
+// There is no login flow — the only gate left is "has this workspace finished
+// onboarding (created a business) yet," not "is this user authenticated."
 function RequireAuth({ children }: { children: JSX.Element }) {
-  const { isAuthenticated, isLoading, businessId } = useAuth();
+  const { isLoading, businessId } = useAuth();
   if (isLoading) return null;
-  if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!businessId) return <Navigate to="/get-started" replace />;
   return children;
 }
 
 function OnboardingWrapper() {
-  const { isAuthenticated, isLoading, businessId, setBusinessId } = useAuth();
+  const { isLoading, businessId, setBusinessId } = useAuth();
   if (isLoading) return null;
-  if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (businessId) return <Navigate to="/dashboard" replace />;
   return <Onboarding onOnboarded={setBusinessId} />;
 }
@@ -463,8 +388,6 @@ export default function App() {
       <AuthProvider>
         <CopilotProvider>
           <Routes>
-            <Route path="/login" element={<LoggedOutRoute><Login /></LoggedOutRoute>} />
-            <Route path="/signup" element={<LoggedOutRoute><Signup /></LoggedOutRoute>} />
             <Route path="/get-started" element={<OnboardingWrapper />} />
             <Route path="/*" element={<RequireAuth><AuthenticatedApp /></RequireAuth>} />
           </Routes>

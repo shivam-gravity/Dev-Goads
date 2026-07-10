@@ -41,7 +41,7 @@ export class SEOProvider implements ResearchProvider<SEOData> {
   readonly priority = 80;
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<SEOData>> {
-    return runProviderStep(this.name, 1, async () => {
+    return runProviderStep(this.name, 1, input, async () => {
       const url = normalizeUrl(input.url);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);

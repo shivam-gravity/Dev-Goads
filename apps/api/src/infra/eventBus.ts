@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { logger } from "../modules/logger/logger.js";
+import { RedisStreamEventBus } from "./redisStreamEventBus.js";
 
 /**
  * Provider-agnostic pub/sub for domain events. The shape mirrors what a Kafka
@@ -48,4 +49,7 @@ export class InMemoryEventBus implements EventBus {
   }
 }
 
-export const eventBus: EventBus = new InMemoryEventBus();
+// Redis Streams-backed by default (see redisStreamEventBus.ts) — InMemoryEventBus above
+// stays exported for tests that want pub/sub without a real Redis round-trip, and as the
+// reference implementation of the EventBus contract.
+export const eventBus: EventBus = new RedisStreamEventBus();

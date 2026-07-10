@@ -25,7 +25,7 @@ export class MarketProvider implements ResearchProvider<MarketData> {
   readonly priority = 40;
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<MarketData>> {
-    return runProviderStep(this.name, 1, async () => {
+    return runProviderStep(this.name, 1, input, async () => {
       const industry = input.industry ?? "this business's category";
       const { status, data, citations } = await webSearchThenStructure<MarketData>({
         maxTokens: 1024,

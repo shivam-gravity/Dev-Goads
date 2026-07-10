@@ -4,6 +4,8 @@ import { redisConnection, LEAD_INGESTION_QUEUE } from "../infra/queue.js";
 import { ingestMetaLead, backfillMetaLeads } from "../modules/leadgen/metaLeadSync.js";
 import { syncGoogleLeadForms, syncGoogleLeadSubmissions } from "../modules/leadgen/googleLeadSyncService.js";
 import { updateIntegrationSettings } from "../modules/integrations/integrationService.js";
+import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
+import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
 
 type IngestOneJob = { name: "ingest-one"; data: { workspaceId: string; leadgenId: string } };
@@ -41,6 +43,10 @@ const worker = new Worker(
 );
 
 worker.on("completed", (job: Job) => logger.info(`Lead ingestion job completed: ${job.name} ${JSON.stringify(job.data)}`));
-worker.on("failed", (job: Job | undefined, err: Error) => logger.error(`Lead ingestion job failed: ${job?.name} ${JSON.stringify(job?.data)}`, err));
+worker.on("failed", (job: Job | undefined, err: Error) => {
+  logger.error(`Lead ingestion job failed: ${job?.name} ${JSON.stringify(job?.data)}`, err);
+  if (job && isFinalFailure(job)) void sendToDeadLetter(LEAD_INGESTION_QUEUE, job, err);
+});
 
+registerGracefulShutdown(worker, "leadIngestionWorker");
 logger.info("Lead ingestion worker listening for jobs");

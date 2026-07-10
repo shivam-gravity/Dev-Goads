@@ -25,6 +25,11 @@ export interface ProductAnalysis {
   useCases?: { title: string; description: string }[];
   pricingModel?: string;
   pricingRange?: string;
+  /** Real named clients/case studies/"trusted by" logos found on the site or via search —
+   * empty array (not undefined) when none were found, so the frontend can distinguish "we
+   * checked and found none" from "this field predates notableCustomers". Undefined only from
+   * the scrapegraphai fallback path (no equivalent field there). */
+  notableCustomers?: string[];
   /** Human-readable source citation for the "💡 Data Source" line — real citation titles when web search found sources, an honest "AI estimate" label otherwise (never a fabricated report name). */
   dataSource?: string;
 }
@@ -65,6 +70,9 @@ export interface CompetitorBudgetAnalysis {
   differentiators: string[];
   budgetReasoning: string[];
   recommendedDailyBudgetCents: number;
+  /** How/when to scale past the initial recommendation, e.g. "grow to $X/day once CPL
+   * beats $Y and MQL-to-SQL exceeds Z%" — undefined from the scrapegraphai fallback path. */
+  scaleUpGuidance?: string;
   dataSource: string;
 }
 
