@@ -1,9 +1,11 @@
 import { FormEvent, useState } from "react";
 import { api, AudienceAnalysis, ProductAnalysis, ScrapedSite } from "../api/client.js";
+import { useAuth } from "../context/AuthContext.js";
 
 type Step = "url" | "analyzing-product" | "product" | "analyzing-audience" | "audience" | "details";
 
 export default function Onboarding({ onOnboarded }: { onOnboarded: (businessId: string) => void }) {
+  const { workspaceId } = useAuth();
   const [step, setStep] = useState<Step>("url");
   const [url, setUrl] = useState("");
   const [site, setSite] = useState<ScrapedSite | null>(null);
@@ -66,11 +68,13 @@ export default function Onboarding({ onOnboarded }: { onOnboarded: (businessId: 
     if (!trimmedName) { setError("Enter a business name."); return; }
     if (!trimmedIndustry) { setError("Enter an industry."); return; }
     if (!(monthlyBudget > 0)) { setError("Enter a monthly budget greater than 0."); return; }
+    if (!workspaceId) { setError("No workspace selected yet — try again in a moment."); return; }
 
     setSubmitting(true);
     setError(null);
     try {
       const business = await api.createBusiness({
+        workspaceId,
         name: trimmedName,
         website: website || undefined,
         industry: trimmedIndustry,

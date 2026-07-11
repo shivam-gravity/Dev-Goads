@@ -18,6 +18,10 @@ import {
   updateMemberRole,
   removeMember,
 } from "../../api/src/modules/workspace/workspaceService.js";
+import { initErrorTracking, registerCrashReporting, captureError } from "../../api/src/infra/errorTracking.js";
+
+initErrorTracking("adgo-auth-service");
+registerCrashReporting("adgo-auth-service");
 
 const MANAGE_ROLES = new Set(["owner", "admin"]);
 
@@ -154,7 +158,7 @@ app.use((_req, res) => {
 });
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err);
+  captureError(err, { service: "adgo-auth-service" });
   res.status(500).json({ error: "Internal server error" });
 });
 

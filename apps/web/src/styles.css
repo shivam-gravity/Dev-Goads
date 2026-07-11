@@ -3332,6 +3332,20 @@ td {
   color: var(--muted);
 }
 
+.asset-meta-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.creative-tag-meta {
+  background: var(--accent-light);
+  border-color: var(--accent-light);
+  color: #fff;
+  text-transform: capitalize;
+  font-weight: 600;
+}
+
 .creative-asset-date {
   font-size: 11px;
   color: var(--muted-2);
@@ -11895,6 +11909,33 @@ td {
 .creative-asset-actions {
   display: flex;
   gap: 8px;
+}
+
+.creative-gen-options {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.creative-gen-options label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  flex: 1;
+  min-width: 110px;
+}
+
+.creative-gen-options select {
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--surface);
 }
 
 .creative-asset-grid {

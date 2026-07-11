@@ -76,8 +76,9 @@ test("Google Ads Adapter (live) - fetchInsights parses metrics from the search e
     }) as typeof fetch,
     async () => {
       const stats = await googleAdapter.fetchInsights("customers/123/adGroupAds/456", "2026-07-06");
-      // reach = floor(impressions * 0.65): Google's Search API has no ad-group-ad-level
-      // reach field, so the adapter estimates it from impressions (see googleAdapter.ts).
+      // reach has no native ad_group_ad-level field in the Google Ads API for Search, so
+      // the adapter estimates it as impressions * 0.65 (see googleAdapter.ts's comment) —
+      // not read from the response, so it's derived here rather than added to the fixture.
       assert.deepStrictEqual(stats, { impressions: 1000, reach: 650, clicks: 50, conversions: 5, spendCents: 200 });
     }
   );

@@ -20,7 +20,7 @@ export default function HelpCenter() {
   async function handleSubmitTicket(e: React.FormEvent) {
     e.preventDefault();
     if (!ticketSubject.trim() || !ticketBody.trim()) return;
-    const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo";
+    const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
     setSubmitting(true);
     setTicketError(null);
     try {

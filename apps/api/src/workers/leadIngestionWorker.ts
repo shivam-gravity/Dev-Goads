@@ -7,6 +7,10 @@ import { updateIntegrationSettings } from "../modules/integrations/integrationSe
 import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
 import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
+import { initErrorTracking, registerCrashReporting, captureError } from "../infra/errorTracking.js";
+
+initErrorTracking("adgo-lead-ingestion-worker");
+registerCrashReporting("adgo-lead-ingestion-worker");
 
 type IngestOneJob = { name: "ingest-one"; data: { workspaceId: string; leadgenId: string } };
 type BackfillJob = { name: "backfill"; data: { workspaceId: string; platform: "meta" | "google" } };
@@ -45,6 +49,7 @@ const worker = new Worker(
 worker.on("completed", (job: Job) => logger.info(`Lead ingestion job completed: ${job.name} ${JSON.stringify(job.data)}`));
 worker.on("failed", (job: Job | undefined, err: Error) => {
   logger.error(`Lead ingestion job failed: ${job?.name} ${JSON.stringify(job?.data)}`, err);
+  captureError(err, { worker: "leadIngestionWorker", jobName: job?.name, workspaceId: job?.data?.workspaceId });
   if (job && isFinalFailure(job)) void sendToDeadLetter(LEAD_INGESTION_QUEUE, job, err);
 });
 

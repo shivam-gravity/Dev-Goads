@@ -28,7 +28,7 @@ const KPI_OPTIONS = ["Lowest CPA", "Highest ROAS", "Most Conversions", "Most Cli
 
 export default function OptimizeGoal() {
   const { workspaceId: authWorkspaceId } = useAuth();
-  const workspaceId = authWorkspaceId ?? localStorage.getItem("adgo_workspace_id") ?? "demo";
+  const workspaceId = authWorkspaceId ?? localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
 
   const [locations, setLocations] = useState<string[]>([]);
   const [locationInput, setLocationInput] = useState("");

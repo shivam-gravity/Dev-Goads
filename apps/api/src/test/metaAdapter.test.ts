@@ -1,6 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { metaAdapter } from "../modules/adapters/metaAdapter.js";
+
+// Runs in the same process as every other test file (see the combined `npm test` invocation)
+// — if a file that ran earlier already caused real live credentials to load into process.env
+// (e.g. via a Prisma import's dotenv side effect), this file's "mock mode" assumptions would
+// silently break. Cleared before the first import of metaAdapter.js (reads these once, at
+// module load time), same fix as metaAdapter.live.test.ts's own explicit env setup.
+delete process.env.META_ACCESS_TOKEN;
+delete process.env.META_AD_ACCOUNT_ID;
+
+const { metaAdapter } = await import("../modules/adapters/metaAdapter.js");
 
 test("Meta Ads Adapter - launchVariant fallback placement validation", async () => {
   const result = await metaAdapter.launchVariant({

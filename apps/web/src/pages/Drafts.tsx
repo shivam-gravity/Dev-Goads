@@ -237,7 +237,7 @@ export default function Drafts({ businessId }: { businessId: string }) {
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
+  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
 
   async function loadDrafts() {
     setLoading(true);

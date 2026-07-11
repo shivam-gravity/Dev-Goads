@@ -48,13 +48,17 @@ function fallbackBrief(context: string): CreativeBrief {
   };
 }
 
-async function generateCreativeBrief(context: string): Promise<CreativeBrief> {
+async function generateCreativeBrief(context: string, language?: string): Promise<CreativeBrief> {
   if (!openai) return fallbackBrief(context);
+
+  const languageInstruction = language && language !== "English"
+    ? ` Write the headline, body, and call to action in ${language} (the image prompt itself should stay in English, since that's what the image model expects).`
+    : "";
 
   const result = await runStructured<CreativeBrief>({
     maxTokens: 1024,
     tool: CREATIVE_BRIEF_TOOL,
-    messages: [{ role: "user", content: `Write ad copy and an image prompt for this product/business:\n${context}` }],
+    messages: [{ role: "user", content: `Write ad copy and an image prompt for this product/business:\n${context}${languageInstruction}` }],
   });
   return result ?? fallbackBrief(context);
 }
@@ -88,9 +92,10 @@ export async function runGenerationJob(jobId: string): Promise<void> {
 
   try {
     const context = await resolveContext(job.input);
-    const brief = await generateCreativeBrief(context);
+    const brief = await generateCreativeBrief(context, job.input.language);
 
-    const image = await getImageProvider().generate(brief.imagePrompt);
+    const aspectRatio = job.input.aspectRatio ?? "square";
+    const image = await getImageProvider().generate(brief.imagePrompt, { aspectRatio, quality: job.input.quality });
     const imageUrl = await uploadGenerated(job.workspaceId, image.buffer, image.mimeType, "png");
     const imageAsset = await createAsset(job.workspaceId, {
       name: brief.headline,
@@ -98,7 +103,7 @@ export async function runGenerationJob(jobId: string): Promise<void> {
       url: imageUrl,
       size: image.buffer.length,
       mimeType: image.mimeType,
-      tags: ["ai-generated"],
+      tags: ["ai-generated", `aspect:${aspectRatio}`, `lang:${job.input.language ?? "English"}`],
     });
 
     let videoAsset: Awaited<ReturnType<typeof createAsset>> | undefined;

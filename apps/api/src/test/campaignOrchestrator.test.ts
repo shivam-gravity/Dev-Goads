@@ -1,15 +1,28 @@
 import { test, after } from "node:test";
 import assert from "node:assert";
 import { prisma } from "../db/prisma.js";
-import {
+import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
+
+// This file's tests assert mock-mode ("safety default: paused") adapter behavior — real
+// live credentials sitting in .env (e.g. for a real manual Meta-ads test) must not leak
+// in here, or these calls hit the real Graph API with fake test data and fail unpredictably
+// instead of exercising the mock path. Cleared before the first import of
+// campaignOrchestrator.js (which imports metaAdapter.js/googleAdapter.js/tiktokAdapter.js —
+// each reads its live-credential env vars once, at module load time).
+for (const key of [
+  "META_ACCESS_TOKEN", "META_AD_ACCOUNT_ID",
+  "GOOGLE_ADS_DEVELOPER_TOKEN", "GOOGLE_ADS_CUSTOMER_ID", "GOOGLE_ADS_ACCESS_TOKEN",
+  "TIKTOK_ACCESS_TOKEN", "TIKTOK_ADVERTISER_ID",
+]) delete process.env[key];
+
+const {
   buildCampaignFromStrategy,
   launchCampaign,
   pauseVariant,
   reallocateBudget,
   activateVariant,
   applyCreativeMedia,
-} from "../modules/orchestrator/campaignOrchestrator.js";
-import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
+} = await import("../modules/orchestrator/campaignOrchestrator.js");
 
 // launchCampaign publishes "campaign.launched" via infra/eventBus.js, which is Redis
 // Streams-backed (see redisStreamEventBus.ts) — that opens a real connection on this

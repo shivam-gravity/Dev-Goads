@@ -3,9 +3,30 @@ export interface GeneratedImage {
   mimeType: string;
 }
 
+export type ImageAspectRatio = "square" | "portrait" | "landscape";
+export type ImageQuality = "standard" | "high";
+
+export interface ImageGenOptions {
+  aspectRatio?: ImageAspectRatio;
+  quality?: ImageQuality;
+}
+
+// gpt-image-1 only accepts these three literal sizes (plus "auto") — these are the closest
+// fits to the vertical/square/horizontal ad placements Meta/Google/TikTok actually run.
+const SIZE_BY_ASPECT_RATIO: Record<ImageAspectRatio, string> = {
+  square: "1024x1024",
+  portrait: "1024x1536",
+  landscape: "1536x1024",
+};
+
+const QUALITY_PARAM: Record<ImageQuality, string> = {
+  standard: "medium",
+  high: "high",
+};
+
 export interface ImageGenProvider {
   readonly name: string;
-  generate(prompt: string): Promise<GeneratedImage>;
+  generate(prompt: string, options?: ImageGenOptions): Promise<GeneratedImage>;
 }
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -14,7 +35,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 export class OpenAIImageProvider implements ImageGenProvider {
   readonly name = "openai";
 
-  async generate(prompt: string): Promise<GeneratedImage> {
+  async generate(prompt: string, options?: ImageGenOptions): Promise<GeneratedImage> {
     if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not set");
 
     const res = await fetch("https://api.openai.com/v1/images/generations", {
@@ -26,7 +47,8 @@ export class OpenAIImageProvider implements ImageGenProvider {
       body: JSON.stringify({
         model: "gpt-image-1",
         prompt,
-        size: "1024x1024",
+        size: SIZE_BY_ASPECT_RATIO[options?.aspectRatio ?? "square"],
+        quality: QUALITY_PARAM[options?.quality ?? "standard"],
         n: 1,
       }),
     });
@@ -48,7 +70,7 @@ export class OpenAIImageProvider implements ImageGenProvider {
 export class MockImageProvider implements ImageGenProvider {
   readonly name = "mock";
 
-  async generate(_prompt: string): Promise<GeneratedImage> {
+  async generate(_prompt: string, _options?: ImageGenOptions): Promise<GeneratedImage> {
     // 1x1 transparent PNG — enough to exercise the upload/asset pipeline without a real provider.
     const onePixelPng = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",

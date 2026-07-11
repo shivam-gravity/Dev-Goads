@@ -15,6 +15,10 @@ import { registerEventHandlers } from "./infra/eventHandlers.js";
 import { prisma } from "./db/prisma.js";
 import { redisClient } from "./infra/redisClient.js";
 import { logger } from "./modules/logger/logger.js";
+import { initErrorTracking, registerCrashReporting, captureError } from "./infra/errorTracking.js";
+
+initErrorTracking("adgo-api");
+registerCrashReporting("adgo-api");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -81,7 +85,7 @@ app.use((_req, res) => {
 });
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err);
+  captureError(err, { service: "adgo-api" });
   res.status(500).json({ error: "Internal server error" });
 });
 

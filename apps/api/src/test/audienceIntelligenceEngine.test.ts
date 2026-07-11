@@ -17,7 +17,9 @@ test("runAudienceIntelligence - with no OPENAI_API_KEY, degrades to a labeled lo
   try {
     const report = await runAudienceIntelligence({ workspaceId: "ws-1", url: "https://example.com", businessName: "Example Co" });
 
-    assert.ok(report.icp.includes("Unknown"));
+    assert.ok(report.icp.summary.includes("Unknown"));
+    assert.deepStrictEqual(report.icp.firmographics, []);
+    assert.deepStrictEqual(report.icp.behavioralSignals, []);
     assert.strictEqual(report.citations.length, 0);
     assert.strictEqual(report.evidence.length, 0);
     assert.ok(report.confidence <= 0.2);

@@ -38,7 +38,7 @@ function formatDate(ts: number) {
 
 export default function Products() {
   const navigate = useNavigate();
-  const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo";
+  const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
 
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [search, setSearch] = useState("");

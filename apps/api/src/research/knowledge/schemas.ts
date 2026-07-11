@@ -84,3 +84,87 @@ export const generalSearchSchema = z.object({
   searchesUsed: z.number(),
   dataSource: z.string(),
 });
+
+export const socialMediaSchema = z.object({
+  platforms: z.array(z.object({ platform: z.string(), handle: z.string().optional(), followers: z.string().optional(), engagementLevel: z.string().optional() })),
+  overallPresence: z.string(),
+  dataSource: z.string(),
+});
+
+export const reviewsSchema = z.object({
+  averageRating: z.string().optional(),
+  totalReviewsEstimate: z.string().optional(),
+  topPraise: z.array(z.string()),
+  topComplaints: z.array(z.string()),
+  reviewSources: z.array(z.string()),
+  dataSource: z.string(),
+});
+
+export const fundingSchema = z.object({
+  totalRaised: z.string().optional(),
+  latestRound: z.string().optional(),
+  investors: z.array(z.string()),
+  valuation: z.string().optional(),
+  fundingTimeline: z.array(z.string()),
+  dataSource: z.string(),
+});
+
+export const hiringSignalsSchema = z.object({
+  openRolesEstimate: z.string().optional(),
+  growthSignal: z.string(),
+  keyDepartmentsHiring: z.array(z.string()),
+  dataSource: z.string(),
+});
+
+export const contentMarketingSchema = z.object({
+  hasActiveBlog: z.boolean(),
+  publishingCadence: z.string().optional(),
+  contentPillars: z.array(z.string()),
+  contentGaps: z.array(z.string()),
+  dataSource: z.string(),
+});
+
+export const backlinkAuthoritySchema = z.object({
+  domainAuthorityEstimate: z.string().optional(),
+  notableBacklinkSources: z.array(z.string()),
+  seoStrengthSummary: z.string(),
+  dataSource: z.string(),
+});
+
+export const appStoreSchema = z.object({
+  hasApp: z.boolean(),
+  platforms: z.array(z.string()),
+  ratingSummary: z.string().optional(),
+  categoryRanking: z.string().optional(),
+  dataSource: z.string(),
+});
+
+export const videoPresenceSchema = z.object({
+  hasYoutubeChannel: z.boolean(),
+  subscriberEstimate: z.string().optional(),
+  contentThemes: z.array(z.string()),
+  engagementSummary: z.string(),
+  dataSource: z.string(),
+});
+
+export const localPresenceSchema = z.object({
+  hasLocalPresence: z.boolean(),
+  googleBusinessRating: z.string().optional(),
+  locationsEstimate: z.string().optional(),
+  localSeoNotes: z.array(z.string()),
+  dataSource: z.string(),
+});
+
+export const partnershipSchema = z.object({
+  integrations: z.array(z.string()),
+  partners: z.array(z.string()),
+  ecosystemSummary: z.string(),
+  dataSource: z.string(),
+});
+
+export const legalRegulatorySchema = z.object({
+  applicableRegulations: z.array(z.string()),
+  industrySpecificRisks: z.array(z.string()),
+  complianceSummary: z.string(),
+  dataSource: z.string(),
+});

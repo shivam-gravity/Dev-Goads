@@ -6,7 +6,12 @@ import type { AgentResult, ResearchContext } from "./types/index.js";
 export const MAX_AGENT_ATTEMPTS = 2;
 export const AGENT_RETRY_DELAY_MS = 500;
 
-const CRITIC_AGENT_NAME = "critic-agent";
+// Reviewer agents take `{ priorResults }` and review what the producer agents proposed,
+// rather than producing a fresh synthesis of their own — CriticAgent (quality/grounding)
+// and ComplianceAgent (ad-policy risk) both fit this shape. Generalized to a set (not a
+// single hardcoded name) specifically so adding a 3rd reviewer later is a one-line change
+// here, not a rewrite of runAgentCoordinator's control flow.
+const REVIEWER_AGENT_NAMES = new Set(["critic-agent", "compliance-agent"]);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -58,12 +63,15 @@ async function runAgentWithRetry(
 
 /**
  * The AI Agent Coordinator — the missing link between the Knowledge Aggregator's
- * ResearchContext and a buildable campaign. Fans the 9 "producer" agents (Product,
- * Audience, Competitor, Market, Keyword, Creative, Budget, Persona, Campaign) out in
- * parallel off the same ResearchContext (mirrors ResearchOrchestrator's provider
- * fan-out), then runs CriticAgent last with `{ priorResults }` so it can review what
- * the other 9 proposed — see CriticAgent's own doc comment, which names this exact
- * two-phase shape as its intended calling convention.
+ * ResearchContext and a buildable campaign. Fans the 18 "producer" agents (Product,
+ * Audience, Competitor, Market, Keyword, Creative, Budget, Persona, Campaign, Landing
+ * Page, Pricing/Offer, Localization, SEO Content, Seasonality/Timing, Channel Placement,
+ * Funnel/Retargeting, Objection Handling, Forecasting/KPI) out in parallel off the same
+ * ResearchContext (mirrors ResearchOrchestrator's provider fan-out), then runs both
+ * reviewer agents (CriticAgent, ComplianceAgent) — also in parallel with each other, since
+ * neither depends on the other, only on the producers' shared `priorResults` snapshot —
+ * so each can review what the 18 producers proposed. See CriticAgent's own doc comment,
+ * which names this exact two-phase shape as its intended calling convention.
  *
  * Deliberately does not import or construct agents itself beyond createAIAgents() —
  * no agent's prompt/logic is touched here, this file only sequences existing,
@@ -74,8 +82,8 @@ export async function runAgentCoordinator(
   options: AgentCoordinatorOptions = {}
 ): Promise<AgentPipelineResult> {
   const allAgents = options.agents ?? (createAIAgents() as AIAgent<unknown>[]);
-  const criticAgent = allAgents.find((a) => a.name === CRITIC_AGENT_NAME);
-  const producerAgents = allAgents.filter((a) => a.name !== CRITIC_AGENT_NAME);
+  const reviewerAgents = allAgents.filter((a) => REVIEWER_AGENT_NAMES.has(a.name));
+  const producerAgents = allAgents.filter((a) => !REVIEWER_AGENT_NAMES.has(a.name));
   const total = allAgents.length;
 
   let completed = 0;
@@ -97,15 +105,25 @@ export async function runAgentCoordinator(
 
   const order = producerAgents.map((a) => a.name);
 
-  if (criticAgent) {
-    // Snapshot, not a live reference — `results` gets critic-agent's own entry added
-    // right after this call, and CriticAgent is meant to review what came before it,
+  if (reviewerAgents.length > 0) {
+    // Snapshot, not a live reference — `results` gets each reviewer's own entry added
+    // right after this call, and a reviewer is meant to review what came before it,
     // never itself (a shared mutable reference here would let that leak through to
-    // anything holding onto input.priorResults after execute() resolves).
-    const criticResult = await runAgentWithRetry(criticAgent, context, { priorResults: { ...results } });
-    results[criticResult.agent] = criticResult;
-    order.push(criticAgent.name);
-    await reportProgress();
+    // anything holding onto input.priorResults after execute() resolves). Reviewers run
+    // in parallel with each other (both only read this same snapshot, neither writes
+    // anything the other reads), same fan-out shape as the producers above.
+    const priorResultsSnapshot = { ...results };
+    const reviewerResults = await Promise.all(
+      reviewerAgents.map(async (agent) => {
+        const result = await runAgentWithRetry(agent, context, { priorResults: priorResultsSnapshot });
+        await reportProgress();
+        return result;
+      })
+    );
+    for (const result of reviewerResults) {
+      results[result.agent] = result;
+      order.push(result.agent);
+    }
   }
 
   return { results, order };

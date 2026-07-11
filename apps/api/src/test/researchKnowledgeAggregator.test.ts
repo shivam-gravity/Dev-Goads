@@ -93,3 +93,57 @@ test("KnowledgeAggregator - a missing provider (never ran) is null and absent fr
   assert.strictEqual(context.metadata.providersSucceeded.length, 0);
   assert.strictEqual(context.metadata.providersFailed.length, 0);
 });
+
+test("KnowledgeAggregator - reconciles an 'unknown' company fundingStage with a real funding article NewsProvider independently found", () => {
+  const context = aggregateResearch({
+    jobId: "job-5",
+    workspaceId: "ws-1",
+    url: "https://example.com",
+    results: [
+      result("company", "success", { name: "Acme Inc", summary: "A company", fundingStage: "Unknown", dataSource: "search" }),
+      result("news", "success", {
+        articles: [{ title: "Acme raises $40M Series B to expand platform", url: "https://news.example.com/acme-series-b" }],
+        summary: "Acme in the news",
+        dataSource: "search",
+      }),
+    ],
+  });
+
+  assert.ok(context.company?.fundingStage?.includes("Series B"), `expected the funding article to be folded in, got: ${context.company?.fundingStage}`);
+});
+
+test("KnowledgeAggregator - does not override a real fundingStage CompanyProvider already reported", () => {
+  const context = aggregateResearch({
+    jobId: "job-6",
+    workspaceId: "ws-1",
+    url: "https://example.com",
+    results: [
+      result("company", "success", { name: "Acme Inc", summary: "A company", fundingStage: "Series C", dataSource: "search" }),
+      result("news", "success", {
+        articles: [{ title: "Acme raises $5M seed round", url: "https://news.example.com/acme-seed" }],
+        summary: "Acme in the news",
+        dataSource: "search",
+      }),
+    ],
+  });
+
+  assert.strictEqual(context.company?.fundingStage, "Series C", "CompanyProvider's own real funding stage must win over a news mention");
+});
+
+test("KnowledgeAggregator - leaves fundingStage alone when no news article mentions funding", () => {
+  const context = aggregateResearch({
+    jobId: "job-7",
+    workspaceId: "ws-1",
+    url: "https://example.com",
+    results: [
+      result("company", "success", { name: "Acme Inc", summary: "A company", fundingStage: "Unknown", dataSource: "search" }),
+      result("news", "success", {
+        articles: [{ title: "Acme launches a new product feature", url: "https://news.example.com/acme-feature" }],
+        summary: "Acme in the news",
+        dataSource: "search",
+      }),
+    ],
+  });
+
+  assert.strictEqual(context.company?.fundingStage, "Unknown");
+});

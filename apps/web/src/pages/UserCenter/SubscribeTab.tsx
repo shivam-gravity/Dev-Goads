@@ -6,7 +6,7 @@ export default function SubscribeTab({ businessId }: { businessId: string }) {
   const navigate = useNavigate();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
+  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
 
   useEffect(() => {
     api.getWorkspace(wsId).then(setWorkspace).catch(() => setError("Couldn't load your current plan."));

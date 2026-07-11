@@ -127,6 +127,10 @@ export interface ProductCatalogItem {
 
 export interface BusinessProfile {
   id: string;
+  /** Owning workspace — the Prisma `Business.workspaceId` column, surfaced here so every
+   * caller that already has a BusinessProfile can resolve its workspace without a second
+   * query. Optional only for businesses that predate workspace scoping. */
+  workspaceId?: string;
   name: string;
   website?: string;
   industry: string;

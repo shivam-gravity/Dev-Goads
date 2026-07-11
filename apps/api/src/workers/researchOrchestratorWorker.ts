@@ -5,6 +5,10 @@ import { runResearchOrchestrator } from "../research/research-orchestrator/Resea
 import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
 import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
+import { initErrorTracking, registerCrashReporting, captureError } from "../infra/errorTracking.js";
+
+initErrorTracking("adgo-research-orchestrator-worker");
+registerCrashReporting("adgo-research-orchestrator-worker");
 
 /**
  * Standalone process — run with `npm run dev:research-orchestrator-worker --workspace
@@ -28,6 +32,7 @@ const worker = new Worker(
 worker.on("completed", (job: Job) => logger.info(`Research orchestrator job completed: ${job.data?.jobId}`));
 worker.on("failed", (job: Job | undefined, err: Error) => {
   logger.error(`Research orchestrator job failed: ${job?.data?.jobId}`, err);
+  captureError(err, { worker: "researchOrchestratorWorker", jobId: job?.data?.jobId });
   if (job && isFinalFailure(job)) void sendToDeadLetter(RESEARCH_ORCHESTRATOR_QUEUE, job, err);
 });
 

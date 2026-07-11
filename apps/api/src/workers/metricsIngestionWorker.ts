@@ -5,9 +5,14 @@ import { listActiveCampaigns } from "../modules/orchestrator/campaignOrchestrato
 import { ingestCampaignMetrics } from "../modules/pipeline/performancePipeline.js";
 import { runOptimizationPass } from "../modules/optimization/optimizationEngine.js";
 import { recordOptimizationInsights } from "../modules/insights/insightService.js";
+import { recordCampaignOutcome } from "../research/decision/campaign-learning-engine.js";
 import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
 import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
+import { initErrorTracking, registerCrashReporting, captureError } from "../infra/errorTracking.js";
+
+initErrorTracking("adgo-metrics-ingestion-worker");
+registerCrashReporting("adgo-metrics-ingestion-worker");
 
 const INGEST_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const REPEATABLE_JOB_NAME = "ingest-active-campaigns";
@@ -35,10 +40,17 @@ const worker = new Worker(
         await ingestCampaignMetrics(campaignId);
         const decisions = await runOptimizationPass(campaignId);
         await recordOptimizationInsights(workspaceId, decisions);
+        // Cross-campaign learning: attributes this campaign's real performance back to the
+        // recommendations that produced it, so the NEXT campaign-generation run (this
+        // workspace or any other) ranks similar recommendations using what actually
+        // happened, not just what the research alone predicted. No-ops until there's
+        // enough real conversion data — never blocks ingestion/optimization above.
+        await recordCampaignOutcome(campaignId);
       } catch (err) {
         // One campaign's failure (e.g. a since-deleted variant, a transient Ads API error)
         // shouldn't stop the rest of the fan-out from ingesting.
         logger.error(`Metrics ingestion/optimization failed for campaign ${campaignId}`, err);
+        captureError(err, { worker: "metricsIngestionWorker", campaignId, workspaceId });
       }
     }
   },
@@ -48,6 +60,7 @@ const worker = new Worker(
 worker.on("completed", () => logger.info("Metrics ingestion tick completed"));
 worker.on("failed", (job: Job | undefined, err: Error) => {
   logger.error(`Metrics ingestion job failed: ${job?.name}`, err);
+  captureError(err, { worker: "metricsIngestionWorker", jobName: job?.name });
   if (job && isFinalFailure(job)) void sendToDeadLetter(METRICS_INGESTION_QUEUE, job, err);
 });
 

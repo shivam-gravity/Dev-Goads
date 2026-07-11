@@ -173,7 +173,7 @@ export default function Campaigns({ businessId }: { businessId: string }) {
                       <div className="network-badges">
                         {c.networks.map((n) => (
                           <span key={n} className={`network-badge network-badge-${n}`}>
-                            {n === "meta" ? "Meta" : "Google"}
+                            {n === "meta" ? "Meta" : n === "google" ? "Google" : "TikTok"}
                           </span>
                         ))}
                       </div>

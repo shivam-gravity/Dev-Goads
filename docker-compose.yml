@@ -1,17 +1,76 @@
+# Wraps the whole platform — api, web, auth-service, campaign-service, scraper-service, and
+# all 7 background workers — alongside Postgres/Redis, so `docker compose up -d --build` is
+# the one command that starts everything with restart-on-crash. Before first run: copy
+# .env.example to .env and fill in JWT_SECRET / INTERNAL_SERVICE_KEY / TOKEN_ENCRYPTION_KEY
+# (compose refuses to start without them — see .env.example for how to generate them).
+#
+# Local per-service dev without Docker is untouched — `npm run dev:api` etc. still work
+# exactly as before; this file is the containerized/production-shaped path.
+
+x-app-env: &app-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-adgo}?schema=public
+  REDIS_URL: redis://redis:6379
+  JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set — see .env.example}
+  INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY must be set — see .env.example}
+  TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?TOKEN_ENCRYPTION_KEY must be set — see .env.example}
+  AUTH_SERVICE_URL: http://auth-service:4001
+  CAMPAIGN_SERVICE_URL: http://campaign-service:4002
+  SCRAPER_SERVICE_URL: http://scraper-service:4003
+  SENTRY_DSN: ${SENTRY_DSN:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  RUNWAY_API_KEY: ${RUNWAY_API_KEY:-}
+  SCRAPEGRAPH_SERVICE_URL: ${SCRAPEGRAPH_SERVICE_URL:-}
+  META_ACCESS_TOKEN: ${META_ACCESS_TOKEN:-}
+  META_AD_ACCOUNT_ID: ${META_AD_ACCOUNT_ID:-}
+  META_APP_ID: ${META_APP_ID:-}
+  META_APP_SECRET: ${META_APP_SECRET:-}
+  META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-}
+  META_OAUTH_REDIRECT_URI: ${PUBLIC_ORIGIN:-http://localhost:8080}/api/integrations/meta/oauth/callback
+  GOOGLE_ADS_DEVELOPER_TOKEN: ${GOOGLE_ADS_DEVELOPER_TOKEN:-}
+  GOOGLE_ADS_CUSTOMER_ID: ${GOOGLE_ADS_CUSTOMER_ID:-}
+  GOOGLE_ADS_ACCESS_TOKEN: ${GOOGLE_ADS_ACCESS_TOKEN:-}
+  GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+  GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+  GOOGLE_OAUTH_REDIRECT_URI: ${PUBLIC_ORIGIN:-http://localhost:8080}/api/integrations/google/oauth/callback
+  TIKTOK_ACCESS_TOKEN: ${TIKTOK_ACCESS_TOKEN:-}
+  TIKTOK_ADVERTISER_ID: ${TIKTOK_ADVERTISER_ID:-}
+  CRM_INTERNAL_SERVICE_KEY: ${CRM_INTERNAL_SERVICE_KEY:-}
+  SHOPIFY_STORE_DOMAIN: ${SHOPIFY_STORE_DOMAIN:-}
+  SHOPIFY_ADMIN_ACCESS_TOKEN: ${SHOPIFY_ADMIN_ACCESS_TOKEN:-}
+  WOOCOMMERCE_STORE_URL: ${WOOCOMMERCE_STORE_URL:-}
+  WOOCOMMERCE_CONSUMER_KEY: ${WOOCOMMERCE_CONSUMER_KEY:-}
+  WOOCOMMERCE_CONSUMER_SECRET: ${WOOCOMMERCE_CONSUMER_SECRET:-}
+
+x-api-image: &api-image
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.node-service
+    args:
+      WORKSPACE: apps/api
+      DIST_ENTRY: dist/index.js
+  image: adgo-api:local
+
+x-depends-on-datastores: &depends-on-datastores
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: adgo
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-adgo}
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -29,6 +88,151 @@ services:
       timeout: 5s
       retries: 10
 
+  api:
+    <<: *api-image
+    restart: unless-stopped
+    # Runs pending migrations before every boot — safe to repeat on restart (Prisma no-ops
+    # once a migration's already applied) and means "the container is up" already implies
+    # "the schema is current," instead of a separate manual deploy step.
+    command: sh -c "npx prisma migrate deploy --schema ./apps/api/prisma/schema.prisma && node \"$$DIST_ENTRY\""
+    environment: *app-env
+    ports:
+      - "4000:4000"
+    volumes:
+      - api-objects:/repo/service/apps/api/data/objects
+    depends_on: *depends-on-datastores
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node-service
+      args:
+        WORKSPACE: apps/auth-service
+        DIST_ENTRY: dist/auth-service/src/index.js
+    image: adgo-auth-service:local
+    restart: unless-stopped
+    environment: *app-env
+    ports:
+      - "4001:4001"
+    depends_on: *depends-on-datastores
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  campaign-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node-service
+      args:
+        WORKSPACE: apps/campaign-service
+        DIST_ENTRY: dist/campaign-service/src/index.js
+    image: adgo-campaign-service:local
+    restart: unless-stopped
+    environment: *app-env
+    ports:
+      - "4002:4002"
+    depends_on: *depends-on-datastores
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  scraper-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.scraper-service
+    image: adgo-scraper-service:local
+    restart: unless-stopped
+    environment: *app-env
+    ports:
+      - "4003:4003"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4003/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # --- Background workers (apps/api/src/workers/*) — same image as `api`, no HTTP port,
+  # just a different compiled entrypoint. BullMQ-backed, so `restart: unless-stopped` is
+  # enough for crash recovery: whatever job was mid-flight resumes from Redis on restart. ---
+
+  campaign-generation-worker:
+    <<: *api-image
+    restart: unless-stopped
+    command: ["node", "dist/workers/campaignGenerationWorker.js"]
+    environment: *app-env
+    depends_on: *depends-on-datastores
+
+  creative-generation-worker:
+    <<: *api-image
+    restart: unless-stopped
+    command: ["node", "dist/workers/creativeGenerationWorker.js"]
+    environment: *app-env
+    depends_on: *depends-on-datastores
+
+  lead-ingestion-worker:
+    <<: *api-image
+    restart: unless-stopped
+    command: ["node", "dist/workers/leadIngestionWorker.js"]
+    environment: *app-env
+    depends_on: *depends-on-datastores
+
+  metrics-ingestion-worker:
+    <<: *api-image
+    restart: unless-stopped
+    command: ["node", "dist/workers/metricsIngestionWorker.js"]
+    environment: *app-env
+    depends_on: *depends-on-datastores
+
+  research-orchestrator-worker:
+    <<: *api-image
+    restart: unless-stopped
+    command: ["node", "dist/workers/researchOrchestratorWorker.js"]
+    environment: *app-env
+    depends_on: *depends-on-datastores
+
+  research-session-worker:
+    <<: *api-image
+    restart: unless-stopped
+    command: ["node", "dist/workers/researchSessionWorker.js"]
+    environment: *app-env
+    depends_on: *depends-on-datastores
+
+  crm-webhook-worker:
+    <<: *api-image
+    restart: unless-stopped
+    command: ["node", "dist/workers/crmWebhookWorker.js"]
+    environment: *app-env
+    depends_on: *depends-on-datastores
+
 volumes:
   postgres-data:
   redis-data:
+  api-objects:

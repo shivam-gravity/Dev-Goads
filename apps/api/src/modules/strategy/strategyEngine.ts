@@ -3,6 +3,11 @@ import { openai, runStructured } from "../../infra/openaiClient.js";
 import { prisma } from "../../db/prisma.js";
 import type { AdCreative, AdNetwork, AdStrategy, AudienceAnalysis, AudiencePersona, BusinessProfile, CampaignSuggestion, CompetitorBudgetAnalysis, MarketLocationAnalysis, ProductAnalysis } from "../../types/index.js";
 import type { CampaignAgentOutput } from "../../agents/types/index.js";
+import type { DecisionContext } from "../../research/decision/types.js";
+
+function isAdNetwork(value: string): value is AdNetwork {
+  return value === "meta" || value === "google" || value === "tiktok";
+}
 
 async function persistStrategy(strategy: AdStrategy): Promise<AdStrategy> {
   await prisma.strategy.create({
@@ -203,23 +208,50 @@ export async function createStrategyFromResearch(businessId: string, input: Rese
  * ResearchStrategyInput path. Same Strategy shape/persistence either way, so
  * buildCampaignFromStrategy and every downstream campaign-launch/optimization code
  * path work identically regardless of which pipeline produced the strategy.
+ *
+ * `decisionContext` (optional) is the Decision Intelligence Engine's output for the same
+ * ResearchContext, computed concurrently with the agents in campaignGenerationPipeline.ts.
+ * When present, its budget allocation/audience priority — a 7-factor ranked recommendation
+ * set run through strategy simulation, not a single-pass agent guess — takes precedence over
+ * the Campaign Agent's own budgetSplit/recommendedNetworks/audience ordering. The agent's
+ * creatives (real generated ad copy) are always kept: the Decision Engine reasons about
+ * strategic direction, not literal headline/body/CTA text.
  */
-export async function createStrategyFromAgentResults(businessId: string, output: CampaignAgentOutput): Promise<AdStrategy> {
+export async function createStrategyFromAgentResults(
+  businessId: string,
+  output: CampaignAgentOutput,
+  decisionContext?: DecisionContext | null
+): Promise<AdStrategy> {
+  const decisionAllocation = decisionContext?.recommendedBudgetAllocation ?? {};
+  const decisionNetworks = Object.keys(decisionAllocation).filter(isAdNetwork);
+
   const budgetSplit: Partial<Record<AdNetwork, number>> = {};
-  for (const [network, fraction] of Object.entries(output.budgetSplit)) {
-    if (network === "meta" || network === "google" || network === "tiktok") {
-      budgetSplit[network] = fraction;
+  if (decisionNetworks.length > 0) {
+    for (const network of decisionNetworks) budgetSplit[network] = decisionAllocation[network];
+  } else {
+    for (const [network, fraction] of Object.entries(output.budgetSplit)) {
+      if (isAdNetwork(network)) budgetSplit[network] = fraction;
     }
   }
+
+  const recommendedNetworks = decisionNetworks.length > 0 ? decisionNetworks : output.recommendedNetworks;
+
+  const audiences = decisionContext?.recommendedAudiencePriority
+    ? [decisionContext.recommendedAudiencePriority, ...output.audiences.filter((a) => a !== decisionContext.recommendedAudiencePriority)]
+    : output.audiences;
+
+  const summary = decisionContext?.recommendedPositioning
+    ? `${output.summary} Positioning: ${decisionContext.recommendedPositioning}`
+    : output.summary;
 
   const strategy: AdStrategy = {
     id: randomUUID(),
     businessId,
     createdAt: new Date().toISOString(),
-    summary: output.summary,
-    recommendedNetworks: output.recommendedNetworks,
+    summary,
+    recommendedNetworks,
     budgetSplit,
-    audiences: output.audiences,
+    audiences,
     creatives: sanitizeCreatives(output.creatives),
   };
 

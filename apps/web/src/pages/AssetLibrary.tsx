@@ -105,8 +105,9 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
   const [lifetimeStart, setLifetimeStart] = useState("");
   const [lifetimeEnd, setLifetimeEnd] = useState("");
   const [itemFilter, setItemFilter] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("");
 
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
+  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
 
   async function loadAssets() {
     setLoading(true);
@@ -170,9 +171,16 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
       if (itemFilter && a.type !== itemFilter) return false;
       if (uploadStart && a.createdAt < uploadStart) return false;
       if (uploadEnd && a.createdAt > `${uploadEnd}T23:59:59`) return false;
+      if (sourceFilter === "ai" && !a.tags.includes("ai-generated")) return false;
+      if (sourceFilter === "upload" && a.tags.includes("ai-generated")) return false;
       return true;
     });
-  }, [assets, itemFilter, uploadStart, uploadEnd]);
+  }, [assets, itemFilter, uploadStart, uploadEnd, sourceFilter]);
+
+  function metaTag(tags: string[], prefix: string): string | null {
+    const tag = tags.find(t => t.startsWith(prefix));
+    return tag ? tag.slice(prefix.length) : null;
+  }
 
   return (
     <div className="dap-page creative-lib-page">
@@ -275,6 +283,18 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
             <Icon name="chevron-down" size={16} />
           </div>
         </div>
+
+        <div className="creative-lib-filter">
+          <span className="creative-lib-filter-label">Source</span>
+          <div className="creative-lib-select">
+            <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+              <option value="">All sources</option>
+              <option value="ai">AI-generated</option>
+              <option value="upload">Uploaded</option>
+            </select>
+            <Icon name="chevron-down" size={16} />
+          </div>
+        </div>
       </div>
 
       {loading ? (
@@ -304,8 +324,16 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
                 <div className="asset-grid-info">
                   <strong>{asset.name}</strong>
                   <span className="asset-format-badge format-text">{asset.type}</span>
+                  {(metaTag(asset.tags, "aspect:") || metaTag(asset.tags, "lang:")) && (
+                    <div className="asset-meta-row mt-1">
+                      {metaTag(asset.tags, "aspect:") && <span className="creative-tag creative-tag-meta">{metaTag(asset.tags, "aspect:")}</span>}
+                      {metaTag(asset.tags, "lang:") && metaTag(asset.tags, "lang:") !== "English" && (
+                        <span className="creative-tag creative-tag-meta">{metaTag(asset.tags, "lang:")}</span>
+                      )}
+                    </div>
+                  )}
                   <div className="asset-tags-row mt-2">
-                    {asset.tags.map(t => <span key={t} className="creative-tag">{t}</span>)}
+                    {asset.tags.filter(t => !t.startsWith("aspect:") && !t.startsWith("lang:")).map(t => <span key={t} className="creative-tag">{t}</span>)}
                   </div>
                 </div>
               </div>

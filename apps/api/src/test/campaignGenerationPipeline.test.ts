@@ -104,6 +104,7 @@ function fakeDeps(opts: {
       return fakeResearchContext();
     },
     async runDecisionEngine() { return fakeDecisionContext(); },
+    async runIntelligenceEnrichment() {},
     async runAgentCoordinator(_context, options): Promise<AgentPipelineResult> {
       await options?.onProgress?.(10, 10);
       return { results: agentResults, order: Object.keys(agentResults) };
@@ -125,8 +126,8 @@ test("campaignGenerationPipeline - runs research -> agents -> strategy -> campai
   assert.deepStrictEqual(result, { campaignId: "campaign-1", strategyId: "strategy-1", researchJobId: "research-1" });
   assert.deepStrictEqual(deps.statusHistory, ["researching", "aggregating", "running_agents", "building_campaign", "building_campaign"]);
   assert.ok(deps.persistedAgentResults && "campaign-agent" in deps.persistedAgentResults, "agent results must be persisted before the campaign is built");
-  // 9 research units + 10 agent units + 1 build unit = 20 total; final call must reach it.
-  assert.deepStrictEqual(progressCalls[progressCalls.length - 1], [20, 20]);
+  // 20 research units + 20 agent units + 1 build unit = 41 total; final call must reach it.
+  assert.deepStrictEqual(progressCalls[progressCalls.length - 1], [41, 41]);
 });
 
 test("campaignGenerationPipeline - persists the Decision Engine's output alongside the agent results", async () => {

@@ -1,9 +1,10 @@
 import "./loadEnv.js";
-import express from "express";
+import express, { type NextFunction, type Response } from "express";
 import cors from "cors";
 import { z } from "zod";
 import { asyncHandler } from "./asyncHandler.js";
 import { internalServiceAuth } from "./internalAuth.js";
+import { requireUser } from "./requireUser.js";
 import { sendError, isNotFoundError } from "./errorResponse.js";
 import {
   buildCampaignFromStrategy,
@@ -20,8 +21,16 @@ import { ingestCampaignMetrics, normalizePerformance, getLiveInsights } from "..
 import { runOptimizationPass } from "../../api/src/modules/optimization/optimizationEngine.js";
 import { recordOptimizationInsights } from "../../api/src/modules/insights/insightService.js";
 import { generateInvoice, listInvoices } from "../../api/src/modules/billing/billingEngine.js";
-import { generateCampaignSuggestions, createStrategyFromSuggestions } from "../../api/src/modules/strategy/strategyEngine.js";
+import { generateCampaignSuggestions, createStrategyFromSuggestions, getStrategy } from "../../api/src/modules/strategy/strategyEngine.js";
 import { getResearchSession, setResearchSessionCampaignSuggestions } from "../../api/src/modules/onboarding/researchSessionService.js";
+import { requireBusinessAccess } from "../../api/src/gateway/middleware/workspaceAccess.js";
+import { getMembership } from "../../api/src/modules/workspace/workspaceService.js";
+import { getBusiness } from "../../api/src/modules/business/businessService.js";
+import type { AuthedRequest } from "../../api/src/gateway/middleware/auth.js";
+import { initErrorTracking, registerCrashReporting, captureError } from "../../api/src/infra/errorTracking.js";
+
+initErrorTracking("adgo-campaign-service");
+registerCrashReporting("adgo-campaign-service");
 
 const app = express();
 const PORT = Number(process.env.CAMPAIGN_SERVICE_PORT ?? 4002);
@@ -31,7 +40,24 @@ app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "campaign-service" }));
 
+// internalServiceAuth proves the call came through the gateway; requireUser resolves WHO
+// the end user is (same JWT the gateway already validated) — neither alone is enough,
+// since internalServiceAuth says nothing about which workspace the caller belongs to.
 app.use(internalServiceAuth);
+app.use(requireUser);
+
+/** Resolves a campaign's owning business/workspace and checks req.userId is a member —
+ * every campaign route below reaches a specific campaign by bare :id with no workspace
+ * context in the URL, so this is the one place that ownership chain gets checked. */
+async function requireCampaignAccess(req: AuthedRequest, res: Response, next: NextFunction) {
+  const campaign = await getCampaign(req.params.id);
+  if (!campaign) return res.status(404).json({ error: "Not found" });
+  const business = await getBusiness(campaign.businessId);
+  if (!business?.workspaceId || !(await getMembership(business.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this campaign" });
+  }
+  next();
+}
 
 /* ═══════════════════════════════════════════════
    CAMPAIGNS — extracted from the gateway per roadmap Phase 2.
@@ -53,9 +79,17 @@ const campaignSchema = z.object({
   dailyBudgetCents: z.number().int().positive().max(MAX_BUDGET_CENTS),
 });
 
-app.post("/campaigns", asyncHandler(async (req, res) => {
+app.post("/campaigns", asyncHandler(async (req: AuthedRequest, res) => {
   const parsed = campaignSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const strategy = await getStrategy(parsed.data.strategyId);
+  if (!strategy) return res.status(404).json({ error: "Strategy not found" });
+  const business = await getBusiness(strategy.businessId);
+  if (!business?.workspaceId || !(await getMembership(business.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this strategy" });
+  }
+
   try {
     const campaign = await buildCampaignFromStrategy(parsed.data.strategyId, parsed.data.name, parsed.data.dailyBudgetCents);
     res.status(201).json(campaign);
@@ -76,7 +110,7 @@ const campaignFromSuggestionsSchema = z.object({
 // suggestions on first call and caches them on the session (idempotent), same as any other
 // research-session field, so re-clicking "Generate Campaign" after a failed attempt doesn't
 // spend a second OpenAI call or produce a different set of ads.
-app.post("/campaigns/from-suggestions", asyncHandler(async (req, res) => {
+app.post("/campaigns/from-suggestions", requireBusinessAccess("body", "businessId"), asyncHandler(async (req, res) => {
   const parsed = campaignFromSuggestionsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { researchSessionId, businessId, name, dailyBudgetCents } = parsed.data;
@@ -102,9 +136,9 @@ app.post("/campaigns/from-suggestions", asyncHandler(async (req, res) => {
   }
 }));
 
-app.get("/businesses/:id/campaigns", asyncHandler(async (req, res) => res.json(await listCampaignsForBusiness(req.params.id))));
+app.get("/businesses/:id/campaigns", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => res.json(await listCampaignsForBusiness(req.params.id))));
 
-app.get("/campaigns/:id", asyncHandler(async (req, res) => {
+app.get("/campaigns/:id", requireCampaignAccess, asyncHandler(async (req, res) => {
   const campaign = await getCampaign(req.params.id);
   if (!campaign) return res.status(404).json({ error: "Not found" });
   res.json(campaign);
@@ -158,30 +192,30 @@ const campaignPatchSchema = z.object({
   creativeAssets: z.array(creativeAssetSchema).max(10).optional(),
 });
 
-app.patch("/campaigns/:id", asyncHandler(async (req, res) => {
+app.patch("/campaigns/:id", requireCampaignAccess, asyncHandler(async (req, res) => {
   const parsed = campaignPatchSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await updateCampaign(req.params.id, parsed.data)); }
   catch (err) { sendError(res, err, isNotFoundError(err) ? 404 : 400, "Update failed"); }
 }));
 
-app.post("/campaigns/:id/launch", asyncHandler(async (req, res) => {
+app.post("/campaigns/:id/launch", requireCampaignAccess, asyncHandler(async (req, res) => {
   const workspaceId = typeof req.body?.workspaceId === "string" ? req.body.workspaceId : "demo";
   try { res.json(await launchCampaign(req.params.id, workspaceId)); }
   catch (err) { sendError(res, err, isNotFoundError(err) ? 404 : 400, "Launch failed"); }
 }));
 
-app.post("/campaigns/:id/variants/:variantId/pause", asyncHandler(async (req, res) => {
+app.post("/campaigns/:id/variants/:variantId/pause", requireCampaignAccess, asyncHandler(async (req, res) => {
   try { res.json(await pauseVariant(req.params.id, req.params.variantId)); }
   catch (err) { sendError(res, err, isNotFoundError(err) ? 404 : 400, "Pause failed"); }
 }));
 
-app.post("/campaigns/:id/variants/:variantId/activate", asyncHandler(async (req, res) => {
+app.post("/campaigns/:id/variants/:variantId/activate", requireCampaignAccess, asyncHandler(async (req, res) => {
   try { res.json(await activateVariant(req.params.id, req.params.variantId)); }
   catch (err) { sendError(res, err, isNotFoundError(err) ? 404 : 400, "Activate failed"); }
 }));
 
-app.post("/campaigns/:id/apply-creative-media", asyncHandler(async (req, res) => {
+app.post("/campaigns/:id/apply-creative-media", requireCampaignAccess, asyncHandler(async (req, res) => {
   // Not z.string().url() — objectStorage.put() returns relative paths ("/objects/...") in
   // local dev (LocalFileObjectStorage doesn't know its own public origin).
   const parsed = z.object({ imageUrl: z.string().min(1).optional(), videoUrl: z.string().min(1).optional() }).safeParse(req.body);
@@ -190,19 +224,19 @@ app.post("/campaigns/:id/apply-creative-media", asyncHandler(async (req, res) =>
   catch (err) { sendError(res, err, 400, "Failed to apply creative media"); }
 }));
 
-app.post("/campaigns/:id/ingest", asyncHandler(async (req, res) => {
+app.post("/campaigns/:id/ingest", requireCampaignAccess, asyncHandler(async (req, res) => {
   try { res.json(await ingestCampaignMetrics(req.params.id)); }
   catch (err) { sendError(res, err, 400, "Ingest failed"); }
 }));
 
-app.get("/campaigns/:id/performance", asyncHandler(async (req, res) => res.json(await normalizePerformance(req.params.id))));
+app.get("/campaigns/:id/performance", requireCampaignAccess, asyncHandler(async (req, res) => res.json(await normalizePerformance(req.params.id))));
 
-app.get("/campaigns/:id/live-insights", asyncHandler(async (req, res) => {
+app.get("/campaigns/:id/live-insights", requireCampaignAccess, asyncHandler(async (req, res) => {
   try { res.json(await getLiveInsights(req.params.id)); }
   catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
-app.post("/campaigns/:id/optimize", asyncHandler(async (req, res) => {
+app.post("/campaigns/:id/optimize", requireCampaignAccess, asyncHandler(async (req, res) => {
   try {
     const decisions = await runOptimizationPass(req.params.id);
     const campaign = await getCampaign(req.params.id);
@@ -219,20 +253,20 @@ app.post("/campaigns/:id/optimize", asyncHandler(async (req, res) => {
 
 const invoiceSchema = z.object({ periodStart: z.string(), periodEnd: z.string() });
 
-app.post("/businesses/:id/invoices", asyncHandler(async (req, res) => {
+app.post("/businesses/:id/invoices", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   const parsed = invoiceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.status(201).json(await generateInvoice(req.params.id, parsed.data.periodStart, parsed.data.periodEnd));
 }));
 
-app.get("/businesses/:id/invoices", asyncHandler(async (req, res) => res.json(await listInvoices(req.params.id))));
+app.get("/businesses/:id/invoices", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => res.json(await listInvoices(req.params.id))));
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });
 });
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err);
+  captureError(err, { service: "adgo-campaign-service" });
   res.status(500).json({ error: "Internal server error" });
 });
 

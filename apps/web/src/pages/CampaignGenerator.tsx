@@ -72,7 +72,7 @@ interface PromotedProduct {
 
 export default function CampaignGenerator({ businessId }: { businessId: string }) {
   const navigate = useNavigate();
-  const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo";
+  const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
 
   const [countries, setCountries] = useState<string[]>([]);
   const [channels, setChannels] = useState<string[]>(["meta"]);

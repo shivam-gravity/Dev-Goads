@@ -25,8 +25,24 @@ export interface AudienceIntelligenceInput {
   competitorNames?: string[];
 }
 
+/** One weighted fit criterion — `weight` (0-1) is this criterion's relative importance to
+ * overall fit, so a caller scoring a real lead/account against this ICP can compute a
+ * weighted match score instead of only having prose to display. Two groups (firmographic
+ * vs. behavioral) because they answer different questions: "is this the kind of company we
+ * should target at all" vs. "is this account showing signals it's ready to buy right now." */
+export interface ICPCriterion {
+  criterion: string;
+  weight: number;
+}
+
+export interface IdealCustomerProfile {
+  summary: string;
+  firmographics: ICPCriterion[];
+  behavioralSignals: ICPCriterion[];
+}
+
 export interface AudienceIntelligenceReport {
-  icp: string;
+  icp: IdealCustomerProfile;
   decisionMakers: string[];
   buyingTriggers: string[];
   painPoints: string[];
@@ -47,7 +63,36 @@ const AUDIENCE_TOOL = {
   input_schema: {
     type: "object" as const,
     properties: {
-      icp: { type: "string", description: "1-2 sentence Ideal Customer Profile description" },
+      icp: {
+        type: "object",
+        description: "Structured Ideal Customer Profile, not just a description — weighted so a real lead/account can be scored against it",
+        properties: {
+          summary: { type: "string", description: "1-2 sentence Ideal Customer Profile description" },
+          firmographics: {
+            type: "array",
+            minItems: 2,
+            maxItems: 6,
+            items: {
+              type: "object",
+              properties: { criterion: { type: "string", description: "e.g. \"Company size: 50-500 employees\", \"Industry: B2B SaaS\", \"Geography: North America\"" }, weight: { type: "number", minimum: 0, maximum: 1 } },
+              required: ["criterion", "weight"],
+            },
+            description: "Company-level fit criteria (industry, size, geography, revenue band, tech stack), each weighted by relative importance to overall fit",
+          },
+          behavioralSignals: {
+            type: "array",
+            minItems: 2,
+            maxItems: 6,
+            items: {
+              type: "object",
+              properties: { criterion: { type: "string", description: "e.g. \"Recently raised a funding round\", \"Hiring surge in relevant roles\", \"Actively evaluating competitor tools\"" }, weight: { type: "number", minimum: 0, maximum: 1 } },
+              required: ["criterion", "weight"],
+            },
+            description: "Behavioral/intent signals indicating a prospect is a good fit RIGHT NOW, each weighted by relative importance",
+          },
+        },
+        required: ["summary", "firmographics", "behavioralSignals"],
+      },
       decisionMakers: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6, description: "Job titles/roles typically involved in the buying decision" },
       buyingTriggers: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6, description: "Events/situations that prompt someone to start looking for this kind of product" },
       painPoints: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
@@ -63,7 +108,11 @@ type AudienceFields = Omit<AudienceIntelligenceReport, "evidence" | "citations" 
 
 function fallbackFields(businessName: string): AudienceFields {
   return {
-    icp: `Unknown — no live research performed for ${businessName}.`,
+    icp: {
+      summary: `Unknown — no live research performed for ${businessName}.`,
+      firmographics: [],
+      behavioralSignals: [],
+    },
     decisionMakers: ["Not yet researched"],
     buyingTriggers: ["Not yet researched"],
     painPoints: ["Not yet researched"],
@@ -166,7 +215,7 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
         kind: MEMORY_KIND,
         sourceUrl: input.url,
         dedupKey,
-        content: `${businessLabel}: ICP - ${report.icp} Pain points: ${report.painPoints.join("; ")}. Channels: ${report.channels.join(", ")}.`,
+        content: `${businessLabel}: ICP - ${report.icp.summary} Pain points: ${report.painPoints.join("; ")}. Channels: ${report.channels.join(", ")}.`,
         metadata: report as unknown as Record<string, unknown>,
       });
     } catch {

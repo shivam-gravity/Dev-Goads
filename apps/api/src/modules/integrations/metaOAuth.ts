@@ -16,7 +16,10 @@ export function getMetaAuthUrl(workspaceId: string): string {
   const params = new URLSearchParams({
     client_id: META_APP_ID ?? "",
     redirect_uri: META_OAUTH_REDIRECT_URI,
-    scope: "ads_management,ads_read,business_management,pages_show_list,leads_retrieval,pages_manage_ads,pages_read_engagement",
+    // public_profile/email identify who connected; catalog_management is for product-catalog
+    // features (Shopify/dynamic ads); instagram_basic is required for the instagram_business_account
+    // lookup this file already does in fetchInstagramForPage — without it Meta rejects that field.
+    scope: "ads_management,ads_read,business_management,pages_show_list,leads_retrieval,pages_manage_ads,pages_read_engagement,public_profile,email,catalog_management,instagram_basic",
     response_type: "code",
     state,
   });
