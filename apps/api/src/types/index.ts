@@ -11,6 +11,23 @@ export interface ScrapedSite {
   pagesDiscovered: number;
   /** Above-the-fold JPEG screenshot (data URI) from the Playwright-backed scraper-service, when reachable — undefined if that service is down or the page failed to render. */
   screenshot?: string;
+  /** Per-page records (one per crawledPages entry) — kept alongside the flattened `excerpt`
+   * above so callers that need page-level granularity (crawl persistence, fact provenance)
+   * don't have to re-derive it from the flattened text. Optional because ScrapedSite also
+   * doubles as the API payload shape for /onboarding/analyze-* routes, whose clients send
+   * only the flattened fields. */
+  pages?: ScrapedPage[];
+}
+
+export interface ScrapedPage {
+  url: string;
+  title: string;
+  /** best-effort classification derived from the URL path, e.g. "homepage" | "pricing" | "product" | "about" | "other" */
+  pageType: string;
+  /** Sitemap priority blended with FOLLOW_HINTS path/text scoring — see discoverAndSelectPages in scraper.ts */
+  relevanceScore: number;
+  cleanedText: string;
+  html: string;
 }
 
 export interface ProductAnalysis {

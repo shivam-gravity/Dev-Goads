@@ -67,6 +67,10 @@ export interface WebsiteData {
   pagesDiscovered: number;
   screenshot?: string;
   dataSource: string;
+  /** CrawlJob row id when page-level persistence ran (requires input.businessId) — lets
+   * downstream fact extraction attach CrawlFact rows to this crawl's pages. Undefined when
+   * the crawl ran without a business context or persistence failed non-fatally. */
+  crawlJobId?: string;
 }
 
 export interface GeneralSearchData {

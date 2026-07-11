@@ -809,10 +809,17 @@ router.post("/onboarding/analyze-audience", asyncHandler(async (req, res) => {
   catch (err) { sendError(res, err, 502, "Audience analysis failed"); }
 }));
 
+const deepResearchSchema = z.object({
+  url: z.string().min(1),
+  // Optional business context — when both are present the crawl is persisted page-by-page
+  // (CrawlJob/CrawlPage/CrawlFact) instead of only returning the in-memory analysis.
+  businessId: z.string().optional(),
+  workspaceId: z.string().optional(),
+});
 router.post("/onboarding/deep-research", asyncHandler(async (req, res) => {
-  const parsed = scrapeSchema.safeParse(req.body);
+  const parsed = deepResearchSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  try { res.json(await runDeepResearch(parsed.data.url)); }
+  try { res.json(await runDeepResearch(parsed.data.url, { businessId: parsed.data.businessId, workspaceId: parsed.data.workspaceId })); }
   catch (err) { sendError(res, err, 422, "Deep research failed"); }
 }));
 

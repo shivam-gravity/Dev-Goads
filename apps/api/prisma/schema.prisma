@@ -64,10 +64,14 @@ model WorkspaceMember {
 model Business {
   id          String   @id
   workspaceId String?
+  domain      String?
   data        Json
   createdAt   DateTime @default(now())
 
+  crawlJobs CrawlJob[]
+
   @@index([workspaceId])
+  @@unique([workspaceId, domain])
   @@map("businesses")
 }
 
@@ -702,4 +706,76 @@ model SuccessPattern {
 
   @@index([workspaceId])
   @@map("success_patterns")
+}
+
+// One row per website-crawl attempt (initial onboarding crawl or a later re-crawl), so
+// crawl history/comparison across time is possible instead of each crawl overwriting the
+// last. Optionally linked to the ResearchJob that triggered it when run via WebsiteProvider
+// inside the 9-provider research pipeline — CrawlJob also stands alone for a future
+// standalone re-crawl trigger that isn't part of that pipeline.
+model CrawlJob {
+  id              String    @id
+  businessId      String
+  business        Business  @relation(fields: [businessId], references: [id])
+  workspaceId     String
+  researchJobId   String?
+  url             String
+  status          String    @default("pending") // pending | crawling | completed | failed
+  pagesDiscovered Int       @default(0)
+  pagesCrawled    Int       @default(0)
+  startedAt       DateTime?
+  completedAt     DateTime?
+  error           String?
+  createdAt       DateTime  @default(now())
+
+  pages CrawlPage[]
+  facts CrawlFact[]
+
+  @@index([businessId])
+  @@index([workspaceId])
+  @@map("crawl_jobs")
+}
+
+// One row per page fetched during a CrawlJob — replaces flattening every page's text into
+// one blob. rawHtmlKey/screenshotKey point at objectStorage (apps/api/src/infra/objectStorage.ts);
+// only structured/queryable fields plus those references live in Postgres.
+model CrawlPage {
+  id             String    @id
+  crawlJobId     String
+  crawlJob       CrawlJob  @relation(fields: [crawlJobId], references: [id])
+  url            String
+  pageType       String?
+  title          String?
+  relevanceScore Float?
+  contentHash    String?
+  cleanedText    String?
+  rawHtmlKey     String?
+  screenshotKey  String?
+  status         String    @default("fetched") // fetched | failed
+  error          String?
+  fetchedAt      DateTime  @default(now())
+
+  facts CrawlFact[]
+
+  @@index([crawlJobId])
+  @@map("crawl_pages")
+}
+
+// A single extracted fact with provenance — the source page it came from plus a confidence
+// score, so a downstream strategy claim like "starting price is X" can be traced back and
+// verified rather than trusting an unattributed LLM summary.
+model CrawlFact {
+  id          String     @id
+  crawlJobId  String
+  crawlJob    CrawlJob   @relation(fields: [crawlJobId], references: [id])
+  crawlPageId String?
+  crawlPage   CrawlPage? @relation(fields: [crawlPageId], references: [id])
+  field       String
+  value       String
+  confidence  Float
+  createdAt   DateTime   @default(now())
+
+  @@index([crawlJobId])
+  @@index([crawlPageId])
+  @@map("crawl_facts")
 }

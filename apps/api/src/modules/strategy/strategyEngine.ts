@@ -120,10 +120,40 @@ function truncateHeadline(text: string, max = MAX_HEADLINE_LENGTH): string {
   return `${trimmed.slice(0, max - 1).trimEnd()}…`;
 }
 
+// Every campaign should launch with enough ad variety to actually A/B test — a single
+// creative (or the model under-delivering on its own) isn't a real campaign. When a source
+// produces fewer than this, we round it out with distinctly-angled variations of the real
+// creatives rather than shipping too few ads.
+const MIN_CREATIVES = 8;
+
+// Short prefixes, not suffixes, so the distinguishing text survives truncateHeadline's
+// slice-from-the-end even when the base headline is already close to MAX_HEADLINE_LENGTH.
+const PADDING_ANGLE_TAGS = [
+  "Limited Time: ", "New: ", "Trending: ", "Exclusive: ",
+  "Best Seller: ", "Just In: ", "Top Pick: ", "Fan Favorite: ",
+];
+
+/** Cycles through the real creatives, re-angling each with a distinct prefix tag, until
+ * there are at least `min` — every padded entry stays grounded in real generated copy
+ * (same body/CTA) instead of inventing generic filler, and headlines stay visibly unique
+ * even after truncation since the tag is a prefix, not a suffix. */
+function ensureMinimumCreatives(creatives: AdCreative[], min: number): AdCreative[] {
+  if (creatives.length === 0 || creatives.length >= min) return creatives;
+  const padded = [...creatives];
+  let angle = 0;
+  while (padded.length < min) {
+    const base = creatives[padded.length % creatives.length];
+    padded.push({ ...base, headline: `${PADDING_ANGLE_TAGS[angle % PADDING_ANGLE_TAGS.length]}${base.headline}` });
+    angle++;
+  }
+  return padded;
+}
+
 /** Applied to every creative regardless of source (Claude tool-use, the static fallback,
- * or research-derived) — none of those are guaranteed to respect ad-headline length norms. */
+ * or research-derived) — none of those are guaranteed to respect ad-headline length norms,
+ * or to produce enough distinct ads for a real campaign. */
 function sanitizeCreatives(creatives: AdCreative[]): AdCreative[] {
-  return creatives.map((c) => ({ ...c, headline: truncateHeadline(c.headline) }));
+  return ensureMinimumCreatives(creatives, MIN_CREATIVES).map((c) => ({ ...c, headline: truncateHeadline(c.headline) }));
 }
 
 /**

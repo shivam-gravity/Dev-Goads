@@ -147,11 +147,20 @@ export interface StrategySimulationResult {
 export interface AudiencePersonaCard {
   name: string; description: string; ageRange?: string; genderSplit?: string; interests: string[];
 }
+export interface PricingTier {
+  tier: string; priceRange: string; details: string;
+}
+export interface RegionalMarketDepth {
+  region: string; marketSize?: string; growthRate?: string; policyDrivers: string[];
+}
 export interface DecisionContext {
   businessSummary: string; websiteScreenshot?: string; audiencePersonas: AudiencePersonaCard[];
+  pricingTiers: PricingTier[]; notableCustomers: string[]; quantifiedProofPoints: string[];
+  regionalMarketDepth: RegionalMarketDepth | null;
   topOpportunities: string[]; topRisks: string[];
   recommendedPositioning: string; recommendedAudiencePriority: string; recommendedChannels: string[];
-  recommendedBudgetAllocation: Record<string, number>; recommendedCreativeDirection: string;
+  recommendedBudgetAllocation: Record<string, number>; recommendedDailyBudgetCents: number; budgetReasoning: string[];
+  recommendedCreativeDirection: string;
   recommendedOffer: string; recommendedMessaging: string; confidence: number; evidence: string[];
   tradeoffs: string[]; recommendations: RankedRecommendation[]; strategies: CampaignStrategyOption[];
   simulations: StrategySimulationResult[]; generatedAt: string;

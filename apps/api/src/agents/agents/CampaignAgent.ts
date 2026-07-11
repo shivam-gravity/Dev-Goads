@@ -17,8 +17,9 @@ const CAMPAIGN_AGENT_TOOL = {
       audiences: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 5 },
       creatives: {
         type: "array",
-        minItems: 1,
-        maxItems: 4,
+        description: "At least 8 distinct ad concepts — vary the angle (feature, offer, social proof, urgency, pain point, comparison) so every one reads as a genuinely different ad, not a rewording of the same one.",
+        minItems: 8,
+        maxItems: 12,
         items: {
           type: "object",
           properties: { headline: { type: "string" }, body: { type: "string" }, callToAction: { type: "string" } },
@@ -40,12 +41,18 @@ const campaignAgentSchema: z.ZodType<CampaignAgentOutput> = z.object({
 
 function fallback(context: ResearchContext): CampaignAgentOutput {
   const name = context.company?.name ?? context.website?.title ?? "This business";
+  const description = context.website?.description ?? "what we offer";
   return {
     summary: `A balanced acquisition strategy for ${name}, pending fuller research.`,
     recommendedNetworks: ["meta"],
     budgetSplit: { meta: 1 },
     audiences: context.audience?.segments?.map((s) => s.name) ?? [context.audience?.primaryAudience ?? "General audience"],
-    creatives: [{ headline: name, body: context.website?.description ?? "Learn more about what we offer.", callToAction: "Learn More" }],
+    creatives: [
+      { headline: name, body: `Discover ${description}.`, callToAction: "Learn More" },
+      { headline: `Why choose ${name}?`, body: `See why customers pick ${name} for ${description}.`, callToAction: "Get Started" },
+      { headline: `${name}: built for you`, body: `${description}, without the hassle.`, callToAction: "Sign Up" },
+      { headline: `Try ${name} today`, body: `Join the customers already using ${name}.`, callToAction: "Get Offer" },
+    ],
   };
 }
 

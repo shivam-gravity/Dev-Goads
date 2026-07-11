@@ -17,6 +17,7 @@ export const websiteSchema = z.object({
   pagesDiscovered: z.number(),
   screenshot: z.string().optional(),
   dataSource: z.string(),
+  crawlJobId: z.string().optional(),
 });
 
 export const technologySchema = z.object({

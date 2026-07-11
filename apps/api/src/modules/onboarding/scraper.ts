@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import type { ScrapedSite } from "../../types/index.js";
+import type { ScrapedPage, ScrapedSite } from "../../types/index.js";
 import { logger } from "../logger/logger.js";
 
 const MAX_EXCERPT_LENGTH = 6000;
@@ -57,6 +57,9 @@ function normalizeUrl(input: string): string {
 interface FetchedPage {
   url: string;
   $: cheerio.CheerioAPI;
+  /** Raw HTML as fetched, before cheerio strips script/style/nav/footer — kept so callers
+   * can persist it to object storage for reprocessing, independent of the cleaned excerpt. */
+  html: string;
 }
 
 async function fetchPage(url: string): Promise<FetchedPage> {
@@ -72,7 +75,7 @@ async function fetchPage(url: string): Promise<FetchedPage> {
     const html = await res.text();
     const $ = cheerio.load(html);
     $("script, style, noscript, svg, nav, footer").remove();
-    return { url, $ };
+    return { url, $, html };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("Timed out fetching that URL — check it's reachable and try again");
@@ -224,7 +227,7 @@ async function discoverSitemapPages(origin: string): Promise<DiscoveredPage[]> {
  * priority (when present) with the existing FOLLOW_HINTS path/text heuristic, so a page that's
  * both high-priority in the sitemap AND looks like a product/about/pricing page sorts first.
  */
-async function discoverAndSelectPages(entryUrl: string, entry$: cheerio.CheerioAPI): Promise<{ toCrawl: string[]; totalDiscovered: number }> {
+async function discoverAndSelectPages(entryUrl: string, entry$: cheerio.CheerioAPI): Promise<{ toCrawl: DiscoveredPage[]; totalDiscovered: number }> {
   const base = new URL(entryUrl);
   const homepageLinks = extractSameOriginLinks(entry$, entryUrl);
 
@@ -259,12 +262,27 @@ async function discoverAndSelectPages(entryUrl: string, entry$: cheerio.CheerioA
     return { url, score: baseScore + hintBonus };
   });
 
-  const toCrawl = scored
-    .sort((a, b) => b.score - a.score)
-    .slice(0, SMART_CRAWL_CAP - 1)
-    .map((c) => c.url);
+  const toCrawl = scored.sort((a, b) => b.score - a.score).slice(0, SMART_CRAWL_CAP - 1);
 
   return { toCrawl, totalDiscovered };
+}
+
+/** Best-effort page classification from the URL path — used for CrawlPage.pageType so
+ * crawled pages can be queried/filtered by kind (e.g. "show me every pricing page we've seen")
+ * without re-parsing content. */
+function derivePageType(pageUrl: string, isEntry: boolean): string {
+  if (isEntry) return "homepage";
+  let pathname: string;
+  try {
+    pathname = new URL(pageUrl).pathname;
+  } catch {
+    return "other";
+  }
+  if (/\bpricing\b/i.test(pathname)) return "pricing";
+  if (/\babout\b/i.test(pathname)) return "about";
+  if (/\bfeatures?\b/i.test(pathname)) return "features";
+  if (/\b(product|products|shop|store|collections?)\b/i.test(pathname)) return "product";
+  return "other";
 }
 
 /**
@@ -300,8 +318,23 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
 
   const excerptParts = [entryText.title, entryText.description, ...entryText.headings, entryText.bodyText];
 
+  const entryCleanedText = [entryText.title, entryText.description, ...entryText.headings, entryText.bodyText]
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, MAX_EXCERPT_LENGTH);
+  const pages: ScrapedPage[] = [
+    {
+      url,
+      title: entryText.title || parsed.hostname,
+      pageType: derivePageType(url, true),
+      relevanceScore: 1,
+      cleanedText: entryCleanedText,
+      html: entry.html,
+    },
+  ];
+
   const { toCrawl, totalDiscovered } = await discoverAndSelectPages(url, entry.$);
-  for (const link of toCrawl) {
+  for (const { url: link, score } of toCrawl) {
     if (Date.now() >= crawlDeadline) break;
     try {
       const page = await fetchPage(link);
@@ -309,6 +342,14 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
       excerptParts.push(...text.headings, text.bodyText);
       images.push(...extractImages(page.$, link));
       crawledPages.push(link);
+      pages.push({
+        url: link,
+        title: text.title || link,
+        pageType: derivePageType(link, false),
+        relevanceScore: score,
+        cleanedText: [text.title, text.description, ...text.headings, text.bodyText].filter(Boolean).join("\n").slice(0, MAX_EXCERPT_LENGTH),
+        html: page.html,
+      });
     } catch {
       // A secondary page failing to load shouldn't sink the whole crawl.
     }
@@ -333,5 +374,6 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
     crawledPages,
     pagesDiscovered: Math.max(totalDiscovered + 1, crawledPages.length), // +1 for the entry page itself, which discovery doesn't count
     screenshot,
+    pages,
   };
 }
