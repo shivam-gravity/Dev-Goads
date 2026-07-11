@@ -9,6 +9,30 @@ on:
 jobs:
   api:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: adgo
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/adgo?schema=public
+      REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,6 +40,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: Apply migrations
+        run: npm run db:deploy --workspace apps/api
       - name: Typecheck & build
         run: npm run build --workspace apps/api
       - name: Test
@@ -32,3 +58,45 @@ jobs:
       - run: npm ci
       - name: Typecheck & build
         run: npm run build --workspace apps/web
+
+  # auth-service/campaign-service each compile a private copy of specific apps/api/src
+  # modules alongside their own (see each service's tsconfig.json "include") — building
+  # them is the cheapest real signal that a change to shared apps/api code (e.g. the
+  # workspace-access middleware both of these import) didn't silently break a sibling
+  # service that isn't exercised by apps/api's own test suite. Neither has its own test
+  # suite yet (see the production-readiness audit) — build/typecheck is what's real today.
+  auth-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Typecheck & build
+        run: npm run build --workspace apps/auth-service
+
+  campaign-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Typecheck & build
+        run: npm run build --workspace apps/campaign-service
+
+  scraper-service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --ignore-scripts # skips `playwright install chromium` — not needed just to typecheck/build
+      - name: Typecheck & build
+        run: npm run build --workspace apps/scraper-service

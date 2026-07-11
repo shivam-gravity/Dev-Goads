@@ -151,6 +151,99 @@ export interface NewsData {
   dataSource: string;
 }
 
+/* ─────────────────────────  11 additional research dimensions  ───────────────────────── */
+
+export interface SocialMediaPlatformPresence {
+  platform: string;
+  handle?: string;
+  followers?: string;
+  engagementLevel?: string;
+}
+
+export interface SocialMediaData {
+  platforms: SocialMediaPlatformPresence[];
+  overallPresence: string;
+  dataSource: string;
+}
+
+export interface ReviewsData {
+  averageRating?: string;
+  totalReviewsEstimate?: string;
+  topPraise: string[];
+  topComplaints: string[];
+  reviewSources: string[];
+  dataSource: string;
+}
+
+export interface FundingData {
+  totalRaised?: string;
+  latestRound?: string;
+  investors: string[];
+  valuation?: string;
+  fundingTimeline: string[];
+  dataSource: string;
+}
+
+export interface HiringSignalsData {
+  openRolesEstimate?: string;
+  growthSignal: string;
+  keyDepartmentsHiring: string[];
+  dataSource: string;
+}
+
+export interface ContentMarketingData {
+  hasActiveBlog: boolean;
+  publishingCadence?: string;
+  contentPillars: string[];
+  contentGaps: string[];
+  dataSource: string;
+}
+
+export interface BacklinkAuthorityData {
+  domainAuthorityEstimate?: string;
+  notableBacklinkSources: string[];
+  seoStrengthSummary: string;
+  dataSource: string;
+}
+
+export interface AppStoreData {
+  hasApp: boolean;
+  platforms: string[];
+  ratingSummary?: string;
+  categoryRanking?: string;
+  dataSource: string;
+}
+
+export interface VideoPresenceData {
+  hasYoutubeChannel: boolean;
+  subscriberEstimate?: string;
+  contentThemes: string[];
+  engagementSummary: string;
+  dataSource: string;
+}
+
+export interface LocalPresenceData {
+  hasLocalPresence: boolean;
+  googleBusinessRating?: string;
+  locationsEstimate?: string;
+  localSeoNotes: string[];
+  dataSource: string;
+}
+
+export interface PartnershipData {
+  integrations: string[];
+  partners: string[];
+  ecosystemSummary: string;
+  dataSource: string;
+}
+
+export interface LegalRegulatoryData {
+  applicableRegulations: string[];
+  industrySpecificRisks: string[];
+  complianceSummary: string;
+  dataSource: string;
+}
+
 /* ─────────────────────────────  Aggregated context  ───────────────────────────── */
 
 export interface ResearchContextMetadata {
@@ -194,5 +287,21 @@ export interface ResearchContext {
   audience: AudienceData | null;
   company: CompanyData | null;
   news: NewsData | null;
+  /** These 11 fields are optional (unlike the original 8 above, which are always-present-
+   * but-possibly-null) specifically so every existing ResearchContext test fixture across
+   * the codebase keeps compiling unchanged — genuinely additive, not just in spirit. New
+   * code should still treat a missing field the same as an explicit null (provider hasn't
+   * run / data not available), never assume presence. */
+  socialMedia?: SocialMediaData | null;
+  reviews?: ReviewsData | null;
+  funding?: FundingData | null;
+  hiringSignals?: HiringSignalsData | null;
+  contentMarketing?: ContentMarketingData | null;
+  backlinkAuthority?: BacklinkAuthorityData | null;
+  appStore?: AppStoreData | null;
+  videoPresence?: VideoPresenceData | null;
+  localPresence?: LocalPresenceData | null;
+  partnerships?: PartnershipData | null;
+  legalRegulatory?: LegalRegulatoryData | null;
   metadata: ResearchContextMetadata;
 }

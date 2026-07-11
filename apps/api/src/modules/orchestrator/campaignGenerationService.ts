@@ -95,6 +95,16 @@ export async function getCampaignGenerationJob(id: string): Promise<CampaignGene
   return row ? fromRow(row) : null;
 }
 
+/** Traces a live Campaign back to the generation job (and its DecisionContext — the
+ * recommendations/strategies that produced it) it came from — the join point the
+ * cross-campaign learning engine needs to attribute a real performance outcome back to
+ * the recommendations responsible for it. Null for campaigns built outside this pipeline
+ * (e.g. the manual builder flow), which have nothing to attribute outcomes to. */
+export async function getCampaignGenerationJobByCampaignId(campaignId: string): Promise<CampaignGenerationJobRecord | null> {
+  const row = await prisma.campaignGenerationJob.findFirst({ where: { campaignId }, orderBy: { completedAt: "desc" } });
+  return row ? fromRow(row) : null;
+}
+
 export async function markCampaignGenerationStatus(
   id: string,
   status: CampaignGenerationStatus,

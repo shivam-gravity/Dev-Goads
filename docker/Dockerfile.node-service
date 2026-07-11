@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+
+# Shared image for the plain Node/Express services: api, auth-service, campaign-service.
+# They share one npm-workspaces install (root node_modules), and auth-service/
+# campaign-service each compile a private copy of specific apps/api/src modules
+# alongside their own code (see each service's tsconfig.json "include") — so the build
+# stage needs the whole monorepo source even though the runtime image only ships one
+# service's dist/. Select which service via --build-arg WORKSPACE=apps/<name> and
+# --build-arg DIST_ENTRY=dist/<compiled entrypoint>.
+
+FROM node:20-bookworm-slim AS base
+WORKDIR /repo
+
+FROM base AS deps
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY apps/auth-service/package.json apps/auth-service/package.json
+COPY apps/campaign-service/package.json apps/campaign-service/package.json
+COPY apps/scraper-service/package.json apps/scraper-service/package.json
+COPY apps/api/prisma apps/api/prisma
+RUN npm ci
+
+FROM deps AS build
+ARG WORKSPACE
+COPY . .
+RUN npm run build --workspace ${WORKSPACE}
+
+FROM base AS runtime
+ARG WORKSPACE
+ARG DIST_ENTRY
+ENV NODE_ENV=production
+ENV DIST_ENTRY=${DIST_ENTRY}
+WORKDIR /repo/service
+COPY --from=deps /repo/node_modules ./node_modules
+# Always included (not just for the api service) — harmless for auth-service/
+# campaign-service, and lets the api container run `prisma migrate deploy` on boot
+# without a second image variant.
+COPY --from=deps /repo/apps/api/prisma ./apps/api/prisma
+COPY --from=build /repo/${WORKSPACE}/package.json ./package.json
+COPY --from=build /repo/${WORKSPACE}/dist ./dist
+CMD ["sh", "-c", "node \"$DIST_ENTRY\""]

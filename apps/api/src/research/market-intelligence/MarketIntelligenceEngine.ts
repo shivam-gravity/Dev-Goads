@@ -21,6 +21,8 @@ export interface MarketIntelligenceInput {
   businessId?: string;
 }
 
+export type MarketLevel = "low" | "medium" | "high";
+
 export interface MarketIntelligenceReport {
   currentMarket: string;
   growth: string;
@@ -29,8 +31,18 @@ export interface MarketIntelligenceReport {
   trends: string[];
   emergingCompetitors: string[];
   regulations: string[];
+  /** Categorical read the model extracts directly from the research narrative — kept
+   * separate from opportunityScore below so the score itself never has to be an LLM
+   * self-report (see computeOpportunityScore). */
+  growthLevel: MarketLevel;
+  demandLevel: MarketLevel;
   /** 0-100 — higher means more favorable conditions to enter/expand in this market right
-   * now (strong growth+demand, few regulatory obstacles, room before saturation). */
+   * now. Deterministically computed from growthLevel/demandLevel/regulations/
+   * emergingCompetitors (see computeOpportunityScore) — never an LLM self-report, same
+   * principle research/decision/simulation-engine.ts uses for its own scores: asking a
+   * model to output a single calibrated 0-100 number produces scores that aren't reliably
+   * comparable across runs, whereas the same model reliably categorizes growth/demand as
+   * low/medium/high. */
   opportunityScore: number;
   citations: Citation[];
   confidence: number;
@@ -52,13 +64,14 @@ const MARKET_TOOL = {
       trends: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
       emergingCompetitors: { type: "array", items: { type: "string" }, minItems: 0, maxItems: 6, description: "Newer/smaller entrants gaining traction, distinct from established players" },
       regulations: { type: "array", items: { type: "string" }, minItems: 0, maxItems: 6, description: "Regulatory factors affecting this market, or empty if none notable" },
-      opportunityScore: { type: "integer", minimum: 0, maximum: 100, description: "0-100: how favorable current conditions are to enter/expand in this market" },
+      growthLevel: { type: "string", enum: ["low", "medium", "high"], description: "Categorical read of the growth rate/trajectory described in `growth`" },
+      demandLevel: { type: "string", enum: ["low", "medium", "high"], description: "Categorical read of current demand strength described in `demand`" },
     },
-    required: ["currentMarket", "growth", "demand", "seasonality", "trends", "emergingCompetitors", "regulations", "opportunityScore"],
+    required: ["currentMarket", "growth", "demand", "seasonality", "trends", "emergingCompetitors", "regulations", "growthLevel", "demandLevel"],
   },
 };
 
-type MarketFields = Omit<MarketIntelligenceReport, "citations" | "confidence" | "generatedAt">;
+type MarketFields = Omit<MarketIntelligenceReport, "citations" | "confidence" | "generatedAt" | "opportunityScore">;
 
 function fallbackFields(subject: string): MarketFields {
   return {
@@ -69,13 +82,33 @@ function fallbackFields(subject: string): MarketFields {
     trends: ["Not yet researched"],
     emergingCompetitors: [],
     regulations: [],
-    opportunityScore: 0,
+    growthLevel: "low",
+    demandLevel: "low",
   };
 }
 
 function computeConfidence(usedFallback: boolean, citationCount: number): number {
   if (usedFallback) return 0.1;
   return citationCount === 0 ? 0.35 : Math.round(Math.min(0.55 + citationCount * 0.07, 0.9) * 100) / 100;
+}
+
+const LEVEL_POINTS: Record<MarketLevel, number> = { low: 20, medium: 60, high: 100 };
+
+/**
+ * Deterministic replacement for asking the model to self-report a 0-100 opportunity
+ * score directly. Growth and demand (each independently categorized by the model, not
+ * scored) each contribute up to 40 points; a flat +20 base reflects "a market exists at
+ * all"; regulatory friction and emerging-competitor pressure each shave up to 10 points,
+ * capped so neither factor alone can crater the score — only weak growth/demand can do
+ * that, mirroring how regulations/competitors are real headwinds but not the whole story.
+ */
+export function computeOpportunityScore(growthLevel: MarketLevel, demandLevel: MarketLevel, regulationsCount: number, emergingCompetitorsCount: number): number {
+  const growthComponent = LEVEL_POINTS[growthLevel] * 0.4;
+  const demandComponent = LEVEL_POINTS[demandLevel] * 0.4;
+  const regulationPenalty = Math.min(regulationsCount * 3, 10);
+  const competitorPenalty = Math.min(emergingCompetitorsCount * 2, 10);
+  const score = growthComponent + demandComponent + 20 - regulationPenalty - competitorPenalty;
+  return Math.max(0, Math.min(100, Math.round(score)));
 }
 
 /**
@@ -90,7 +123,7 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
   const dedupKey = input.businessId ?? input.url;
 
   if (!openai) {
-    return { ...fallbackFields(subject), citations: [], confidence: computeConfidence(true, 0), generatedAt: new Date().toISOString() };
+    return { ...fallbackFields(subject), opportunityScore: 0, citations: [], confidence: computeConfidence(true, 0), generatedAt: new Date().toISOString() };
   }
 
   const [marketResearch, regulatoryResearch, priorMatches] = await Promise.all([
@@ -117,7 +150,7 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
   const usedFallback = !structured;
   const fields = structured ?? fallbackFields(subject);
   const citations = usedFallback ? [] : [...marketResearch.citations, ...regulatoryResearch.citations];
-  const opportunityScore = Math.max(0, Math.min(100, Math.round(fields.opportunityScore)));
+  const opportunityScore = usedFallback ? 0 : computeOpportunityScore(fields.growthLevel, fields.demandLevel, fields.regulations.length, fields.emergingCompetitors.length);
 
   const report: MarketIntelligenceReport = {
     ...fields,

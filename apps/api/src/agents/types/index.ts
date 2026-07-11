@@ -134,3 +134,86 @@ export interface CriticAgentOutput {
   missingData: string[];
   recommendation: string;
 }
+
+/* ─────────────────────────  9 additional producer agents  ───────────────────────── */
+
+export interface LandingPageAgentOutput {
+  heroClarity: string;
+  ctaRecommendation: string;
+  messagingMismatches: string[];
+  recommendedFixes: string[];
+}
+
+export interface PricingOfferAgentOutput {
+  recommendedOfferType: string;
+  pricingPositioning: string;
+  guaranteeOrRiskReversal: string;
+  urgencyAngle: string;
+}
+
+export interface LocalizationAgentOutput {
+  priorityLanguages: string[];
+  priorityRegions: string[];
+  culturalAdaptationNotes: string[];
+  translationCaveats: string[];
+}
+
+export interface SEOContentAgentOutput {
+  contentGapsToFill: string[];
+  onPageRecommendations: string[];
+  titleTagSuggestion: string;
+  metaDescriptionSuggestion: string;
+}
+
+export interface SeasonalityTimingAgentOutput {
+  recommendedLaunchWindow: string;
+  seasonalConsiderations: string[];
+  dayPartingRecommendation: string;
+}
+
+export interface ChannelPlacementRecommendation {
+  network: string;
+  placement: string;
+  rationale: string;
+}
+
+export interface ChannelPlacementAgentOutput {
+  recommendedPlacements: ChannelPlacementRecommendation[];
+  devicePriority: string;
+}
+
+export interface FunnelRetargetingAgentOutput {
+  funnelStageSplit: Record<string, number>;
+  retargetingAudiences: string[];
+  awarenessAngles: string[];
+}
+
+export interface ObjectionHandlingAgentOutput {
+  topObjections: string[];
+  rebuttalAngles: string[];
+  trustSignalsToHighlight: string[];
+}
+
+export interface ForecastingKPIAgentOutput {
+  expectedCtrRange: string;
+  expectedCpaRange: string;
+  expectedRoasRange: string;
+  primaryKpi: string;
+  benchmarkReasoning: string[];
+}
+
+/* ─────────────────────────  reviewer agent #2: Compliance  ───────────────────────── */
+
+export interface ComplianceFlag {
+  agent: string;
+  severity: "low" | "medium" | "high";
+  issue: string;
+  suggestion: string;
+}
+
+export interface ComplianceAgentOutput {
+  overallRisk: "low" | "medium" | "high";
+  flags: ComplianceFlag[];
+  restrictedCategoryConcerns: string[];
+  recommendation: string;
+}

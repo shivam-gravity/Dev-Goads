@@ -15,6 +15,10 @@ import {
 import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
 import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
+import { initErrorTracking, registerCrashReporting, captureError } from "../infra/errorTracking.js";
+
+initErrorTracking("adgo-research-session-worker");
+registerCrashReporting("adgo-research-session-worker");
 
 /**
  * Standalone process — run with `npm run dev:research-worker --workspace apps/api`
@@ -85,6 +89,7 @@ const worker = new Worker(
 worker.on("completed", (job: Job) => logger.info(`Research session completed: ${job.data?.sessionId}`));
 worker.on("failed", (job: Job | undefined, err: Error) => {
   logger.error(`Research session failed: ${job?.data?.sessionId}`, err);
+  captureError(err, { worker: "researchSessionWorker", sessionId: job?.data?.sessionId });
   if (job && isFinalFailure(job)) void sendToDeadLetter(RESEARCH_SESSION_QUEUE, job, err);
 });
 

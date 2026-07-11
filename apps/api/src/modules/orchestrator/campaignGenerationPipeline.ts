@@ -6,6 +6,7 @@ import type { ResearchContext } from "../../research/types/index.js";
 import { createResearchJob, runResearchOrchestrator, type RunResearchOrchestratorOptions } from "../../research/research-orchestrator/index.js";
 import { runDecisionEngine } from "../../research/decision/decision-engine.js";
 import type { DecisionContext } from "../../research/decision/types.js";
+import { runIntelligenceEnrichment } from "../../research/intelligenceEnrichment.js";
 import { createStrategyFromAgentResults } from "../strategy/strategyEngine.js";
 import { buildCampaignFromStrategy } from "./campaignOrchestrator.js";
 import { getBusiness } from "../business/businessService.js";
@@ -33,6 +34,7 @@ export interface CampaignGenerationDeps {
   createResearchJob: typeof createResearchJob;
   runResearchOrchestrator: typeof runResearchOrchestrator;
   runDecisionEngine: typeof runDecisionEngine;
+  runIntelligenceEnrichment: typeof runIntelligenceEnrichment;
   runAgentCoordinator: typeof runAgentCoordinator;
   createStrategyFromAgentResults: typeof createStrategyFromAgentResults;
   buildCampaignFromStrategy: typeof buildCampaignFromStrategy;
@@ -49,6 +51,7 @@ export const defaultCampaignGenerationDeps: CampaignGenerationDeps = {
   createResearchJob,
   runResearchOrchestrator,
   runDecisionEngine,
+  runIntelligenceEnrichment,
   runAgentCoordinator,
   createStrategyFromAgentResults,
   buildCampaignFromStrategy,
@@ -74,11 +77,11 @@ export interface RunCampaignGenerationOptions {
 }
 
 // Fixed fan-out widths of the two sub-pipelines this orchestrates — see
-// research/providers/index.ts (9 providers) and agents/agents/index.ts (10 agents) —
+// research/providers/index.ts (20 providers) and agents/agents/index.ts (20 agents) —
 // plus one unit for the campaign-build step, so progress is one meaningful number
 // across all three phases rather than three separately-scaled ones.
-const RESEARCH_PROVIDER_COUNT = 9;
-const AGENT_COUNT = 10;
+const RESEARCH_PROVIDER_COUNT = 20;
+const AGENT_COUNT = 20;
 const TOTAL_PIPELINE_UNITS = RESEARCH_PROVIDER_COUNT + AGENT_COUNT + 1;
 
 function defaultCampaignName(job: CampaignGenerationJobRecord, business: { name: string; brandName?: string } | null): string {
@@ -154,6 +157,14 @@ export async function runCampaignGenerationPipeline(
       return null;
     });
 
+    // Fire-and-forget, same "enhancement, not hard dependency" posture as the Decision
+    // Engine above — this run doesn't wait on it or read its return value at all (its
+    // value is the Research Memory entries it writes for future runs, not this one's
+    // output), so it's deliberately not awaited alongside the rest of Phase 1/2.
+    withSpan("campaign_generation.intelligence_enrichment", () => deps.runIntelligenceEnrichment(context)).catch((err) => {
+      logger.warn(`Intelligence enrichment failed for campaign generation job ${jobId} — continuing without it`, err);
+    });
+
     // ── Phase 2: AI Agent Coordinator ──
     await markStatus("running_agents");
     const pipeline: AgentPipelineResult = await withSpan("campaign_generation.agents", () =>
@@ -179,7 +190,7 @@ export async function runCampaignGenerationPipeline(
     await markStatus("building_campaign");
     const { campaign, strategyId } = await withSpan("campaign_generation.build", async () => {
       const business = await deps.getBusiness(job.businessId);
-      const strategy = await deps.createStrategyFromAgentResults(job.businessId, campaignAgentResult.data);
+      const strategy = await deps.createStrategyFromAgentResults(job.businessId, campaignAgentResult.data, decisionContext);
       await markStatus("building_campaign", { strategyId: strategy.id });
 
       const budgetAgentResult = pipeline.results["budget-agent"] as AgentResult<BudgetAgentOutput> | undefined;

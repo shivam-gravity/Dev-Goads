@@ -4,7 +4,7 @@ import { logger } from "../modules/logger/logger.js";
 import { withSpan } from "../infra/telemetry.js";
 import { promptRegistry } from "./prompts/PromptRegistry.js";
 import type { AgentEvidenceItem, AgentResult, ResearchContext } from "./types/index.js";
-// Side-effect import: registers all 10 agents' prompts before any agent can call
+// Side-effect import: registers all 20 agents' prompts before any agent can call
 // callAgentModel below. Every agent file imports callAgentModel from this module (not
 // necessarily the prompts/definitions barrel directly), so this is the one place that
 // guarantees registration regardless of which file an importer reaches an agent through.
@@ -17,8 +17,15 @@ const PER_MISSING_FIELD_PENALTY = 0.15;
 
 /** Every field on ResearchContext an agent might draw from, paired with the human label
  * used in evidence entries — kept in one place so collectEvidence/computeConfidence agree
- * on what "this field is missing" means. */
-const CONTEXT_FIELD_KEYS = ["website", "market", "technology", "competitors", "keywords", "audience", "company", "news"] as const;
+ * on what "this field is missing" means. The 11 fields after `news` back the 9 newer
+ * research providers (research/providers/{SocialMedia,Reviews,Funding,...}Provider.ts) —
+ * optional on ResearchContext itself, but every agent field-list here treats "missing" the
+ * same way regardless of whether a field is one of the original 8 or one of these 11. */
+const CONTEXT_FIELD_KEYS = [
+  "website", "market", "technology", "competitors", "keywords", "audience", "company", "news",
+  "socialMedia", "reviews", "funding", "hiringSignals", "contentMarketing", "backlinkAuthority",
+  "appStore", "videoPresence", "localPresence", "partnerships", "legalRegulatory",
+] as const;
 type ContextFieldKey = (typeof CONTEXT_FIELD_KEYS)[number];
 
 /**
@@ -31,7 +38,11 @@ type ContextFieldKey = (typeof CONTEXT_FIELD_KEYS)[number];
  */
 export function computeConfidence(context: ResearchContext, fields: ContextFieldKey[], usedFallback: boolean): number {
   if (usedFallback) return FALLBACK_CONFIDENCE;
-  const missing = fields.filter((f) => context[f] === null).length;
+  // == null (not ===) deliberately catches both null (provider ran, found nothing) and
+  // undefined (one of the 11 optional fields never populated at all) as equally "missing" —
+  // the original 8 fields are never undefined in practice, but treating both the same way
+  // here means a new agent using the newer optional fields doesn't need its own variant.
+  const missing = fields.filter((f) => context[f] == null).length;
   const score = BASE_CONFIDENCE - missing * PER_MISSING_FIELD_PENALTY;
   return Math.max(FALLBACK_CONFIDENCE, Math.min(MAX_CONFIDENCE, score));
 }

@@ -47,7 +47,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 export interface User { id: string; email: string; name: string; avatar?: string; createdAt: string; }
 export interface Workspace { id: string; name: string; ownerId: string; plan: "starter" | "pro" | "agency"; logoUrl?: string; timezone: string; createdAt: string; }
 export interface WorkspaceMember { id: string; workspaceId: string; userId: string; role: "owner" | "admin" | "member" | "viewer"; invitedAt: string; joinedAt?: string; user?: { name: string; email: string; avatar?: string }; }
-export interface BusinessProfile { id: string; name: string; website?: string; industry: string; monthlyBudgetCents: number; goals: string[]; targetAudience?: string; brandName?: string; logoUrls?: string[]; }
+export interface BusinessProfile { id: string; workspaceId?: string; name: string; website?: string; industry: string; monthlyBudgetCents: number; goals: string[]; targetAudience?: string; brandName?: string; logoUrls?: string[]; }
 export interface AdCreative { headline: string; body: string; callToAction: string; imageUrl?: string; videoUrl?: string; headlines?: string[]; primaryTexts?: string[]; }
 export interface AdStrategy { id: string; businessId: string; summary: string; recommendedNetworks: ("meta" | "google")[]; budgetSplit: Record<string, number>; audiences: string[]; creatives: AdCreative[]; createdAt: string; }
 export interface CampaignVariant { id: string; creative: AdCreative; network: "meta" | "google" | "tiktok"; externalId?: string; status: string; audienceName?: string; landingPageUrl?: string; adSetExternalId?: string; }
@@ -147,11 +147,20 @@ export interface StrategySimulationResult {
 export interface AudiencePersonaCard {
   name: string; description: string; ageRange?: string; genderSplit?: string; interests: string[];
 }
+export interface PricingTier {
+  tier: string; priceRange: string; details: string;
+}
+export interface RegionalMarketDepth {
+  region: string; marketSize?: string; growthRate?: string; policyDrivers: string[];
+}
 export interface DecisionContext {
   businessSummary: string; websiteScreenshot?: string; audiencePersonas: AudiencePersonaCard[];
+  pricingTiers: PricingTier[]; notableCustomers: string[]; quantifiedProofPoints: string[];
+  regionalMarketDepth: RegionalMarketDepth | null;
   topOpportunities: string[]; topRisks: string[];
   recommendedPositioning: string; recommendedAudiencePriority: string; recommendedChannels: string[];
-  recommendedBudgetAllocation: Record<string, number>; recommendedCreativeDirection: string;
+  recommendedBudgetAllocation: Record<string, number>; recommendedDailyBudgetCents: number; budgetReasoning: string[];
+  recommendedCreativeDirection: string;
   recommendedOffer: string; recommendedMessaging: string; confidence: number; evidence: string[];
   tradeoffs: string[]; recommendations: RankedRecommendation[]; strategies: CampaignStrategyOption[];
   simulations: StrategySimulationResult[]; generatedAt: string;
@@ -189,7 +198,9 @@ export interface Insight { id: string; workspaceId: string; type: "anomaly" | "r
 export interface Integration { id: string; workspaceId: string; platform: "meta" | "google" | "tiktok" | "shopify" | "pixel"; status: "connected" | "disconnected" | "error" | "pending"; accountName?: string; accountId?: string; permissions: string[]; settings: Record<string, unknown>; connectedAt?: string; errorMessage?: string; updatedAt: string; }
 export interface SavedAudience { id: string; workspaceId: string; name: string; ageMin: number; ageMax: number; gender: "all" | "male" | "female"; locations: string[]; interests: string[]; exclusions: string[]; estimatedReach?: string; createdAt: string; }
 export interface ReachEstimate { usersLowerBound: number; usersUpperBound: number; source: "meta" | "heuristic"; }
-export interface GenerationJobInput { businessId: string; productUrl?: string; prompt?: string; wantVideo: boolean; }
+export type ImageAspectRatio = "square" | "portrait" | "landscape";
+export type ImageQuality = "standard" | "high";
+export interface GenerationJobInput { businessId: string; productUrl?: string; prompt?: string; wantVideo: boolean; aspectRatio?: ImageAspectRatio; language?: string; quality?: ImageQuality; }
 export interface GenerationJobResult { headline: string; body: string; callToAction: string; creativeId: string; imageAssetId: string; imageUrl: string; videoAssetId?: string; videoUrl?: string; }
 export interface GenerationJob { id: string; workspaceId: string; businessId: string; type: "image" | "video" | "full_creative"; status: "queued" | "running" | "done" | "failed"; input: GenerationJobInput; result?: GenerationJobResult; error?: string; createdAt: string; updatedAt: string; }
 export type ProductCatalogSource = "shopify" | "facebook" | "google";
@@ -359,7 +370,7 @@ export const api = {
   getCampaign: (id: string) => request<Campaign>(`/campaigns/${id}`),
   updateCampaign: (id: string, patch: CampaignBuilderPatch) =>
     request<Campaign>(`/campaigns/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
-  launchCampaign: (id: string, workspaceId: string = localStorage.getItem("adgo_workspace_id") ?? "demo") =>
+  launchCampaign: (id: string, workspaceId: string = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace") =>
     request<Campaign>(`/campaigns/${id}/launch`, { method: "POST", body: JSON.stringify({ workspaceId }) }),
   pauseVariant: (campaignId: string, variantId: string) =>
     request<Campaign>(`/campaigns/${campaignId}/variants/${variantId}/pause`, { method: "POST" }),

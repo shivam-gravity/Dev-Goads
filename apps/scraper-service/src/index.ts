@@ -13,6 +13,10 @@ import { normalizeProduct } from "./pipeline/llmNormalizer.js";
 import { indexAndFindSimilar } from "./pipeline/vectorIndex.js";
 import { generateAdCopy } from "./pipeline/creativeGenerator.js";
 import { suggestCampaign } from "./pipeline/campaignSuggestions.js";
+import { initErrorTracking, registerCrashReporting, captureError } from "../../api/src/infra/errorTracking.js";
+
+initErrorTracking("adgo-scraper-service");
+registerCrashReporting("adgo-scraper-service");
 
 const app = express();
 const PORT = Number(process.env.SCRAPER_SERVICE_PORT ?? 4003);
@@ -69,7 +73,7 @@ app.use((_req, res) => {
 });
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err);
+  captureError(err, { service: "adgo-scraper-service" });
   res.status(500).json({ error: "Internal server error" });
 });
 

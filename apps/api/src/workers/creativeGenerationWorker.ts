@@ -5,6 +5,10 @@ import { runGenerationJob } from "../modules/generation/creativeGenerationServic
 import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
 import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
+import { initErrorTracking, registerCrashReporting, captureError } from "../infra/errorTracking.js";
+
+initErrorTracking("adgo-creative-generation-worker");
+registerCrashReporting("adgo-creative-generation-worker");
 
 /**
  * Standalone process — run with `npm run dev:worker --workspace apps/api` alongside
@@ -23,6 +27,7 @@ const worker = new Worker(
 worker.on("completed", (job: Job) => logger.info(`Generation job completed: ${job.data?.jobId}`));
 worker.on("failed", (job: Job | undefined, err: Error) => {
   logger.error(`Generation job failed: ${job?.data?.jobId}`, err);
+  captureError(err, { worker: "creativeGenerationWorker", jobId: job?.data?.jobId });
   if (job && isFinalFailure(job)) void sendToDeadLetter(CREATIVE_GENERATION_QUEUE, job, err);
 });
 

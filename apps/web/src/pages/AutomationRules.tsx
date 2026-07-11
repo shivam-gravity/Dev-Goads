@@ -116,7 +116,7 @@ const DEFAULT_RULES: AutomationRule[] = [
 
 export default function AutomationRules({ businessId }: { businessId: string }) {
   const { workspaceId: authWorkspaceId } = useAuth();
-  const workspaceId = authWorkspaceId ?? localStorage.getItem("adgo_workspace_id") ?? "demo";
+  const workspaceId = authWorkspaceId ?? localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
 
   const [rules, setRules] = useState<AutomationRule[]>(DEFAULT_RULES);
   const [showAddForm, setShowAddForm] = useState(false);

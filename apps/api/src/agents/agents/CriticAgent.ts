@@ -54,7 +54,11 @@ function fallback(proposals: Record<string, unknown>): CriticAgentOutput {
   };
 }
 
-const ALL_CONTEXT_FIELDS = ["website", "market", "technology", "competitors", "keywords", "audience", "company", "news"] as const;
+const ALL_CONTEXT_FIELDS = [
+  "website", "market", "technology", "competitors", "keywords", "audience", "company", "news",
+  "socialMedia", "reviews", "funding", "hiringSignals", "contentMarketing", "backlinkAuthority",
+  "appStore", "videoPresence", "localPresence", "partnerships", "legalRegulatory",
+] as const;
 
 /**
  * The one agent that reviews OTHER agents' outputs rather than producing a fresh
@@ -71,7 +75,7 @@ export class CriticAgent implements AIAgent<CriticAgentOutput> {
   async execute(context: ResearchContext, input?: AgentExecuteInput): Promise<AgentResult<CriticAgentOutput>> {
     return runAgentStep(this.name, async () => {
       const proposals = Object.fromEntries(Object.entries(input?.priorResults ?? {}).map(([name, result]) => [name, result.data]));
-      const contextSummary = Object.fromEntries(ALL_CONTEXT_FIELDS.map((f) => [f, context[f] !== null]));
+      const contextSummary = Object.fromEntries(ALL_CONTEXT_FIELDS.map((f) => [f, context[f] != null]));
 
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,

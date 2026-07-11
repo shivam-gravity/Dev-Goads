@@ -9,6 +9,9 @@ export interface GenerationJobInput {
   productUrl?: string;
   prompt?: string;
   wantVideo: boolean;
+  aspectRatio?: "square" | "portrait" | "landscape";
+  language?: string;
+  quality?: "standard" | "high";
 }
 
 export interface GenerationJobResult {

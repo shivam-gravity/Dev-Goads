@@ -1,6 +1,5 @@
 import jwt from "jsonwebtoken";
-
-const JWT_SECRET = process.env.JWT_SECRET ?? "dev-secret-change-me";
+import { JWT_SECRET } from "../../infra/env.js";
 
 interface OAuthState {
   workspaceId: string;

@@ -104,3 +104,33 @@ test("AgentCoordinator - Critic is optional; a run with no critic-agent present 
   assert.deepStrictEqual(pipeline.order, ["solo"]);
   assert.ok(!("critic-agent" in pipeline.results));
 });
+
+test("AgentCoordinator - runs BOTH reviewer agents (critic-agent, compliance-agent), each seeing the same producer priorResults, neither seeing the other", async () => {
+  const producers = ["a", "b"].map((n) => fakeAgent(n, () => successResult(n, { n })));
+  let criticSaw: string[] | undefined;
+  let complianceSaw: string[] | undefined;
+
+  const critic: AIAgent<unknown> = {
+    name: "critic-agent",
+    promptId: "critic-agent",
+    async execute(_context, input) {
+      criticSaw = Object.keys(input?.priorResults ?? {}).sort();
+      return successResult("critic-agent", {});
+    },
+  };
+  const compliance: AIAgent<unknown> = {
+    name: "compliance-agent",
+    promptId: "compliance-agent",
+    async execute(_context, input) {
+      complianceSaw = Object.keys(input?.priorResults ?? {}).sort();
+      return successResult("compliance-agent", {});
+    },
+  };
+
+  const pipeline = await runAgentCoordinator(fixtureContext(), { agents: [...producers, critic, compliance] });
+
+  assert.deepStrictEqual(criticSaw, ["a", "b"], "critic must see only the producers, not compliance-agent");
+  assert.deepStrictEqual(complianceSaw, ["a", "b"], "compliance must see only the producers, not critic-agent");
+  assert.deepStrictEqual(Object.keys(pipeline.results).sort(), ["a", "b", "compliance-agent", "critic-agent"]);
+  assert.deepStrictEqual(pipeline.order.slice(-2).sort(), ["compliance-agent", "critic-agent"], "both reviewers must run after all producers");
+});

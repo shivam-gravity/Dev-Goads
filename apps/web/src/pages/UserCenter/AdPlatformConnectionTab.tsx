@@ -51,7 +51,7 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
     setRevealedTokens((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
+  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
 
   async function load() {
     setLoading(true);

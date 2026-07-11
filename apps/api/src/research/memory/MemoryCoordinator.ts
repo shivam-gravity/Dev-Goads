@@ -37,6 +37,10 @@ const DEFAULT_TTL_BY_KIND: Record<string, number> = {
   "audience-profile": 120 * DAY_MS,
   "market-profile": 45 * DAY_MS,
   "pricing-analysis": 30 * DAY_MS,
+  // Real ad performance outcomes (campaign-learning-engine.ts) — a longer horizon than any
+  // research-derived kind above, since "did this kind of recommendation actually work" is a
+  // durable signal, not something that goes stale the way a competitor's pricing page does.
+  "campaign-outcome": 270 * DAY_MS,
   "creative-analysis": 90 * DAY_MS,
   "landing-page-analysis": 60 * DAY_MS,
 };

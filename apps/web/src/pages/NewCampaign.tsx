@@ -37,8 +37,57 @@ function phaseIndex(status: CampaignGenerationPipelineStatus): number {
   return PHASE_ORDER.findIndex((p) => p.key === status);
 }
 
+// Truthful, generic descriptions of what each phase is actually doing — rotates every few
+// seconds so the loading state doesn't sit static for minutes at a time on slower runs.
+const PHASE_SUBLINES: Record<CampaignGenerationPipelineStatus, string[]> = {
+  pending: [],
+  researching: [
+    "Crawling the site, screenshotting pages, and reading competitor + market signals…",
+    "Cross-checking sources for conflicting claims…",
+    "Gathering audience, keyword, and news data in parallel…",
+  ],
+  aggregating: [
+    "Merging 9 providers into one confidence-scored context…",
+    "Resolving conflicts between sources…",
+  ],
+  running_agents: [
+    "Scoring and ranking candidate recommendations…",
+    "Simulating 3 campaign strategies head-to-head…",
+    "Picking the strategy with the best expected ROI…",
+  ],
+  building_campaign: [
+    "Generating real ad copy and creative…",
+    "Assembling the campaign for review…",
+  ],
+  completed: [],
+  failed: [],
+};
+
+function phaseSubline(key: CampaignGenerationPipelineStatus): string {
+  const lines = PHASE_SUBLINES[key];
+  if (!lines || lines.length === 0) return "";
+  return lines[Math.floor(Date.now() / 2500) % lines.length];
+}
+
 function formatCents(cents: number): string {
   return `$${Math.round(cents / 100).toLocaleString()}`;
+}
+
+function formatTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function AssistantTag({ time }: { time: string }) {
+  const stamp = formatTimestamp(time);
+  return (
+    <div className="decision-assistant-tag">
+      <span className="copilot-avatar">🤖</span>
+      <span className="decision-assistant-name">AdGo AI</span>
+      {stamp && <span className="decision-assistant-time">{stamp}</span>}
+    </div>
+  );
 }
 
 function pct(v: number): string {
@@ -161,7 +210,7 @@ function PersonaCarousel({ personas }: { personas: AudiencePersonaCard[] }) {
             return (
               <div key={p.name} className="persona-card">
                 <div className="persona-card-avatar" style={{ background: avatar.bg, color: avatar.color }}>
-                  {p.name.charAt(0).toUpperCase()}
+                  <UserIcon />
                 </div>
                 <div className="persona-card-name">{p.name}</div>
                 {(p.ageRange || p.genderSplit) && (
@@ -208,6 +257,12 @@ function normalizeDecision(decision: DecisionContext) {
     audiencePersonas: decision.audiencePersonas ?? [],
     recommendedChannels: decision.recommendedChannels ?? [],
     recommendedBudgetAllocation: decision.recommendedBudgetAllocation ?? {},
+    pricingTiers: decision.pricingTiers ?? [],
+    notableCustomers: decision.notableCustomers ?? [],
+    quantifiedProofPoints: decision.quantifiedProofPoints ?? [],
+    regionalMarketDepth: decision.regionalMarketDepth ?? null,
+    recommendedDailyBudgetCents: decision.recommendedDailyBudgetCents ?? 0,
+    budgetReasoning: decision.budgetReasoning ?? [],
   };
 }
 
@@ -223,9 +278,24 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
   const budgetEntries = Object.entries(decision.recommendedBudgetAllocation);
   const winnerId = sortedStrategies[0]?.id;
   const confidencePct = Math.round(decision.confidence * 100);
+  const region = decision.regionalMarketDepth;
+
+  const sectionsShown = [
+    true, // hero
+    decision.recommendedDailyBudgetCents > 0,
+    decision.audiencePersonas.length > 0,
+    decision.topOpportunities.length > 0 || decision.topRisks.length > 0,
+    true, // recommended direction
+    decision.pricingTiers.length > 0,
+    topRecommendations.length > 0,
+    sortedStrategies.length > 0,
+  ].filter(Boolean).length;
 
   return (
+    <div className="decision-results-shell">
     <div className="decision-results">
+      <AssistantTag time={decision.generatedAt} />
+
       <div className="decision-hero">
         {decision.websiteScreenshot && (
           <div className="decision-hero-shot">
@@ -235,6 +305,19 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
         <div className="decision-hero-body">
           <p className="decision-hero-eyebrow">{url || "Your page"}</p>
           <p className="decision-hero-summary">{decision.businessSummary}</p>
+
+          {decision.quantifiedProofPoints.length > 0 && (
+            <div className="proof-chip-row">
+              {decision.quantifiedProofPoints.map((p) => <span key={p} className="proof-chip">{p}</span>)}
+            </div>
+          )}
+
+          {decision.notableCustomers.length > 0 && (
+            <p className="trusted-by-row">
+              Trusted by <strong>{decision.notableCustomers.join(", ")}</strong>
+            </p>
+          )}
+
           <div className="decision-hero-meta">
             <div className="decision-confidence">
               <div className="decision-confidence-ring" style={{ "--pct": confidencePct } as CSSProperties} />
@@ -247,6 +330,20 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
           </div>
         </div>
       </div>
+
+      {decision.recommendedDailyBudgetCents > 0 && (
+        <div className="decision-section budget-hero">
+          <div className="budget-hero-figure-wrap">
+            <div className="budget-hero-figure">{formatCents(decision.recommendedDailyBudgetCents)}/day</div>
+            <div className="budget-hero-figure-label">Recommended Daily Budget</div>
+          </div>
+          {decision.budgetReasoning.length > 0 && (
+            <ul className="budget-hero-reasoning">
+              {decision.budgetReasoning.map((r) => <li key={r}>{r}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
 
       {decision.audiencePersonas.length > 0 && (
         <div className="decision-section">
@@ -277,6 +374,16 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
 
       <div className="decision-section">
         <p className="decision-section-title"><span className="icon-badge"><GlobeIcon /></span>Recommended Direction</p>
+        {region && (
+          <div className="regional-depth-row">
+            <span className="regional-depth-stat"><strong>Region</strong>{region.region}</span>
+            {region.marketSize && <span className="regional-depth-stat"><strong>Market Size</strong>{region.marketSize}</span>}
+            {region.growthRate && <span className="regional-depth-stat"><strong>Growth Rate</strong>{region.growthRate}</span>}
+            {region.policyDrivers.length > 0 && (
+              <span className="regional-depth-stat"><strong>Policy Drivers</strong>{region.policyDrivers.join(", ")}</span>
+            )}
+          </div>
+        )}
         <dl className="field-grid">
           <div><dt>Positioning</dt><dd>{decision.recommendedPositioning}</dd></div>
           <div><dt>Audience Priority</dt><dd>{decision.recommendedAudiencePriority}</dd></div>
@@ -313,6 +420,21 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
         </dl>
       </div>
 
+      {decision.pricingTiers.length > 0 && (
+        <div className="decision-section">
+          <p className="decision-section-title"><span className="icon-badge"><SparkleIcon /></span>Pricing &amp; Monetization</p>
+          <div className="pricing-table">
+            {decision.pricingTiers.map((t) => (
+              <div key={t.tier} className="pricing-tile">
+                <div className="pricing-tile-name">{t.tier}</div>
+                <div className="pricing-tile-range">{t.priceRange}</div>
+                <div className="pricing-tile-details">{t.details}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {topRecommendations.length > 0 && (
         <div className="decision-section">
           <p className="decision-section-title"><span className="icon-badge"><SparkleIcon /></span>Top Ranked Recommendations</p>
@@ -324,6 +446,7 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
 
       {sortedStrategies.length > 0 && (
         <div className="decision-section">
+          <AssistantTag time={decision.generatedAt} />
           <p className="decision-section-title"><span className="icon-badge"><TargetIcon /></span>Candidate Strategies (ranked)</p>
           <div className="strategy-grid">
             {sortedStrategies.map((s) => (
@@ -339,6 +462,12 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
           <ul>{decision.evidence.map((e) => <li key={e}>{e}</li>)}</ul>
         </details>
       )}
+    </div>
+    <div className="decision-progress-rail" aria-hidden="true">
+      {Array.from({ length: sectionsShown }).map((_, i) => (
+        <span key={i} className="decision-progress-dot filled" />
+      ))}
+    </div>
     </div>
   );
 }
@@ -525,6 +654,7 @@ export default function NewCampaign() {
                         <span>{phase.label}</span>
                         {done && <span className="crawler-trace-step-done-mark" aria-hidden="true">✓</span>}
                       </div>
+                      {active && <p className="phase-subline">{phaseSubline(phase.key)}</p>}
                     </li>
                   );
                 })}

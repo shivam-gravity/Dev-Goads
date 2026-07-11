@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { googleAdapter } from "../modules/adapters/googleAdapter.js";
+
+// See metaAdapter.test.ts's identical guard for why: this file's "mock mode" assumptions
+// break if a real credential leaked into process.env from an earlier test file in the same
+// combined `npm test` process.
+delete process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+delete process.env.GOOGLE_ADS_CUSTOMER_ID;
+delete process.env.GOOGLE_ADS_ACCESS_TOKEN;
+
+const { googleAdapter } = await import("../modules/adapters/googleAdapter.js");
 
 test("Google Ads Adapter - launchVariant fallback placement validation", async () => {
   const result = await googleAdapter.launchVariant({

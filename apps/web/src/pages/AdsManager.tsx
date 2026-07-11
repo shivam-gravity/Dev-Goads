@@ -78,7 +78,7 @@ function PagerCard({
 }
 
 export default function AdsManager({ businessId }: { businessId: string }) {
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
+  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
   const [mode, setMode] = useState<Mode>("campaigns");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [adSets, setAdSets] = useState<AdSet[]>([]);

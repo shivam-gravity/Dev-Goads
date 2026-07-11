@@ -4,7 +4,40 @@ import assert from "node:assert";
 delete process.env.OPENAI_API_KEY;
 
 const t = Date.now();
-const { runMarketIntelligence } = await import(`../research/market-intelligence/MarketIntelligenceEngine.js?t=${t}`);
+const { runMarketIntelligence, computeOpportunityScore } = await import(`../research/market-intelligence/MarketIntelligenceEngine.js?t=${t}`);
+
+test("computeOpportunityScore - high growth/demand with no friction scores at the top of the range", () => {
+  assert.strictEqual(computeOpportunityScore("high", "high", 0, 0), 100);
+});
+
+test("computeOpportunityScore - low growth/demand scores low even with zero regulatory/competitor friction", () => {
+  const score = computeOpportunityScore("low", "low", 0, 0);
+  assert.ok(score <= 36, `expected a low score for low/low, got ${score}`);
+});
+
+test("computeOpportunityScore - is monotonically non-decreasing as growth/demand level improves, all else equal", () => {
+  const levels = ["low", "medium", "high"] as const;
+  for (let i = 0; i < levels.length - 1; i++) {
+    const lower = computeOpportunityScore(levels[i], levels[i], 2, 2);
+    const higher = computeOpportunityScore(levels[i + 1], levels[i + 1], 2, 2);
+    assert.ok(higher > lower, `expected ${levels[i + 1]}/${levels[i + 1]} (${higher}) > ${levels[i]}/${levels[i]} (${lower})`);
+  }
+});
+
+test("computeOpportunityScore - regulatory and competitor friction each pull the score down, but neither alone can zero it out from a high baseline", () => {
+  const clean = computeOpportunityScore("high", "high", 0, 0);
+  const heavyRegulation = computeOpportunityScore("high", "high", 10, 0);
+  const heavyCompetition = computeOpportunityScore("high", "high", 0, 10);
+  assert.ok(heavyRegulation < clean);
+  assert.ok(heavyCompetition < clean);
+  assert.ok(heavyRegulation >= 80, "regulation penalty alone must be capped, not able to crater a strong market's score");
+  assert.ok(heavyCompetition >= 80, "competitor penalty alone must be capped, not able to crater a strong market's score");
+});
+
+test("computeOpportunityScore - is always clamped to [0, 100]", () => {
+  assert.ok(computeOpportunityScore("low", "low", 999, 999) >= 0);
+  assert.ok(computeOpportunityScore("high", "high", 0, 0) <= 100);
+});
 
 test("runMarketIntelligence - with no OPENAI_API_KEY, degrades to a labeled low-confidence fallback with zero network calls", async () => {
   const original = global.fetch;

@@ -1,8 +1,7 @@
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import jwt from "jsonwebtoken";
 import { prisma } from "../../db/prisma.js";
-
-const JWT_SECRET = process.env.JWT_SECRET ?? "dev-secret-change-me";
+import { JWT_SECRET } from "../../infra/env.js";
 
 export interface User {
   id: string;

@@ -6,6 +6,9 @@ import { sendError } from "./errorResponse.js";
 import { objectStorage } from "../infra/objectStorage.js";
 import { proxyTo } from "./proxy.js";
 import { logger } from "../modules/logger/logger.js";
+import { requireWorkspaceMember, requireBusinessAccess } from "./middleware/workspaceAccess.js";
+import { getMembership } from "../modules/workspace/workspaceService.js";
+import type { AuthedRequest } from "./middleware/auth.js";
 
 // Generic ceiling for ad-spend fields — prevents an obviously-wrong value (e.g. a
 // misplaced decimal) from being accepted with no upper bound. Adjust per business need.
@@ -105,12 +108,12 @@ router.delete("/workspaces/members/:memberId", authProxy);
    NOTIFICATIONS
    ═══════════════════════════════════════════════ */
 
-router.get("/workspaces/:id/notifications", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/notifications", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   await seedDemoNotifications(req.params.id);
   res.json(await listNotifications(req.params.id));
 }));
 
-router.get("/workspaces/:id/notifications/count", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/notifications/count", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   res.json({ count: await unreadCount(req.params.id) });
 }));
 
@@ -119,7 +122,7 @@ router.patch("/notifications/:id/read", asyncHandler(async (req, res) => {
   catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
-router.post("/workspaces/:id/notifications/read-all", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/notifications/read-all", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   await markAllRead(req.params.id);
   res.status(204).send();
 }));
@@ -128,13 +131,13 @@ router.post("/workspaces/:id/notifications/read-all", asyncHandler(async (req, r
    ASSETS
    ═══════════════════════════════════════════════ */
 
-router.get("/workspaces/:id/assets", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/assets", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   await seedDemoAssets(req.params.id);
   const type = req.query.type as string | undefined;
   res.json(await listAssets(req.params.id, type as any));
 }));
 
-router.post("/workspaces/:id/assets", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/assets", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = z.object({
     name: z.string().trim().min(1),
     type: z.enum(["image", "video", "logo", "font", "template"]),
@@ -173,7 +176,7 @@ const assetUploadSchema = z.object({
   height: z.number().optional(),
 });
 
-router.post("/workspaces/:id/assets/upload", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/assets/upload", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = assetUploadSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -204,12 +207,12 @@ router.post("/workspaces/:id/assets/upload", asyncHandler(async (req, res) => {
    AI INSIGHTS
    ═══════════════════════════════════════════════ */
 
-router.get("/workspaces/:workspaceId/insights", asyncHandler(async (req, res) => {
+router.get("/workspaces/:workspaceId/insights", requireWorkspaceMember("params", "workspaceId"), asyncHandler(async (req, res) => {
   await seedDemoInsights(req.params.workspaceId);
   res.json(await listInsights(req.params.workspaceId));
 }));
 
-router.post("/workspaces/:workspaceId/insights/generate", asyncHandler(async (req, res) => {
+router.post("/workspaces/:workspaceId/insights/generate", requireWorkspaceMember("params", "workspaceId"), asyncHandler(async (req, res) => {
   const { businessId } = req.query as { businessId?: string };
   if (!businessId) return res.status(400).json({ error: "businessId query param required" });
   if (!(await getBusiness(businessId))) return res.status(404).json({ error: "Business not found" });
@@ -229,11 +232,11 @@ router.patch("/insights/:id/dismiss", asyncHandler(async (req, res) => {
    INTEGRATIONS
    ═══════════════════════════════════════════════ */
 
-router.get("/workspaces/:id/integrations", asyncHandler(async (req, res) => res.json((await getOrCreateIntegrations(req.params.id)).map(sanitizeIntegration))));
+router.get("/workspaces/:id/integrations", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => res.json((await getOrCreateIntegrations(req.params.id)).map(sanitizeIntegration))));
 
 const INTEGRATION_PLATFORMS = ["meta", "google", "tiktok", "shopify", "woocommerce", "pixel"] as const;
 
-router.post("/workspaces/:id/integrations/:platform/connect", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/integrations/:platform/connect", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const platform = req.params.platform as any;
   if (!INTEGRATION_PLATFORMS.includes(platform)) return res.status(400).json({ error: `Unknown platform "${platform}"` });
   const { accountName } = req.body;
@@ -244,12 +247,12 @@ router.post("/workspaces/:id/integrations/:platform/connect", asyncHandler(async
   }
 }));
 
-router.post("/workspaces/:id/integrations/:platform/disconnect", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/integrations/:platform/disconnect", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   try { res.json(sanitizeIntegration(await disconnectIntegration(req.params.id, req.params.platform as any))); }
   catch (err) { sendError(res, err, 400, "Disconnect failed"); }
 }));
 
-router.patch("/workspaces/:id/integrations/:platform/settings", asyncHandler(async (req, res) => {
+router.patch("/workspaces/:id/integrations/:platform/settings", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   try { res.json(sanitizeIntegration(await updateIntegrationSettings(req.params.id, req.params.platform as any, req.body ?? {}))); }
   catch (err) { sendError(res, err, 400, "Settings update failed"); }
 }));
@@ -261,7 +264,7 @@ const metaManualConnectSchema = z.object({
   pageAccessToken: z.string().trim().min(1).optional(),
 });
 
-router.post("/workspaces/:id/integrations/meta/connect-manual", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/integrations/meta/connect-manual", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = metaManualConnectSchema.safeParse(req.body);
   if (!parsed.success) return sendError(res, parsed.error, 400, "Invalid manual connect payload");
   try {
@@ -280,7 +283,7 @@ const googleManualConnectSchema = z.object({
   refreshToken: z.string().trim().min(1).optional(),
 });
 
-router.post("/workspaces/:id/integrations/google/connect-manual", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/integrations/google/connect-manual", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = googleManualConnectSchema.safeParse(req.body);
   if (!parsed.success) return sendError(res, parsed.error, 400, "Invalid manual connect payload");
   try {
@@ -293,32 +296,32 @@ router.post("/workspaces/:id/integrations/google/connect-manual", asyncHandler(a
 // Full account/page/Instagram/pixel lists for the campaign builder's selector dropdowns —
 // distinct from the single-account picker the OAuth callback stores (metaOAuth.ts). Falls
 // back to mock data when there's no live Meta connection so the builder always has options.
-router.get("/workspaces/:id/integrations/meta/ad-accounts", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/integrations/meta/ad-accounts", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   try { res.json(await listMetaAdAccountsGraph(req.params.id)); }
   catch (err) { sendError(res, err, 502, "Failed to list Meta ad accounts"); }
 }));
 
-router.get("/workspaces/:id/integrations/meta/pages", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/integrations/meta/pages", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   try { res.json(await listMetaPagesGraph(req.params.id)); }
   catch (err) { sendError(res, err, 502, "Failed to list Meta pages"); }
 }));
 
-router.get("/workspaces/:id/integrations/meta/pages/:pageId/instagram-accounts", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/integrations/meta/pages/:pageId/instagram-accounts", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   try { res.json(await listMetaInstagramAccountsGraph(req.params.id, req.params.pageId)); }
   catch (err) { sendError(res, err, 502, "Failed to list Instagram accounts"); }
 }));
 
-router.get("/workspaces/:id/integrations/meta/pixels", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/integrations/meta/pixels", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   try { res.json(await listMetaPixelsGraph(req.params.id)); }
   catch (err) { sendError(res, err, 502, "Failed to list Meta pixels"); }
 }));
 
-router.get("/workspaces/:id/integrations/google/customers", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/integrations/google/customers", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   try { res.json(await listGoogleCustomersApi(req.params.id)); }
   catch (err) { sendError(res, err, 502, "Failed to list Google Ads customers"); }
 }));
 
-router.get("/workspaces/:id/integrations/google/conversion-actions", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/integrations/google/conversion-actions", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   try { res.json(await listGoogleConversionActionsApi(req.params.id)); }
   catch (err) { sendError(res, err, 502, "Failed to list Google conversion actions"); }
 }));
@@ -347,9 +350,9 @@ const ageRangeRefinement = { message: "ageMin must be less than or equal to ageM
 const savedAudienceSchema = savedAudienceFields.refine(ageRangeValid, ageRangeRefinement);
 const savedAudienceUpdateSchema = savedAudienceFields.partial().refine(ageRangeValid, ageRangeRefinement);
 
-router.get("/workspaces/:id/audiences", asyncHandler(async (req, res) => res.json(await listSavedAudiences(req.params.id))));
+router.get("/workspaces/:id/audiences", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => res.json(await listSavedAudiences(req.params.id))));
 
-router.post("/workspaces/:id/audiences", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/audiences", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = savedAudienceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.status(201).json(await createSavedAudience(req.params.id, parsed.data));
@@ -368,7 +371,7 @@ router.delete("/audiences/:id", asyncHandler(async (req, res) => {
   res.status(204).send();
 }));
 
-router.post("/workspaces/:id/audiences/:audienceId/reach-estimate", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/audiences/:audienceId/reach-estimate", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const audience = await getSavedAudience(req.params.audienceId);
   if (!audience) return res.status(404).json({ error: "Not found" });
 
@@ -393,7 +396,7 @@ const ephemeralReachEstimateSchema = z.object({
 
 // Same reach-estimate machinery as above, but for the campaign builder's audience gauge
 // where the targeting hasn't been (and may never be) saved as a SavedAudience.
-router.post("/workspaces/:id/reach-estimate", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/reach-estimate", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = ephemeralReachEstimateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const audience = { id: "ephemeral", workspaceId: req.params.id, name: "ephemeral", exclusions: [], createdAt: new Date().toISOString(), ...parsed.data };
@@ -418,20 +421,20 @@ const crmWebhookConfigSchema = z.object({
   secret: z.string().min(1).nullable().optional(),
 });
 
-router.get("/workspaces/:id/crm-webhook", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/crm-webhook", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const config = await getCrmWebhookConfig(req.params.id);
   // Never return the secret — same treatment as an OAuth token, only "is one set" matters here.
   res.json({ url: config?.url ?? null, configured: Boolean(config) });
 }));
 
-router.put("/workspaces/:id/crm-webhook", asyncHandler(async (req, res) => {
+router.put("/workspaces/:id/crm-webhook", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = crmWebhookConfigSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   await setCrmWebhookConfig(req.params.id, parsed.data);
   res.status(204).send();
 }));
 
-router.delete("/workspaces/:id/crm-webhook", asyncHandler(async (req, res) => {
+router.delete("/workspaces/:id/crm-webhook", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   await clearCrmWebhookConfig(req.params.id);
   res.status(204).send();
 }));
@@ -445,9 +448,12 @@ const generationJobSchema = z.object({
   productUrl: z.string().trim().min(1).optional(),
   prompt: z.string().trim().min(1).optional(),
   wantVideo: z.boolean().default(false),
+  aspectRatio: z.enum(["square", "portrait", "landscape"]).optional(),
+  language: z.string().trim().min(1).optional(),
+  quality: z.enum(["standard", "high"]).optional(),
 }).refine((v) => v.productUrl || v.prompt, { message: "Either productUrl or prompt is required" });
 
-router.post("/workspaces/:id/generation-jobs", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/generation-jobs", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = generationJobSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const job = await createGenerationJob(req.params.id, parsed.data);
@@ -462,7 +468,7 @@ router.get("/generation-jobs/:id", asyncHandler(async (req, res) => {
 }));
 
 const catalogSourceSchema = z.enum(["all", "shopify", "facebook", "google", "woocommerce"]);
-router.get("/workspaces/:id/products", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/products", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = catalogSourceSchema.safeParse(req.query.source ?? "all");
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.json(await getProductCatalog(req.params.id, parsed.data));
@@ -472,12 +478,12 @@ router.get("/workspaces/:id/products", asyncHandler(async (req, res) => {
    DRAFTS
    ═══════════════════════════════════════════════ */
 
-router.get("/workspaces/:id/drafts", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/drafts", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   await seedDemoDrafts(req.params.id);
   res.json(await listDrafts(req.params.id));
 }));
 
-router.post("/workspaces/:id/drafts", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/drafts", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = z.object({
     name: z.string().trim().min(1),
     type: z.enum(["campaign", "ad_set", "ad"]),
@@ -588,7 +594,7 @@ router.patch("/ads/:id", asyncHandler(async (req, res) => {
    BUSINESSES (existing)
    ═══════════════════════════════════════════════ */
 
-const businessSchema = z.object({
+const businessProfileFields = {
   name: z.string().trim().min(1),
   website: z.string().url().optional(),
   industry: z.string().trim().min(1),
@@ -597,31 +603,42 @@ const businessSchema = z.object({
   targetAudience: z.string().optional(),
   brandName: z.string().trim().min(1).optional(),
   logoUrls: z.array(z.string()).max(5).optional(),
-});
+};
+const businessCreateSchema = z.object({ workspaceId: z.string().min(1), ...businessProfileFields });
+// workspaceId is deliberately excluded here too (not just at the service layer) — moving a
+// business to a different workspace isn't a normal profile edit.
+const businessUpdateSchema = z.object(businessProfileFields).partial();
 
-router.post("/businesses", asyncHandler(async (req, res) => {
-  const parsed = businessSchema.safeParse(req.body);
+router.post("/businesses", requireWorkspaceMember("body", "workspaceId"), asyncHandler(async (req, res) => {
+  const parsed = businessCreateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.status(201).json(await createBusiness(parsed.data));
 }));
 
-router.get("/businesses", asyncHandler(async (_req, res) => res.json(await listBusinesses())));
+router.get("/businesses", asyncHandler(async (req: AuthedRequest, res) => {
+  const workspaceId = typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined;
+  if (!workspaceId) return res.status(400).json({ error: "workspaceId query param required" });
+  if (!(await getMembership(workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this workspace" });
+  }
+  res.json(await listBusinesses(workspaceId));
+}));
 
-router.get("/businesses/:id", asyncHandler(async (req, res) => {
+router.get("/businesses/:id", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   const business = await getBusiness(req.params.id);
   if (!business) return res.status(404).json({ error: "Not found" });
   res.json(business);
 }));
 
-router.patch("/businesses/:id", asyncHandler(async (req, res) => {
+router.patch("/businesses/:id", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   const business = await getBusiness(req.params.id);
   if (!business) return res.status(404).json({ error: "Not found" });
-  const parsed = businessSchema.partial().safeParse(req.body);
+  const parsed = businessUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.json(await updateBusiness(req.params.id, parsed.data));
 }));
 
-router.post("/businesses/:id/strategies", asyncHandler(async (req, res) => {
+router.post("/businesses/:id/strategies", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   const business = await getBusiness(req.params.id);
   if (!business) return res.status(404).json({ error: "Business not found" });
   try {
@@ -632,7 +649,7 @@ router.post("/businesses/:id/strategies", asyncHandler(async (req, res) => {
   }
 }));
 
-router.post("/businesses/:id/strategies/from-research", asyncHandler(async (req, res) => {
+router.post("/businesses/:id/strategies/from-research", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   const business = await getBusiness(req.params.id);
   if (!business) return res.status(404).json({ error: "Business not found" });
   const researchSessionId = typeof req.body?.researchSessionId === "string" ? req.body.researchSessionId : undefined;
@@ -665,7 +682,7 @@ router.post("/businesses/:id/strategies/from-research", asyncHandler(async (req,
 }));
 
 
-router.get("/businesses/:id/strategies", asyncHandler(async (req, res) => res.json(await listStrategiesForBusiness(req.params.id))));
+router.get("/businesses/:id/strategies", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => res.json(await listStrategiesForBusiness(req.params.id))));
 router.get("/strategies/:id", asyncHandler(async (req, res) => {
   const strategy = await getStrategy(req.params.id);
   if (!strategy) return res.status(404).json({ error: "Not found" });
@@ -673,17 +690,17 @@ router.get("/strategies/:id", asyncHandler(async (req, res) => {
 }));
 
 // Analytics
-router.get("/businesses/:id/analytics/summary", asyncHandler(async (req, res) => {
+router.get("/businesses/:id/analytics/summary", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   const period = (req.query.period as "all" | "month" | "week") ?? "all";
   res.json(await getAnalyticsSummary(req.params.id, period));
 }));
 
-router.get("/businesses/:id/audience-suggestions", asyncHandler(async (req, res) => {
+router.get("/businesses/:id/audience-suggestions", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   try { res.json(await getAudienceSuggestions(req.params.id)); }
   catch (err) { sendError(res, err, 502, "Audience suggestion failed"); }
 }));
 
-router.get("/businesses/:id/ad-insights", asyncHandler(async (req, res) => {
+router.get("/businesses/:id/ad-insights", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   const parsed = z.enum(["meta", "google", "tiktok", "bing"]).safeParse(req.query.network ?? "meta");
   if (!parsed.success) return res.status(400).json({ error: "Invalid network" });
   res.json(await getAdInsights(req.params.id, parsed.data));
@@ -692,7 +709,7 @@ router.get("/businesses/:id/ad-insights", asyncHandler(async (req, res) => {
 const strategistChatSchema = z.object({
   messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().min(1) })).min(1),
 });
-router.post("/businesses/:id/strategist/chat", asyncHandler(async (req, res) => {
+router.post("/businesses/:id/strategist/chat", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   const business = await getBusiness(req.params.id);
   if (!business) return res.status(404).json({ error: "Business not found" });
   const parsed = strategistChatSchema.safeParse(req.body);
@@ -705,7 +722,7 @@ router.post("/businesses/:id/strategist/chat", asyncHandler(async (req, res) => 
   }
 }));
 
-router.post("/businesses/:id/copilot/chat", asyncHandler(async (req, res) => {
+router.post("/businesses/:id/copilot/chat", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   const business = await getBusiness(req.params.id);
   if (!business) return res.status(404).json({ error: "Business not found" });
   const parsed = strategistChatSchema.safeParse(req.body);
@@ -727,8 +744,8 @@ const creativeSchema = z.object({
   tags: z.array(z.string()).optional(),
 });
 
-router.get("/businesses/:id/creatives", asyncHandler(async (req, res) => res.json(await listCreatives(req.params.id))));
-router.post("/businesses/:id/creatives", asyncHandler(async (req, res) => {
+router.get("/businesses/:id/creatives", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => res.json(await listCreatives(req.params.id))));
+router.post("/businesses/:id/creatives", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   const parsed = creativeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.status(201).json(await createCreative(req.params.id, parsed.data));
@@ -756,7 +773,7 @@ router.post("/creatives/variations", asyncHandler(async (req, res) => {
 const campaignProxy = proxyTo(CAMPAIGN_SERVICE_URL);
 router.post("/campaigns", campaignProxy);
 router.post("/campaigns/from-suggestions", campaignProxy);
-router.get("/businesses/:id/campaigns", campaignProxy);
+router.get("/businesses/:id/campaigns", requireBusinessAccess("params", "id"), campaignProxy);
 router.get("/campaigns/:id", campaignProxy);
 router.patch("/campaigns/:id", campaignProxy);
 router.post("/campaigns/:id/launch", campaignProxy);
@@ -770,8 +787,8 @@ router.get("/campaigns/:id/trend", asyncHandler(async (req, res) => res.json(awa
 router.post("/campaigns/:id/optimize", campaignProxy);
 
 // Billing — extracted to campaign-service (roadmap Phase 2).
-router.post("/businesses/:id/invoices", campaignProxy);
-router.get("/businesses/:id/invoices", campaignProxy);
+router.post("/businesses/:id/invoices", requireBusinessAccess("params", "id"), campaignProxy);
+router.get("/businesses/:id/invoices", requireBusinessAccess("params", "id"), campaignProxy);
 
 // Onboarding
 const scrapeSchema = z.object({ url: z.string().min(1) });
@@ -822,7 +839,7 @@ router.post("/onboarding/deep-research", asyncHandler(async (req, res) => {
 // cloned instead of re-run unless ?force=true, so resubmitting doesn't re-spend real
 // web searches.
 const researchSessionSchema = z.object({ url: z.string().min(1), businessId: z.string().optional() });
-router.post("/workspaces/:id/research-sessions", asyncHandler(async (req, res) => {
+router.post("/workspaces/:id/research-sessions", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = researchSessionSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { url, businessId } = parsed.data;
@@ -846,9 +863,12 @@ router.post("/workspaces/:id/research-sessions", asyncHandler(async (req, res) =
   }
 }));
 
-router.get("/research-sessions/:id", asyncHandler(async (req, res) => {
+router.get("/research-sessions/:id", asyncHandler(async (req: AuthedRequest, res) => {
   const session = await getResearchSession(req.params.id);
   if (!session) return res.status(404).json({ error: "Research session not found" });
+  if (!(await getMembership(session.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this research session" });
+  }
   res.json(session);
 }));
 
@@ -868,7 +888,7 @@ const researchStartSchema = z.object({
   businessId: z.string().optional(),
 });
 
-router.post("/research/start", asyncHandler(async (req, res) => {
+router.post("/research/start", requireWorkspaceMember("body", "workspaceId"), asyncHandler(async (req, res) => {
   const parsed = researchStartSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { workspaceId, url, businessId } = parsed.data;
@@ -882,15 +902,21 @@ router.post("/research/start", asyncHandler(async (req, res) => {
   }
 }));
 
-router.get("/research/:id", asyncHandler(async (req, res) => {
+router.get("/research/:id", asyncHandler(async (req: AuthedRequest, res) => {
   const job = await getResearchJobWithExecutions(req.params.id);
   if (!job) return res.status(404).json({ error: "Research job not found" });
+  if (!(await getMembership(job.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this research job" });
+  }
   res.json(job);
 }));
 
-router.get("/research/:id/status", asyncHandler(async (req, res) => {
+router.get("/research/:id/status", asyncHandler(async (req: AuthedRequest, res) => {
   const job = await getResearchOrchestratorJob(req.params.id);
   if (!job) return res.status(404).json({ error: "Research job not found" });
+  if (!(await getMembership(job.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this research job" });
+  }
   res.json({
     id: job.id,
     status: job.status,
@@ -918,13 +944,19 @@ const campaignGenerateSchema = z.object({
   dailyBudgetCents: z.number().int().positive().max(MAX_BUDGET_CENTS).optional(),
 });
 
-router.post("/campaigns/generate", asyncHandler(async (req, res) => {
+router.post("/campaigns/generate", requireWorkspaceMember("body", "workspaceId"), asyncHandler(async (req, res) => {
   const parsed = campaignGenerateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { workspaceId, businessId, url, name, dailyBudgetCents } = parsed.data;
 
   const business = await getBusiness(businessId);
   if (!business) return res.status(404).json({ error: "Business not found" });
+  // Caller already proved membership of `workspaceId` above — this additionally stops
+  // that real membership from being used to generate a campaign against a DIFFERENT
+  // workspace's business by passing a mismatched businessId.
+  if (business.workspaceId !== workspaceId) {
+    return res.status(403).json({ error: "This business does not belong to the given workspace" });
+  }
 
   try {
     const job = await createCampaignGenerationJob({ workspaceId, businessId, url, name, dailyBudgetCents });
@@ -935,15 +967,21 @@ router.post("/campaigns/generate", asyncHandler(async (req, res) => {
   }
 }));
 
-router.get("/campaigns/generate/:id", asyncHandler(async (req, res) => {
+router.get("/campaigns/generate/:id", asyncHandler(async (req: AuthedRequest, res) => {
   const job = await getCampaignGenerationJob(req.params.id);
   if (!job) return res.status(404).json({ error: "Campaign generation job not found" });
+  if (!(await getMembership(job.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this campaign generation job" });
+  }
   res.json(job);
 }));
 
-router.get("/campaigns/generate/:id/status", asyncHandler(async (req, res) => {
+router.get("/campaigns/generate/:id/status", asyncHandler(async (req: AuthedRequest, res) => {
   const job = await getCampaignGenerationJob(req.params.id);
   if (!job) return res.status(404).json({ error: "Campaign generation job not found" });
+  if (!(await getMembership(job.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this campaign generation job" });
+  }
   res.json({
     id: job.id,
     status: job.status,
@@ -984,8 +1022,8 @@ router.post("/products/import", scraperProxy);
 
 const supportTicketSchema = z.object({ subject: z.string().trim().min(1), message: z.string().trim().min(1) });
 
-router.get("/workspaces/:id/support-tickets", asyncHandler(async (req, res) => res.json(await listSupportTickets(req.params.id))));
-router.post("/workspaces/:id/support-tickets", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/support-tickets", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => res.json(await listSupportTickets(req.params.id))));
+router.post("/workspaces/:id/support-tickets", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = supportTicketSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.status(201).json(await createSupportTicket(req.params.id, parsed.data));
@@ -997,8 +1035,8 @@ router.post("/workspaces/:id/support-tickets", asyncHandler(async (req, res) => 
 
 const notificationPreferencesSchema = z.object({ emailAlerts: z.boolean(), slackAlerts: z.boolean(), digestAlerts: z.boolean() });
 
-router.get("/workspaces/:id/notification-preferences", asyncHandler(async (req, res) => res.json(await getNotificationPreferences(req.params.id))));
-router.put("/workspaces/:id/notification-preferences", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/notification-preferences", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => res.json(await getNotificationPreferences(req.params.id))));
+router.put("/workspaces/:id/notification-preferences", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = notificationPreferencesSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.json(await setNotificationPreferences(req.params.id, parsed.data));
@@ -1008,8 +1046,8 @@ router.put("/workspaces/:id/notification-preferences", asyncHandler(async (req, 
    RBAC ROLE MATRIX
    ═══════════════════════════════════════════════ */
 
-router.get("/workspaces/:id/rbac-matrix", asyncHandler(async (req, res) => res.json(await getRbacMatrix(req.params.id))));
-router.put("/workspaces/:id/rbac-matrix", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/rbac-matrix", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => res.json(await getRbacMatrix(req.params.id))));
+router.put("/workspaces/:id/rbac-matrix", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = z.record(z.record(z.boolean())).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.json(await setRbacMatrix(req.params.id, parsed.data));
@@ -1019,8 +1057,8 @@ router.put("/workspaces/:id/rbac-matrix", asyncHandler(async (req, res) => {
    DEVELOPER PORTAL — webhooks & API key
    ═══════════════════════════════════════════════ */
 
-router.get("/workspaces/:id/developer/webhooks", asyncHandler(async (req, res) => res.json(await listDeveloperWebhooks(req.params.id))));
-router.post("/workspaces/:id/developer/webhooks", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/developer/webhooks", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => res.json(await listDeveloperWebhooks(req.params.id))));
+router.post("/workspaces/:id/developer/webhooks", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = z.object({ url: z.string().url(), events: z.array(z.string()).min(1) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.status(201).json(await createDeveloperWebhook(req.params.id, parsed.data));
@@ -1031,15 +1069,15 @@ router.delete("/developer/webhooks/:id", asyncHandler(async (req, res) => {
   res.status(204).send();
 }));
 
-router.get("/workspaces/:id/developer/api-key", asyncHandler(async (req, res) => res.json(await getOrCreateApiKey(req.params.id))));
-router.post("/workspaces/:id/developer/api-key/regenerate", asyncHandler(async (req, res) => res.json(await regenerateApiKey(req.params.id))));
+router.get("/workspaces/:id/developer/api-key", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => res.json(await getOrCreateApiKey(req.params.id))));
+router.post("/workspaces/:id/developer/api-key/regenerate", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => res.json(await regenerateApiKey(req.params.id))));
 
 /* ═══════════════════════════════════════════════
    BILLING — payment method (mock; never stores a card number or CVC)
    ═══════════════════════════════════════════════ */
 
-router.get("/workspaces/:id/payment-method", asyncHandler(async (req, res) => res.json(await getPaymentMethod(req.params.id))));
-router.put("/workspaces/:id/payment-method", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/payment-method", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => res.json(await getPaymentMethod(req.params.id))));
+router.put("/workspaces/:id/payment-method", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = z.object({ cardNumber: z.string().min(1), expiry: z.string().min(1), cvc: z.string().min(1) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const validationError = validatePaymentMethodInput(parsed.data);
@@ -1062,8 +1100,8 @@ const automationRuleSchema = z.object({
   priority: z.enum(["low", "medium", "high"]),
 });
 
-router.get("/workspaces/:id/automation-rules", asyncHandler(async (req, res) => res.json(await listAutomationRules(req.params.id))));
-router.post("/workspaces/:id/automation-rules", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/automation-rules", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => res.json(await listAutomationRules(req.params.id))));
+router.post("/workspaces/:id/automation-rules", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = automationRuleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.status(201).json(await createAutomationRule(req.params.id, parsed.data));
@@ -1084,8 +1122,8 @@ const optimizationGoalSchema = z.object({
   locations: z.array(z.string()),
 });
 
-router.get("/workspaces/:id/optimization-goal", asyncHandler(async (req, res) => res.json(await getOptimizationGoal(req.params.id))));
-router.put("/workspaces/:id/optimization-goal", asyncHandler(async (req, res) => {
+router.get("/workspaces/:id/optimization-goal", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => res.json(await getOptimizationGoal(req.params.id))));
+router.put("/workspaces/:id/optimization-goal", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = optimizationGoalSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.json(await setOptimizationGoal(req.params.id, parsed.data));

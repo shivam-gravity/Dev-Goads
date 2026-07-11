@@ -1,5 +1,6 @@
 import { contextFreshness } from "../knowledge/KnowledgeFusionEngine.js";
 import { readMemory } from "../memory/MemoryCoordinator.js";
+import { OUTCOME_MEMORY_KIND } from "./campaign-learning-engine.js";
 import type { ResearchContext } from "../types/index.js";
 import { CATEGORY_FIELDS } from "./recommendation-engine.js";
 import type { Recommendation, RankedRecommendation, RankingFactors, RankingWeights } from "./types.js";
@@ -66,19 +67,43 @@ function crossProviderAgreementFor(context: ResearchContext, category: Recommend
 /** Queries Research Memory for prior "decision-recommendation" entries similar to this
  * recommendation's title — recurring, previously-surfaced recommendations read as more
  * validated than a first-time suggestion. No prior entries (the common first-run case)
- * scores a neutral 0.5, i.e. "unproven, not disproven." */
+ * scores a neutral 0.5, i.e. "unproven, not disproven." This is a self-referential signal
+ * (it only knows a similar recommendation was suggested before, not whether it worked) —
+ * historicalSuccessFor below blends it with the real-outcome signal from
+ * campaign-learning-engine.ts, which supersedes it once real data exists. */
+async function recurrenceScoreFor(context: ResearchContext, queryText: string): Promise<number> {
+  const matches = await readMemory({ kind: MEMORY_KIND, queryText, workspaceId: context.workspaceId, topK: 3, ttlMs: HISTORICAL_TTL_MS });
+  if (matches.length === 0) return 0.5;
+  const avgScore = matches.reduce((sum, m) => sum + m.score, 0) / matches.length;
+  return Math.min(0.5 + avgScore * 0.5, 1);
+}
+
+/** Queries Research Memory for real campaign performance outcomes (campaign-learning-
+ * engine.ts) previously attributed to a similar recommendation — the actual "did acting
+ * on this work" signal, as opposed to recurrenceScoreFor's "was this merely suggested
+ * before." Returns null (not a neutral score) when none exist yet, so the caller can tell
+ * "no outcome data" apart from "outcome data scored exactly neutral." */
+async function outcomeScoreFor(context: ResearchContext, queryText: string): Promise<number | null> {
+  const matches = await readMemory({ kind: OUTCOME_MEMORY_KIND, queryText, workspaceId: context.workspaceId, topK: 3 });
+  if (matches.length === 0) return null;
+  const avg100 = matches.reduce((sum, m) => sum + (typeof m.metadata?.outcomeScore === "number" ? m.metadata.outcomeScore : 50), 0) / matches.length;
+  return avg100 / 100;
+}
+
+/** Blends recurrence (was this suggested before) with real outcomes (did it actually work)
+ * into the single historicalSuccess ranking factor. Once real outcome data exists for a
+ * similar recommendation, it dominates the blend (70/30) instead of merely nudging it —
+ * this is the mechanism by which campaign generation gets smarter as more real campaigns
+ * complete, not just at the moment a recommendation is first suggested. */
 async function historicalSuccessFor(context: ResearchContext, recommendation: Recommendation): Promise<number> {
+  const queryText = `${recommendation.category}: ${recommendation.title}`;
   try {
-    const matches = await readMemory({
-      kind: MEMORY_KIND,
-      queryText: `${recommendation.category}: ${recommendation.title}`,
-      workspaceId: context.workspaceId,
-      topK: 3,
-      ttlMs: HISTORICAL_TTL_MS,
-    });
-    if (matches.length === 0) return 0.5;
-    const avgScore = matches.reduce((sum, m) => sum + m.score, 0) / matches.length;
-    return Math.round(Math.min(0.5 + avgScore * 0.5, 1) * 100) / 100;
+    const [recurrence, outcome] = await Promise.all([
+      recurrenceScoreFor(context, queryText),
+      outcomeScoreFor(context, queryText),
+    ]);
+    const blended = outcome === null ? recurrence : outcome * 0.7 + recurrence * 0.3;
+    return Math.round(Math.min(blended, 1) * 100) / 100;
   } catch {
     return 0.5;
   }

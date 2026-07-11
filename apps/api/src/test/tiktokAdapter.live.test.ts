@@ -64,12 +64,12 @@ test("TikTok Ads Adapter (live) - fetchInsights parses metrics from the report e
       assert.ok(String(url).includes("/report/integrated/get/"));
       return {
         ok: true,
-        json: async () => ({ data: { list: [{ metrics: { impressions: "1000", clicks: "40", conversions: "4", spend: "20.00" } }] } }),
+        json: async () => ({ data: { list: [{ metrics: { impressions: "1000", reach: "750", clicks: "40", conversions: "4", spend: "20.00" } }] } }),
       } as Response;
     }) as typeof fetch,
     async () => {
       const stats = await tiktokAdapter.fetchInsights("tiktok_123456", "2026-07-06");
-      assert.deepStrictEqual(stats, { impressions: 1000, clicks: 40, conversions: 4, spendCents: 2000 });
+      assert.deepStrictEqual(stats, { impressions: 1000, reach: 750, clicks: 40, conversions: 4, spendCents: 2000 });
     }
   );
 });

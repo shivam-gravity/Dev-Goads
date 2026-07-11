@@ -26,6 +26,32 @@ function fmtCpa(cents: number | null) {
   return cents == null ? "—" : (cents / 100).toFixed(1);
 }
 
+function csvCell(value: string | number): string {
+  const s = String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadInsightsCsv(network: AdInsightNetwork, data: AdInsightsResponse) {
+  const lines: string[] = [];
+  lines.push("Section,Name,Metric 1,Value 1,Metric 2,Value 2,Campaigns");
+  for (const a of data.audience.top) {
+    lines.push([`Audience`, a.name, "CPA", fmtCpa(a.cpaCents), "Spend", fmtMoney(a.spendCents), a.campaignCount].map(csvCell).join(","));
+  }
+  for (const p of data.pages.top) {
+    lines.push([`Page`, p.url, "CVR%", p.cvr, "Spend", fmtMoney(p.spendCents), p.campaignCount].map(csvCell).join(","));
+  }
+  for (const ad of data.creative.topAds) {
+    lines.push([`Creative`, ad.headline, "CTR%", ad.ctr, "CPA", fmtCpa(ad.cpaCents), ad.campaignCount].map(csvCell).join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ad-insights-${network}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function Analytics({ businessId }: { businessId: string }) {
   const [network, setNetwork] = useState<AdInsightNetwork>("meta");
   const [data, setData] = useState<AdInsightsResponse | null>(null);
@@ -56,7 +82,14 @@ export default function Analytics({ businessId }: { businessId: string }) {
           <h1>Ad Insights</h1>
           <p className="subtitle">Audience, landing page, and creative performance breakdowns across your ad platforms.</p>
         </div>
-        {data?.isDemo && <span className="pill demo-pill">Demo</span>}
+        <div className="flex gap-2 items-center">
+          {data?.isDemo && <span className="pill demo-pill">Demo</span>}
+          {data && !data.isDemo && (
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => downloadInsightsCsv(network, data)}>
+              ⬇ Export CSV
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <p className="error">{error}</p>}

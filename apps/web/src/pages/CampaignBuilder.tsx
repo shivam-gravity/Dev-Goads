@@ -11,6 +11,8 @@ import {
   type GenerationJob,
   type GoogleConversionAction,
   type GoogleCustomer,
+  type ImageAspectRatio,
+  type ImageQuality,
   type MetaAdAccount,
   type MetaInstagramAccount,
   type MetaPage,
@@ -55,7 +57,10 @@ function formatReach(estimate: ReachEstimate): string {
 export default function CampaignBuilder() {
   const { campaignId } = useParams<{ campaignId: string }>();
   const navigate = useNavigate();
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo";
+  // "demo-workspace" matches AuthContext's own default and the seeded demo Business —
+  // "demo" is a separate, also-real seeded workspace that demo-business does NOT belong
+  // to, so falling back to it here would silently 403 every workspace-scoped call below.
+  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
 
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -96,6 +101,9 @@ export default function CampaignBuilder() {
   // Ad Creatives
   const [creativeAssets, setCreativeAssets] = useState<CreativeAssetRef[]>([]);
   const [genJobs, setGenJobs] = useState<GenerationJob[]>([]);
+  const [genAspectRatio, setGenAspectRatio] = useState<ImageAspectRatio>("square");
+  const [genLanguage, setGenLanguage] = useState("English");
+  const [genQuality, setGenQuality] = useState<ImageQuality>("standard");
   const pollHandles = useRef<Record<string, ReturnType<typeof setInterval>>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -126,7 +134,12 @@ export default function CampaignBuilder() {
       setIncludedVariantIds(new Set(startingVariants.map((v) => v.id)));
       setActiveVariantId(startingVariants[0].id);
       setCreativeAssets(c.creativeAssets ?? []);
-      setNewAdNetwork(startingVariants[0].network);
+      // Prefer a network that actually has a working ad list — TikTok's sidebar renders a
+      // "coming soon" placeholder instead of the campaign's ads, so if TikTok's variants
+      // simply happened to be generated first, defaulting to it here would hide real,
+      // ready-to-review Meta/Google ads behind that placeholder on first load.
+      const firstUsableVariant = startingVariants.find((v) => v.network !== "tiktok") ?? startingVariants[0];
+      setNewAdNetwork(firstUsableVariant.network);
     }).catch((err) => setLoadError(err instanceof Error ? err.message : "Failed to load campaign"));
   }, [campaignId]);
 
@@ -314,11 +327,14 @@ export default function CampaignBuilder() {
     if (!campaign || creativeAssets.length >= MAX_CREATIVES || isGenerating) return;
     setActionError(null);
     try {
-      const job = await api.createGenerationJob(campaign.businessId, {
+      const job = await api.createGenerationJob(wsId, {
         businessId: campaign.businessId,
         productUrl: finalUrl.trim() || undefined,
         prompt: finalUrl.trim() ? undefined : (activeCreative.headline || "A compelling product ad creative"),
         wantVideo: false,
+        aspectRatio: genAspectRatio,
+        language: genLanguage,
+        quality: genQuality,
       });
       setGenJobs((prev) => [job, ...prev]);
       pollGenJob(job.id);
@@ -629,6 +645,38 @@ export default function CampaignBuilder() {
 
             <section className="card ad-creatives-card mt-4">
               <h2>🖼 Ad Creatives <span className="muted-text">{creativeAssets.length}/{MAX_CREATIVES}</span></h2>
+
+              <div className="creative-gen-options mt-2">
+                <label>
+                  Aspect ratio
+                  <select value={genAspectRatio} onChange={(e) => setGenAspectRatio(e.target.value as ImageAspectRatio)} disabled={isGenerating}>
+                    <option value="square">Square (1:1)</option>
+                    <option value="portrait">Portrait (Story/Reel)</option>
+                    <option value="landscape">Landscape</option>
+                  </select>
+                </label>
+                <label>
+                  Language
+                  <select value={genLanguage} onChange={(e) => setGenLanguage(e.target.value)} disabled={isGenerating}>
+                    <option value="English">English</option>
+                    <option value="Spanish">Spanish</option>
+                    <option value="French">French</option>
+                    <option value="German">German</option>
+                    <option value="Portuguese">Portuguese</option>
+                    <option value="Hindi">Hindi</option>
+                    <option value="Japanese">Japanese</option>
+                    <option value="Arabic">Arabic</option>
+                  </select>
+                </label>
+                <label>
+                  Quality
+                  <select value={genQuality} onChange={(e) => setGenQuality(e.target.value as ImageQuality)} disabled={isGenerating}>
+                    <option value="standard">Standard</option>
+                    <option value="high">High</option>
+                  </select>
+                </label>
+              </div>
+
               <div className="creative-asset-actions mt-3">
                 <button type="button" className="btn btn-secondary btn-full" onClick={handleAiGenerateCreative} disabled={creativeAssets.length >= MAX_CREATIVES || isGenerating}>{isGenerating ? "Generating…" : "✨ AI Generation"}</button>
                 <button type="button" className="btn btn-secondary btn-full" onClick={handleUploadClick} disabled={creativeAssets.length >= MAX_CREATIVES}>⬆ Upload</button>
