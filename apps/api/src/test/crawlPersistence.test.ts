@@ -11,6 +11,8 @@ import {
   persistCrawlPages,
 } from "../research/crawl/crawlPersistence.js";
 import { domainFromWebsite } from "../modules/business/businessService.js";
+import { loadVerifiedFacts, verifiedFactsForPrompt } from "../agents/crawlFacts.js";
+import type { ResearchContext } from "../research/types/index.js";
 import type { ScrapedSite } from "../types/index.js";
 import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
 
@@ -126,6 +128,43 @@ test("persistCrawlFacts - resolves sourceUrl to page rows (exact + trailing-slas
 
     const usp = facts.find((f) => f.field === "usp")!;
     assert.strictEqual(usp.crawlPageId, null, "a fact from an uncrawled URL persists without page attribution");
+  } finally {
+    await cleanupCrawl(crawlJobId, businessId);
+  }
+});
+
+function factContext(crawlJobId?: string): ResearchContext {
+  return {
+    jobId: "job-facts", workspaceId: "ws-crawltest", url: "https://crawltest.example.com",
+    website: { title: "t", description: "d", excerpt: "e", images: [], crawledPages: [], pagesDiscovered: 1, dataSource: "crawl", crawlJobId },
+    market: null, technology: null, competitors: null, keywords: null, audience: null, company: null, news: null,
+    metadata: { jobId: "job-facts", generatedAt: "now", totalDurationMs: 0, providersSucceeded: [], providersPartial: [], providersFailed: [], confidenceByProvider: {}, overallConfidence: 0 },
+  } as unknown as ResearchContext;
+}
+
+test("loadVerifiedFacts - loads facts (highest confidence first, with source URLs) for a context carrying a crawlJobId, [] without one", async () => {
+  const businessId = await createFixtureBusiness();
+  const site = fakeSite();
+  const crawlJobId = await createCrawlJob({ businessId, workspaceId: "ws-crawltest", url: site.url });
+
+  try {
+    await persistCrawlPages(crawlJobId, site);
+    await persistCrawlFacts(crawlJobId, [
+      { field: "pricing.startingPrice", value: "₹2,999/month", sourceUrl: `${site.url}/pricing`, confidence: 0.98 },
+      { field: "usp", value: "all-in-one", sourceUrl: `${site.url}/pricing`, confidence: 0.6 },
+    ]);
+
+    const facts = await loadVerifiedFacts(factContext(crawlJobId));
+    assert.strictEqual(facts.length, 2);
+    assert.strictEqual(facts[0].field, "pricing.startingPrice", "highest confidence must come first");
+    assert.strictEqual(facts[0].sourceUrl, `${site.url}/pricing`, "the source page URL must ride along for prompt provenance");
+
+    // No crawlJobId (a plain fixture context) → no DB dependency, empty result.
+    assert.deepStrictEqual(await loadVerifiedFacts(factContext(undefined)), []);
+
+    // Prompt rendering: JSON array when facts exist, explicit marker when none.
+    assert.ok(verifiedFactsForPrompt(facts).includes("pricing.startingPrice"));
+    assert.ok(verifiedFactsForPrompt([]).includes("No verified crawl facts"));
   } finally {
     await cleanupCrawl(crawlJobId, businessId);
   }

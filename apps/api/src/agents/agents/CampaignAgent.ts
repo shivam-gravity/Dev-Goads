@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AIAgent } from "../interfaces/AIAgent.js";
+import { loadVerifiedFacts, verifiedFactsForPrompt } from "../crawlFacts.js";
 import { callAgentModel, collectEvidence, computeConfidence, runAgentStep } from "../support.js";
 import type { AgentResult, CampaignAgentOutput, ResearchContext } from "../types/index.js";
 
@@ -73,9 +74,11 @@ export class CampaignAgent implements AIAgent<CampaignAgentOutput> {
   async execute(context: ResearchContext): Promise<AgentResult<CampaignAgentOutput>> {
     return runAgentStep(this.name, async () => {
       const fields = ["website", "company", "audience", "market", "competitors"] as const;
+      const verifiedFacts = await loadVerifiedFacts(context);
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
         vars: {
+          verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
           website: JSON.stringify(context.website ?? {}),
           company: JSON.stringify(context.company ?? {}),
           audience: JSON.stringify(context.audience ?? {}),
@@ -93,7 +96,12 @@ export class CampaignAgent implements AIAgent<CampaignAgentOutput> {
         promptVersion,
         usedFallback,
         confidence: computeConfidence(context, [...fields], usedFallback),
-        evidence: collectEvidence(context, [...fields]),
+        evidence: [
+          ...collectEvidence(context, [...fields]),
+          ...(verifiedFacts.length > 0
+            ? [{ source: "crawl-facts", detail: `Strategy grounded in ${verifiedFacts.length} verified facts from the site crawl` }]
+            : []),
+        ],
       };
     });
   }

@@ -20,6 +20,9 @@ const { BudgetAgent } = await import(`../agents/agents/BudgetAgent.js?t=${t}`);
 const { PersonaAgent } = await import(`../agents/agents/PersonaAgent.js?t=${t}`);
 const { CampaignAgent } = await import(`../agents/agents/CampaignAgent.js?t=${t}`);
 const { CriticAgent } = await import(`../agents/agents/CriticAgent.js?t=${t}`);
+// Plain (non-busted) import intentionally shares the same singleton the busted agent
+// modules use — their static imports resolve without the query param, so it's one registry.
+const { promptRegistry } = await import("../agents/prompts/PromptRegistry.js");
 
 function fixtureContext(): ResearchContext {
   return {
@@ -65,7 +68,10 @@ for (const { Ctor, name } of AGENTS) {
 
       assert.strictEqual(result.agent, name);
       assert.strictEqual(result.promptId, name);
-      assert.strictEqual(result.promptVersion, 1);
+      // Agents always run the registry's latest prompt version (render() with no pin) —
+      // compare against the registry rather than hardcoding, so registering a v2 prompt
+      // (e.g. the fact-grounded creative/campaign/critic prompts) doesn't break this test.
+      assert.strictEqual(result.promptVersion, promptRegistry.get(name).version);
       assert.strictEqual(result.usedFallback, true);
       assert.strictEqual(result.confidence, 0.2, "no-API-key runs must report the flat fallback confidence");
       assert.ok(Array.isArray(result.evidence) && result.evidence.length > 0, "every agent must include a non-empty evidence trail");

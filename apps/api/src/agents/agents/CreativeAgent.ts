@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AIAgent } from "../interfaces/AIAgent.js";
+import { loadVerifiedFacts, verifiedFactsForPrompt } from "../crawlFacts.js";
 import { callAgentModel, collectEvidence, computeConfidence, runAgentStep } from "../support.js";
 import type { AgentResult, CreativeAgentOutput, ResearchContext } from "../types/index.js";
 
@@ -44,9 +45,11 @@ export class CreativeAgent implements AIAgent<CreativeAgentOutput> {
   async execute(context: ResearchContext): Promise<AgentResult<CreativeAgentOutput>> {
     return runAgentStep(this.name, async () => {
       const fields = ["website", "audience", "company"] as const;
+      const verifiedFacts = await loadVerifiedFacts(context);
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
         vars: {
+          verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
           website: JSON.stringify(context.website ?? {}),
           audience: JSON.stringify(context.audience ?? {}),
           company: JSON.stringify(context.company ?? {}),
@@ -62,7 +65,12 @@ export class CreativeAgent implements AIAgent<CreativeAgentOutput> {
         promptVersion,
         usedFallback,
         confidence: computeConfidence(context, [...fields], usedFallback),
-        evidence: collectEvidence(context, [...fields]),
+        evidence: [
+          ...collectEvidence(context, [...fields]),
+          ...(verifiedFacts.length > 0
+            ? [{ source: "crawl-facts", detail: `Copy grounded in ${verifiedFacts.length} verified facts from the site crawl` }]
+            : []),
+        ],
       };
     });
   }

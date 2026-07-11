@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AIAgent } from "../interfaces/AIAgent.js";
+import { loadVerifiedFacts, verifiedFactsForPrompt } from "../crawlFacts.js";
 import { callAgentModel, collectEvidence, computeConfidence, runAgentStep } from "../support.js";
 import type { AgentExecuteInput, AgentResult, CriticAgentOutput, ResearchContext } from "../types/index.js";
 
@@ -76,11 +77,13 @@ export class CriticAgent implements AIAgent<CriticAgentOutput> {
     return runAgentStep(this.name, async () => {
       const proposals = Object.fromEntries(Object.entries(input?.priorResults ?? {}).map(([name, result]) => [name, result.data]));
       const contextSummary = Object.fromEntries(ALL_CONTEXT_FIELDS.map((f) => [f, context[f] != null]));
+      const verifiedFacts = await loadVerifiedFacts(context);
 
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           context: JSON.stringify(contextSummary),
+          verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
           proposals: JSON.stringify(proposals),
         },
         tool: CRITIC_AGENT_TOOL,
@@ -92,6 +95,9 @@ export class CriticAgent implements AIAgent<CriticAgentOutput> {
       const evidence = [
         ...collectEvidence(context, [...ALL_CONTEXT_FIELDS]),
         ...Object.keys(proposals).map((agent) => ({ source: agent, detail: `Reviewed ${agent}'s proposed output` })),
+        ...(verifiedFacts.length > 0
+          ? [{ source: "crawl-facts", detail: `Cross-checked proposals against ${verifiedFacts.length} verified facts from the site crawl` }]
+          : []),
       ];
 
       return {
