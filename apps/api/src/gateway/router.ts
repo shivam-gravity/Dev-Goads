@@ -5,6 +5,12 @@ import { asyncHandler } from "./asyncHandler.js";
 import { sendError } from "./errorResponse.js";
 import { objectStorage } from "../infra/objectStorage.js";
 import { proxyTo } from "./proxy.js";
+import {
+  requireNotificationAccess, requireAssetAccess, requireInsightAccess, requireSavedAudienceAccess,
+  requireDraftAccess, requireDeveloperWebhookAccess, requireAutomationRuleAccess, requireGenerationJobAccess,
+  requireStrategyAccess, requireCreativeAccess, requireCampaignAccess, requireAdSetAccess, requireAdAccess,
+} from "./middleware/resourceOwnership.js";
+
 import { logger } from "../modules/logger/logger.js";
 import { requireWorkspaceMember, requireBusinessAccess } from "./middleware/workspaceAccess.js";
 import { getMembership } from "../modules/workspace/workspaceService.js";
@@ -117,7 +123,7 @@ router.get("/workspaces/:id/notifications/count", requireWorkspaceMember("params
   res.json({ count: await unreadCount(req.params.id) });
 }));
 
-router.patch("/notifications/:id/read", asyncHandler(async (req, res) => {
+router.patch("/notifications/:id/read", requireNotificationAccess, asyncHandler(async (req, res) => {
   try { res.json(await markRead(req.params.id)); }
   catch (err) { sendError(res, err, 404, "Not found"); }
 }));
@@ -153,13 +159,13 @@ router.post("/workspaces/:id/assets", requireWorkspaceMember("params", "id"), as
   res.status(201).json(await createAsset(req.params.id, { ...parsed.data, tags: parsed.data.tags ?? [] }));
 }));
 
-router.delete("/assets/:id", asyncHandler(async (req, res) => {
+router.delete("/assets/:id", requireAssetAccess, asyncHandler(async (req, res) => {
   const deleted = await deleteAsset(req.params.id);
   if (!deleted) return res.status(404).json({ error: "Not found" });
   res.status(204).send();
 }));
 
-router.patch("/assets/:id/tags", asyncHandler(async (req, res) => {
+router.patch("/assets/:id/tags", requireAssetAccess, asyncHandler(async (req, res) => {
   const parsed = z.object({ tags: z.array(z.string()) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await updateAssetTags(req.params.id, parsed.data.tags)); }
@@ -223,7 +229,7 @@ router.post("/workspaces/:workspaceId/insights/generate", requireWorkspaceMember
   }
 }));
 
-router.patch("/insights/:id/dismiss", asyncHandler(async (req, res) => {
+router.patch("/insights/:id/dismiss", requireInsightAccess, asyncHandler(async (req, res) => {
   try { res.json(await dismissInsight(req.params.id)); }
   catch (err) { sendError(res, err, 404, "Not found"); }
 }));
@@ -358,14 +364,14 @@ router.post("/workspaces/:id/audiences", requireWorkspaceMember("params", "id"),
   res.status(201).json(await createSavedAudience(req.params.id, parsed.data));
 }));
 
-router.patch("/audiences/:id", asyncHandler(async (req, res) => {
+router.patch("/audiences/:id", requireSavedAudienceAccess, asyncHandler(async (req, res) => {
   const parsed = savedAudienceUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await updateSavedAudience(req.params.id, parsed.data)); }
   catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
-router.delete("/audiences/:id", asyncHandler(async (req, res) => {
+router.delete("/audiences/:id", requireSavedAudienceAccess, asyncHandler(async (req, res) => {
   const deleted = await deleteSavedAudience(req.params.id);
   if (!deleted) return res.status(404).json({ error: "Not found" });
   res.status(204).send();
@@ -461,7 +467,7 @@ router.post("/workspaces/:id/generation-jobs", requireWorkspaceMember("params", 
   res.status(202).json(job);
 }));
 
-router.get("/generation-jobs/:id", asyncHandler(async (req, res) => {
+router.get("/generation-jobs/:id", requireGenerationJobAccess, asyncHandler(async (req, res) => {
   const job = await getGenerationJob(req.params.id);
   if (!job) return res.status(404).json({ error: "Not found" });
   res.json(job);
@@ -507,26 +513,26 @@ const draftUpdateSchema = z.object({
   publishedAt: z.string().optional(),
 });
 
-router.patch("/drafts/:id", asyncHandler(async (req, res) => {
+router.patch("/drafts/:id", requireDraftAccess, asyncHandler(async (req, res) => {
   const parsed = draftUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await updateDraft(req.params.id, parsed.data)); }
   catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
-router.post("/drafts/:id/publish", asyncHandler(async (req, res) => {
+router.post("/drafts/:id/publish", requireDraftAccess, asyncHandler(async (req, res) => {
   try { res.json(await publishDraft(req.params.id)); }
   catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
-router.post("/drafts/:id/schedule", asyncHandler(async (req, res) => {
+router.post("/drafts/:id/schedule", requireDraftAccess, asyncHandler(async (req, res) => {
   const { scheduledAt } = req.body;
   if (!scheduledAt) return res.status(400).json({ error: "scheduledAt required" });
   try { res.json(await scheduleDraft(req.params.id, scheduledAt)); }
   catch (err) { sendError(res, err, 404, "Not found"); }
 }));
 
-router.delete("/drafts/:id", asyncHandler(async (req, res) => {
+router.delete("/drafts/:id", requireDraftAccess, asyncHandler(async (req, res) => {
   const deleted = await deleteDraft(req.params.id);
   if (!deleted) return res.status(404).json({ error: "Not found" });
   res.status(204).send();
@@ -536,9 +542,9 @@ router.delete("/drafts/:id", asyncHandler(async (req, res) => {
    AD SETS & ADS
    ═══════════════════════════════════════════════ */
 
-router.get("/campaigns/:id/ad-sets", asyncHandler(async (req, res) => res.json(await listAdSets(req.params.id))));
+router.get("/campaigns/:id/ad-sets", requireCampaignAccess, asyncHandler(async (req, res) => res.json(await listAdSets(req.params.id))));
 
-router.post("/campaigns/:id/ad-sets", asyncHandler(async (req, res) => {
+router.post("/campaigns/:id/ad-sets", requireCampaignAccess, asyncHandler(async (req, res) => {
   const parsed = z.object({
     name: z.string().trim().min(1),
     status: z.enum(["active", "paused", "draft"]).default("draft"),
@@ -553,9 +559,9 @@ router.post("/campaigns/:id/ad-sets", asyncHandler(async (req, res) => {
   res.status(201).json(await createAdSet(req.params.id, parsed.data));
 }));
 
-router.get("/ad-sets/:id/ads", asyncHandler(async (req, res) => res.json(await listAds(req.params.id))));
+router.get("/ad-sets/:id/ads", requireAdSetAccess, asyncHandler(async (req, res) => res.json(await listAds(req.params.id))));
 
-router.post("/ad-sets/:id/ads", asyncHandler(async (req, res) => {
+router.post("/ad-sets/:id/ads", requireAdSetAccess, asyncHandler(async (req, res) => {
   const parsed = z.object({
     name: z.string().trim().min(1),
     status: z.enum(["active", "paused", "draft", "rejected"]).default("draft"),
@@ -583,7 +589,7 @@ const adUpdateSchema = z.object({
   format: z.enum(["single_image", "carousel", "video", "collection"]).optional(),
 });
 
-router.patch("/ads/:id", asyncHandler(async (req, res) => {
+router.patch("/ads/:id", requireAdAccess, asyncHandler(async (req, res) => {
   const parsed = adUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try { res.json(await updateAd(req.params.id, parsed.data)); }
@@ -683,7 +689,7 @@ router.post("/businesses/:id/strategies/from-research", requireBusinessAccess("p
 
 
 router.get("/businesses/:id/strategies", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => res.json(await listStrategiesForBusiness(req.params.id))));
-router.get("/strategies/:id", asyncHandler(async (req, res) => {
+router.get("/strategies/:id", requireStrategyAccess, asyncHandler(async (req, res) => {
   const strategy = await getStrategy(req.params.id);
   if (!strategy) return res.status(404).json({ error: "Not found" });
   res.json(strategy);
@@ -750,12 +756,12 @@ router.post("/businesses/:id/creatives", requireBusinessAccess("params", "id"), 
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.status(201).json(await createCreative(req.params.id, parsed.data));
 }));
-router.get("/creatives/:id", asyncHandler(async (req, res) => {
+router.get("/creatives/:id", requireCreativeAccess, asyncHandler(async (req, res) => {
   const creative = await getCreative(req.params.id);
   if (!creative) return res.status(404).json({ error: "Not found" });
   res.json(creative);
 }));
-router.delete("/creatives/:id", asyncHandler(async (req, res) => {
+router.delete("/creatives/:id", requireCreativeAccess, asyncHandler(async (req, res) => {
   const deleted = await deleteCreative(req.params.id);
   if (!deleted) return res.status(404).json({ error: "Not found" });
   res.status(204).send();
@@ -783,7 +789,7 @@ router.post("/campaigns/:id/apply-creative-media", campaignProxy);
 router.post("/campaigns/:id/ingest", campaignProxy);
 router.get("/campaigns/:id/performance", campaignProxy);
 router.get("/campaigns/:id/live-insights", campaignProxy);
-router.get("/campaigns/:id/trend", asyncHandler(async (req, res) => res.json(await getCampaignTrend(req.params.id))));
+router.get("/campaigns/:id/trend", requireCampaignAccess, asyncHandler(async (req, res) => res.json(await getCampaignTrend(req.params.id))));
 router.post("/campaigns/:id/optimize", campaignProxy);
 
 // Billing — extracted to campaign-service (roadmap Phase 2).
@@ -1070,7 +1076,7 @@ router.post("/workspaces/:id/developer/webhooks", requireWorkspaceMember("params
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.status(201).json(await createDeveloperWebhook(req.params.id, parsed.data));
 }));
-router.delete("/developer/webhooks/:id", asyncHandler(async (req, res) => {
+router.delete("/developer/webhooks/:id", requireDeveloperWebhookAccess, asyncHandler(async (req, res) => {
   const deleted = await deleteDeveloperWebhook(req.params.id);
   if (!deleted) return res.status(404).json({ error: "Not found" });
   res.status(204).send();
@@ -1113,7 +1119,7 @@ router.post("/workspaces/:id/automation-rules", requireWorkspaceMember("params",
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.status(201).json(await createAutomationRule(req.params.id, parsed.data));
 }));
-router.delete("/automation-rules/:id", asyncHandler(async (req, res) => {
+router.delete("/automation-rules/:id", requireAutomationRuleAccess, asyncHandler(async (req, res) => {
   const deleted = await deleteAutomationRule(req.params.id);
   if (!deleted) return res.status(404).json({ error: "Not found" });
   res.status(204).send();

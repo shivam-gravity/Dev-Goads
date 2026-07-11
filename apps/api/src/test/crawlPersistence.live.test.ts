@@ -66,7 +66,13 @@ test("crawl pipeline (live) - fact extraction attaches provenance to real crawle
     crawlJobId = await createCrawlJob({ businessId, workspaceId: "ws-crawl-live", url: site.url });
     await persistCrawlPages(crawlJobId, site);
 
+    // One retry: the model very occasionally emits an empty facts array for a page set it
+    // extracts a dozen facts from on the next attempt — retrying once keeps this asserting
+    // real behavior (facts DO come back from stripe.com) without being flaky about it.
     await analyzeProduct(site, { crawlJobId });
+    if ((await prisma.crawlFact.count({ where: { crawlJobId } })) === 0) {
+      await analyzeProduct(site, { crawlJobId });
+    }
 
     const facts = await prisma.crawlFact.findMany({ where: { crawlJobId } });
     assert.ok(facts.length > 0, "the model should extract at least one concrete fact from stripe.com");

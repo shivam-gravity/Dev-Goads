@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 import type { ScrapedPage, ScrapedSite } from "../../types/index.js";
 import { logger } from "../logger/logger.js";
+import { ALLOW_ALL, isPathAllowed, parseRobots, type RobotsRules } from "./robots.js";
 
 const MAX_EXCERPT_LENGTH = 6000;
 const FETCH_TIMEOUT_MS = 8000;
@@ -47,6 +48,21 @@ async function captureScreenshot(url: string): Promise<string | undefined> {
 
 // Link text/paths that tend to carry the richest product/brand context beyond the homepage.
 const FOLLOW_HINTS = /\b(product|products|shop|store|about|features|pricing|collections?)\b/i;
+
+// Politeness floor between fetches to the same origin — raised (up to robots.ts's cap)
+// when the site's robots.txt sets a Crawl-delay. Shared across concurrent crawls in this
+// process via lastFetchByOrigin, so two simultaneous crawls of the same site don't each
+// think they're being polite while together hammering it at 2x.
+const MIN_FETCH_INTERVAL_MS = 300;
+const lastFetchByOrigin = new Map<string, number>();
+
+async function politeDelay(origin: string, crawlDelayMs: number | null): Promise<void> {
+  const interval = Math.max(MIN_FETCH_INTERVAL_MS, crawlDelayMs ?? 0);
+  const last = lastFetchByOrigin.get(origin) ?? 0;
+  const waitMs = last + interval - Date.now();
+  if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
+  lastFetchByOrigin.set(origin, Date.now());
+}
 
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
@@ -311,7 +327,16 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
   const screenshotPromise = captureScreenshot(url);
   const crawlDeadline = Date.now() + CRAWL_TIME_BUDGET_MS;
 
+  // robots.txt is honored for every page BEYOND the entry URL (the user explicitly asked
+  // for the entry page, so that one is always fetched) — fetched alongside the entry page
+  // since the two are independent. No robots.txt, or one that fails to parse -> allow all.
+  const robotsPromise: Promise<RobotsRules> = fetchText(`${parsed.origin}/robots.txt`)
+    .then((txt) => (txt ? parseRobots(txt) : ALLOW_ALL))
+    .catch(() => ALLOW_ALL);
+
+  await politeDelay(parsed.origin, null);
   const entry = await fetchPage(url);
+  const robots = await robotsPromise;
   const entryText = extractText(entry.$);
   const images = extractImages(entry.$, url);
   const crawledPages = [url];
@@ -334,9 +359,19 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
   ];
 
   const { toCrawl, totalDiscovered } = await discoverAndSelectPages(url, entry.$);
-  for (const { url: link, score } of toCrawl) {
+  const crawlable = toCrawl.filter(({ url: link }) => {
+    try {
+      const allowed = isPathAllowed(robots, new URL(link).pathname);
+      if (!allowed) logger.info(`scrapeUrl: skipping ${link} — disallowed by robots.txt`);
+      return allowed;
+    } catch {
+      return false;
+    }
+  });
+  for (const { url: link, score } of crawlable) {
     if (Date.now() >= crawlDeadline) break;
     try {
+      await politeDelay(parsed.origin, robots.crawlDelayMs);
       const page = await fetchPage(link);
       const text = extractText(page.$);
       excerptParts.push(...text.headings, text.bodyText);

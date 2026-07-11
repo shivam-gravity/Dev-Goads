@@ -19,6 +19,9 @@ const { FunnelRetargetingAgent } = await import(`../agents/agents/FunnelRetarget
 const { ObjectionHandlingAgent } = await import(`../agents/agents/ObjectionHandlingAgent.js?t=${t}`);
 const { ForecastingKPIAgent } = await import(`../agents/agents/ForecastingKPIAgent.js?t=${t}`);
 const { ComplianceAgent } = await import(`../agents/agents/ComplianceAgent.js?t=${t}`);
+// Plain (non-busted) import intentionally shares the same singleton the busted agent
+// modules use — their static imports resolve without the query param, so it's one registry.
+const { promptRegistry } = await import("../agents/prompts/PromptRegistry.js");
 
 function fixtureContext(): ResearchContext {
   return {
@@ -66,7 +69,8 @@ for (const { Ctor, name } of PRODUCER_AGENTS) {
 
       assert.strictEqual(result.agent, name);
       assert.strictEqual(result.promptId, name);
-      assert.strictEqual(result.promptVersion, 1);
+      // Latest registry version, not a hardcoded 1 — fact-grounded agents run prompt v2.
+      assert.strictEqual(result.promptVersion, promptRegistry.get(name).version);
       assert.strictEqual(result.usedFallback, true);
       assert.strictEqual(result.confidence, 0.2, "no-API-key runs must report the flat fallback confidence");
       assert.ok(Array.isArray(result.evidence) && result.evidence.length > 0, "every agent must include a non-empty evidence trail");

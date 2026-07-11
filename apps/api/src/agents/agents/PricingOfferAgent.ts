@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AIAgent } from "../interfaces/AIAgent.js";
+import { loadVerifiedFacts, verifiedFactsForPrompt } from "../crawlFacts.js";
 import { callAgentModel, collectEvidence, computeConfidence, runAgentStep } from "../support.js";
 import type { AgentResult, PricingOfferAgentOutput, ResearchContext } from "../types/index.js";
 
@@ -44,9 +45,11 @@ export class PricingOfferAgent implements AIAgent<PricingOfferAgentOutput> {
   async execute(context: ResearchContext): Promise<AgentResult<PricingOfferAgentOutput>> {
     return runAgentStep(this.name, async () => {
       const fields = ["competitors", "market"] as const;
+      const verifiedFacts = await loadVerifiedFacts(context);
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
         vars: {
+          verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
           competitors: JSON.stringify(context.competitors ?? {}),
           market: JSON.stringify(context.market ?? {}),
         },
@@ -61,7 +64,12 @@ export class PricingOfferAgent implements AIAgent<PricingOfferAgentOutput> {
         promptVersion,
         usedFallback,
         confidence: computeConfidence(context, [...fields], usedFallback),
-        evidence: collectEvidence(context, [...fields]),
+        evidence: [
+          ...collectEvidence(context, [...fields]),
+          ...(verifiedFacts.length > 0
+            ? [{ source: "crawl-facts", detail: `Offer grounded in ${verifiedFacts.length} verified facts from the site crawl` }]
+            : []),
+        ],
       };
     });
   }

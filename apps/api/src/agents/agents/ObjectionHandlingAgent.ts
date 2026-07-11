@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AIAgent } from "../interfaces/AIAgent.js";
+import { loadVerifiedFacts, verifiedFactsForPrompt } from "../crawlFacts.js";
 import { callAgentModel, collectEvidence, computeConfidence, runAgentStep } from "../support.js";
 import type { AgentResult, ObjectionHandlingAgentOutput, ResearchContext } from "../types/index.js";
 
@@ -42,9 +43,11 @@ export class ObjectionHandlingAgent implements AIAgent<ObjectionHandlingAgentOut
   async execute(context: ResearchContext): Promise<AgentResult<ObjectionHandlingAgentOutput>> {
     return runAgentStep(this.name, async () => {
       const fields = ["audience", "reviews"] as const;
+      const verifiedFacts = await loadVerifiedFacts(context);
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
         vars: {
+          verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
           audience: JSON.stringify(context.audience ?? {}),
           reviews: JSON.stringify(context.reviews ?? {}),
         },
@@ -59,7 +62,12 @@ export class ObjectionHandlingAgent implements AIAgent<ObjectionHandlingAgentOut
         promptVersion,
         usedFallback,
         confidence: computeConfidence(context, [...fields], usedFallback),
-        evidence: collectEvidence(context, [...fields]),
+        evidence: [
+          ...collectEvidence(context, [...fields]),
+          ...(verifiedFacts.length > 0
+            ? [{ source: "crawl-facts", detail: `Rebuttals grounded in ${verifiedFacts.length} verified facts from the site crawl` }]
+            : []),
+        ],
       };
     });
   }
