@@ -65,13 +65,13 @@ test("Meta Ads Adapter (live) - fetchInsights parses metrics from the insights e
       return {
         ok: true,
         json: async () => ({
-          data: [{ impressions: "2000", clicks: "80", spend: "40.00", actions: [{ action_type: "offsite_conversion", value: "6" }] }],
+          data: [{ impressions: "2000", reach: "1400", clicks: "80", spend: "40.00", actions: [{ action_type: "offsite_conversion", value: "6" }] }],
         }),
       } as Response;
     }) as typeof fetch,
     async () => {
       const stats = await metaAdapter.fetchInsights("meta_123456", "2026-07-06");
-      assert.deepStrictEqual(stats, { impressions: 2000, clicks: 80, conversions: 6, spendCents: 4000 });
+      assert.deepStrictEqual(stats, { impressions: 2000, reach: 1400, clicks: 80, conversions: 6, spendCents: 4000 });
     }
   );
 });
