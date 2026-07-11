@@ -9,6 +9,10 @@
 # --build-arg DIST_ENTRY=dist/<compiled entrypoint>.
 
 FROM node:20-bookworm-slim AS base
+# openssl: Prisma's query engine detects the system libssl at startup — bookworm-slim
+# doesn't ship it, which makes every Prisma-using container log a "failed to detect the
+# libssl version" warning and fall back to a guessed version.
+RUN apt-get update -y && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 WORKDIR /repo
 
 FROM base AS deps
