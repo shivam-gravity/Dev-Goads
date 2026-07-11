@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { openai, runStructured } from "../../infra/openaiClient.js";
 import { prisma } from "../../db/prisma.js";
 import type { AdCreative, AdNetwork, AdStrategy, AudienceAnalysis, AudiencePersona, BusinessProfile, CampaignSuggestion, CompetitorBudgetAnalysis, MarketLocationAnalysis, ProductAnalysis } from "../../types/index.js";
-import type { CampaignAgentOutput } from "../../agents/types/index.js";
+import type { CampaignAgentOutput, ComplianceAgentOutput, ObjectionHandlingAgentOutput, PricingOfferAgentOutput } from "../../agents/types/index.js";
 import type { DecisionContext } from "../../research/decision/types.js";
+import { logger } from "../logger/logger.js";
 
 function isAdNetwork(value: string): value is AdNetwork {
   return value === "meta" || value === "google" || value === "tiktok";
@@ -200,6 +201,57 @@ export async function createStrategyFromResearch(businessId: string, input: Rese
   return persistStrategy(strategy);
 }
 
+/** Turns PricingOfferAgent's recommendation into one concrete creative — the offer type as
+ * the headline, positioning/guarantee/urgency stitched into the body, and a CTA inferred
+ * from the offer type so "Free trial" doesn't ship with a generic "Learn More" button. A
+ * "None recommended" guarantee/urgency (the agent's own fallback phrasing for "not
+ * applicable") is dropped rather than shown as a real body line. */
+function inferOfferCta(offerType: string): string {
+  const t = offerType.toLowerCase();
+  if (t.includes("trial")) return "Start Free Trial";
+  if (t.includes("discount") || t.includes("% off") || t.includes("off ")) return "Claim Offer";
+  if (t.includes("guarantee") || t.includes("risk")) return "Try Risk-Free";
+  if (t.includes("demo")) return "Book a Demo";
+  return "Get Started";
+}
+
+function offerCreativeFrom(offer: PricingOfferAgentOutput): AdCreative {
+  const body = [offer.pricingPositioning, offer.guaranteeOrRiskReversal, offer.urgencyAngle]
+    .filter((line) => line && !/^none\b/i.test(line))
+    .join(" ");
+  return { headline: offer.recommendedOfferType, body: body || offer.pricingPositioning, callToAction: inferOfferCta(offer.recommendedOfferType) };
+}
+
+// Ad headlines posing the objection as a hook ("Worried about setup time?") leading into the
+// rebuttal body is a standard direct-response pattern — distinct from CreativeAgent's general
+// copy, which never sees the audience's actual named objections at all.
+const MAX_OBJECTION_CREATIVES = 3;
+
+function objectionCreativesFrom(oh: ObjectionHandlingAgentOutput): AdCreative[] {
+  return oh.topObjections
+    .map((objection, i) => ({ objection, rebuttal: oh.rebuttalAngles[i] }))
+    .filter((pair): pair is { objection: string; rebuttal: string } => Boolean(pair.rebuttal))
+    .slice(0, MAX_OBJECTION_CREATIVES)
+    .map(({ objection, rebuttal }) => ({ headline: objection, body: rebuttal, callToAction: "Learn More" }));
+}
+
+/** Non-blocking: ComplianceAgent's finding is attached to the strategy (and logged when
+ * high-risk) rather than gating the build — deciding whether a flagged campaign should be
+ * hard-blocked from launching is a bigger product decision than this pass makes on its own. */
+function complianceWarningFrom(businessId: string, compliance: ComplianceAgentOutput): AdStrategy["complianceWarning"] {
+  if (compliance.overallRisk === "low") return undefined;
+  if (compliance.overallRisk === "high") {
+    logger.warn(`ComplianceAgent flagged HIGH risk for business ${businessId}: ${compliance.recommendation}`);
+  }
+  return { risk: compliance.overallRisk, flags: compliance.flags, recommendation: compliance.recommendation };
+}
+
+export interface AgentStrategyExtras {
+  pricingOffer?: PricingOfferAgentOutput | null;
+  objectionHandling?: ObjectionHandlingAgentOutput | null;
+  compliance?: ComplianceAgentOutput | null;
+}
+
 /**
  * Builds and persists an AdStrategy directly from the AI Agent Coordinator's
  * CampaignAgentOutput — the "AI Agents" step for the new agent-pipeline (see
@@ -216,11 +268,18 @@ export async function createStrategyFromResearch(businessId: string, input: Rese
  * the Campaign Agent's own budgetSplit/recommendedNetworks/audience ordering. The agent's
  * creatives (real generated ad copy) are always kept: the Decision Engine reasons about
  * strategic direction, not literal headline/body/CTA text.
+ *
+ * `extras` (optional) folds in three more of the 20 agents that previously ran and were
+ * persisted but never actually used to build anything: PricingOfferAgent and
+ * ObjectionHandlingAgent each contribute real, distinct creatives (not just more
+ * CampaignAgent-flavored copy) built from their specific reasoning; ComplianceAgent's
+ * finding is attached as a non-blocking warning.
  */
 export async function createStrategyFromAgentResults(
   businessId: string,
   output: CampaignAgentOutput,
-  decisionContext?: DecisionContext | null
+  decisionContext?: DecisionContext | null,
+  extras?: AgentStrategyExtras
 ): Promise<AdStrategy> {
   const decisionAllocation = decisionContext?.recommendedBudgetAllocation ?? {};
   const decisionNetworks = Object.keys(decisionAllocation).filter(isAdNetwork);
@@ -240,9 +299,13 @@ export async function createStrategyFromAgentResults(
     ? [decisionContext.recommendedAudiencePriority, ...output.audiences.filter((a) => a !== decisionContext.recommendedAudiencePriority)]
     : output.audiences;
 
-  const summary = decisionContext?.recommendedPositioning
-    ? `${output.summary} Positioning: ${decisionContext.recommendedPositioning}`
-    : output.summary;
+  const offerSummary = extras?.pricingOffer ? ` Offer: ${extras.pricingOffer.recommendedOfferType} — ${extras.pricingOffer.pricingPositioning}` : "";
+  const summary = (decisionContext?.recommendedPositioning ? `${output.summary} Positioning: ${decisionContext.recommendedPositioning}` : output.summary) + offerSummary;
+
+  const extraCreatives: AdCreative[] = [
+    ...(extras?.pricingOffer ? [offerCreativeFrom(extras.pricingOffer)] : []),
+    ...(extras?.objectionHandling ? objectionCreativesFrom(extras.objectionHandling) : []),
+  ];
 
   const strategy: AdStrategy = {
     id: randomUUID(),
@@ -252,7 +315,8 @@ export async function createStrategyFromAgentResults(
     recommendedNetworks,
     budgetSplit,
     audiences,
-    creatives: sanitizeCreatives(output.creatives),
+    creatives: sanitizeCreatives([...output.creatives, ...extraCreatives]),
+    ...(extras?.compliance ? { complianceWarning: complianceWarningFrom(businessId, extras.compliance) } : {}),
   };
 
   return persistStrategy(strategy);

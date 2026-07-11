@@ -131,6 +131,67 @@ test("campaignGenerationPipeline - runs research -> agents -> strategy -> campai
   assert.deepStrictEqual(progressCalls[progressCalls.length - 1], [41, 41]);
 });
 
+test("campaignGenerationPipeline - passes pricing-offer/objection-handling/compliance agent results through to createStrategyFromAgentResults as extras", async () => {
+  const job = fakeGenerationJob();
+  const deps = fakeDeps({
+    job,
+    agentResults: {
+      "campaign-agent": fakeCampaignAgentResult(),
+      "budget-agent": fakeBudgetAgentResult(5000),
+      "pricing-offer-agent": {
+        agent: "pricing-offer-agent", promptId: "pricing-offer-agent", promptVersion: 2,
+        data: { recommendedOfferType: "Free trial", pricingPositioning: "n/a", guaranteeOrRiskReversal: "n/a", urgencyAngle: "n/a" },
+        confidence: 0.8, evidence: [], usedFallback: false, generatedAt: "now", durationMs: 1,
+      },
+      "objection-handling-agent": {
+        agent: "objection-handling-agent", promptId: "objection-handling-agent", promptVersion: 2,
+        data: { topObjections: ["Too expensive?"], rebuttalAngles: ["Cheaper than the leader."], trustSignalsToHighlight: [] },
+        confidence: 0.8, evidence: [], usedFallback: false, generatedAt: "now", durationMs: 1,
+      },
+      "compliance-agent": {
+        agent: "compliance-agent", promptId: "compliance-agent", promptVersion: 1,
+        data: { overallRisk: "medium", flags: [], restrictedCategoryConcerns: [], recommendation: "Review before launch." },
+        confidence: 0.8, evidence: [], usedFallback: false, generatedAt: "now", durationMs: 1,
+      },
+    },
+  });
+
+  let capturedExtras: unknown;
+  deps.createStrategyFromAgentResults = async (businessId, output, decisionContext, extras) => {
+    capturedExtras = extras;
+    return {
+      id: "strategy-1", businessId, summary: "s", recommendedNetworks: ["meta"], budgetSplit: { meta: 1 },
+      audiences: ["Everyone"], creatives: [{ headline: "Hi", body: "Body", callToAction: "Go" }], createdAt: "now",
+    };
+  };
+
+  await runCampaignGenerationPipeline(job.id, { deps });
+
+  assert.deepStrictEqual(capturedExtras, {
+    pricingOffer: { recommendedOfferType: "Free trial", pricingPositioning: "n/a", guaranteeOrRiskReversal: "n/a", urgencyAngle: "n/a" },
+    objectionHandling: { topObjections: ["Too expensive?"], rebuttalAngles: ["Cheaper than the leader."], trustSignalsToHighlight: [] },
+    compliance: { overallRisk: "medium", flags: [], restrictedCategoryConcerns: [], recommendation: "Review before launch." },
+  });
+});
+
+test("campaignGenerationPipeline - builds successfully when pricing-offer/objection-handling/compliance agents didn't run at all (extras are undefined, not thrown)", async () => {
+  const job = fakeGenerationJob();
+  const deps = fakeDeps({ job }); // only campaign-agent + budget-agent, like every pre-existing test in this file
+
+  let capturedExtras: unknown;
+  deps.createStrategyFromAgentResults = async (businessId, output, decisionContext, extras) => {
+    capturedExtras = extras;
+    return {
+      id: "strategy-1", businessId, summary: "s", recommendedNetworks: ["meta"], budgetSplit: { meta: 1 },
+      audiences: ["Everyone"], creatives: [{ headline: "Hi", body: "Body", callToAction: "Go" }], createdAt: "now",
+    };
+  };
+
+  const result = await runCampaignGenerationPipeline(job.id, { deps });
+  assert.strictEqual(result.campaignId, "campaign-1");
+  assert.deepStrictEqual(capturedExtras, { pricingOffer: undefined, objectionHandling: undefined, compliance: undefined });
+});
+
 test("campaignGenerationPipeline - extracts crawl facts after research but BEFORE the agents run when the crawl was persisted, and skips extraction without a crawlJobId", async () => {
   const job = fakeGenerationJob();
   const calls: string[] = [];

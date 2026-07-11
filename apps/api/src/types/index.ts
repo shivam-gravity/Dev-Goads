@@ -162,6 +162,15 @@ export interface AdStrategy {
   audiences: string[];
   creatives: AdCreative[];
   createdAt: string;
+  /** Set only when ComplianceAgent found medium/high-risk issues — surfaced so a strategy
+   * with real ad-policy concerns isn't silently discarded the way it was before this field
+   * existed. Undefined (not just omitted-and-low) for strategies built without a
+   * ComplianceAgent result at all, e.g. older pipelines/tests. */
+  complianceWarning?: {
+    risk: "medium" | "high";
+    flags: { severity: "low" | "medium" | "high"; issue: string; suggestion: string }[];
+    recommendation: string;
+  };
 }
 
 /** One of 6+ distinct campaign angles generated from a completed research session — the user

@@ -64,7 +64,7 @@ async function politeDelay(origin: string, crawlDelayMs: number | null): Promise
   lastFetchByOrigin.set(origin, Date.now());
 }
 
-function normalizeUrl(input: string): string {
+export function normalizeUrl(input: string): string {
   const trimmed = input.trim();
   if (!/^https?:\/\//i.test(trimmed)) return `https://${trimmed}`;
   return trimmed;

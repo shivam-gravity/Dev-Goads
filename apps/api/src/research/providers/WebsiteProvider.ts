@@ -1,4 +1,4 @@
-import { scrapeUrl } from "../../modules/onboarding/scraper.js";
+import { normalizeUrl, scrapeUrl } from "../../modules/onboarding/scraper.js";
 import { logger } from "../../modules/logger/logger.js";
 import { createCrawlJob, markCrawlJobFailed, persistCrawlPages } from "../crawl/crawlPersistence.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
@@ -32,7 +32,10 @@ export class WebsiteProvider implements ResearchProvider<WebsiteData> {
             businessId: input.businessId,
             workspaceId: input.workspaceId,
             researchJobId: input.jobId,
-            url: input.url,
+            // Normalized (protocol-having) rather than the raw user-typed input.url — the
+            // frontend's VerifiedFactsSection does new URL(crawl.url) to derive the display
+            // hostname, which throws on a bare "example.com" with no scheme.
+            url: normalizeUrl(input.url),
           });
         } catch (err) {
           logger.warn(`WebsiteProvider: couldn't create CrawlJob for ${input.url} — crawling without page-level persistence`, err);

@@ -1,7 +1,7 @@
 import { logger } from "../logger/logger.js";
 import type { AgentCoordinatorOptions, AgentPipelineResult } from "../../agents/AgentCoordinator.js";
 import { runAgentCoordinator } from "../../agents/AgentCoordinator.js";
-import type { AgentResult, BudgetAgentOutput, CampaignAgentOutput } from "../../agents/types/index.js";
+import type { AgentResult, BudgetAgentOutput, CampaignAgentOutput, ComplianceAgentOutput, ObjectionHandlingAgentOutput, PricingOfferAgentOutput } from "../../agents/types/index.js";
 import type { ResearchContext } from "../../research/types/index.js";
 import { createResearchJob, runResearchOrchestrator, type RunResearchOrchestratorOptions } from "../../research/research-orchestrator/index.js";
 import { extractAndPersistCrawlFacts } from "../../research/crawl/factExtraction.js";
@@ -201,11 +201,22 @@ export async function runCampaignGenerationPipeline(
     const campaignAgentResult = pipeline.results["campaign-agent"] as AgentResult<CampaignAgentOutput> | undefined;
     if (!campaignAgentResult) throw new Error("campaign-agent did not produce a result — cannot build a campaign");
 
+    // These three previously ran alongside the other 17 agents, got persisted via
+    // persistAgentResults above, and were never read again — folding their output into the
+    // strategy (extra creatives, a compliance warning) is what actually puts them to work.
+    const pricingOfferResult = pipeline.results["pricing-offer-agent"] as AgentResult<PricingOfferAgentOutput> | undefined;
+    const objectionHandlingResult = pipeline.results["objection-handling-agent"] as AgentResult<ObjectionHandlingAgentOutput> | undefined;
+    const complianceResult = pipeline.results["compliance-agent"] as AgentResult<ComplianceAgentOutput> | undefined;
+
     // ── Phase 3: Campaign Builder ──
     await markStatus("building_campaign");
     const { campaign, strategyId } = await withSpan("campaign_generation.build", async () => {
       const business = await deps.getBusiness(job.businessId);
-      const strategy = await deps.createStrategyFromAgentResults(job.businessId, campaignAgentResult.data, decisionContext);
+      const strategy = await deps.createStrategyFromAgentResults(job.businessId, campaignAgentResult.data, decisionContext, {
+        pricingOffer: pricingOfferResult?.data,
+        objectionHandling: objectionHandlingResult?.data,
+        compliance: complianceResult?.data,
+      });
       await markStatus("building_campaign", { strategyId: strategy.id });
 
       const budgetAgentResult = pipeline.results["budget-agent"] as AgentResult<BudgetAgentOutput> | undefined;

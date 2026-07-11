@@ -475,6 +475,17 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
 
 const FACTS_PREVIEW_COUNT = 6;
 
+/** `new URL()` throws on a bare hostname with no scheme (e.g. legacy CrawlJob/CrawlPage
+ * rows persisted before WebsiteProvider started normalizing input.url) — parse defensively
+ * so one bad row can't crash the whole facts panel. */
+function safeParseUrl(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
 /** "Grounded in N verified facts from your website" — the trust panel. Every concrete
  * claim the AI agents used (prices, named customers, guarantees) is shown with the exact
  * page it was read from, so the campaign is auditable rather than take-our-word-for-it.
@@ -491,7 +502,7 @@ function VerifiedFactsSection({ jobId }: { jobId: string }) {
 
   if (!data || data.facts.length === 0) return null;
   const shown = expanded ? data.facts : data.facts.slice(0, FACTS_PREVIEW_COUNT);
-  const crawlHost = data.crawl ? new URL(data.crawl.url).hostname.replace(/^www\./, "") : null;
+  const crawlHost = data.crawl ? (safeParseUrl(data.crawl.url)?.hostname.replace(/^www\./, "") ?? data.crawl.url) : null;
 
   return (
     <div className="verified-facts-section">
@@ -512,7 +523,7 @@ function VerifiedFactsSection({ jobId }: { jobId: string }) {
             <span className="verified-fact-meta">
               {f.sourceUrl && (
                 <a href={f.sourceUrl} target="_blank" rel="noreferrer" className="verified-fact-source">
-                  {f.sourcePageType && f.sourcePageType !== "other" ? f.sourcePageType : new URL(f.sourceUrl).pathname}
+                  {f.sourcePageType && f.sourcePageType !== "other" ? f.sourcePageType : (safeParseUrl(f.sourceUrl)?.pathname ?? f.sourceUrl)}
                 </a>
               )}
               <span className="verified-fact-confidence">{Math.round(f.confidence * 100)}%</span>
