@@ -12907,3 +12907,124 @@ td {
   margin: 2px 0 0 38px;
   min-height: 14px;
 }
+
+/* ─── Verified facts panel (NewCampaign) — the "grounded in N facts" trust story ─── */
+
+.verified-facts-section {
+  width: 100%;
+  max-width: 780px;
+  margin: 18px auto 0;
+  padding: 20px 22px;
+  background: var(--surface);
+  border: 2px solid var(--ink);
+  border-radius: 14px;
+  box-shadow: var(--hard-shadow-sm);
+  text-align: left;
+}
+
+.verified-facts-section .decision-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 6px;
+  color: var(--text);
+}
+
+.verified-facts-badge {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-2);
+  color: #fff;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.verified-facts-subline {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0 0 14px;
+}
+
+.verified-facts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.verified-fact-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+.verified-fact-row:last-child {
+  border-bottom: none;
+}
+
+.verified-fact-value {
+  font-size: 13.5px;
+  color: var(--text);
+  min-width: 0;
+}
+
+.verified-fact-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.verified-fact-source {
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--surface-tint);
+  color: var(--accent-dark);
+  text-decoration: none;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.verified-fact-source:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.verified-fact-confidence {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  min-width: 32px;
+  text-align: right;
+}
+
+.verified-facts-toggle {
+  margin-top: 12px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 700;
+  background: var(--surface);
+  color: var(--text);
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-standard);
+}
+
+.verified-facts-toggle:hover {
+  background: var(--surface-tint);
+}

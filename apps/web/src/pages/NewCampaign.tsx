@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext.js";
 import { TargetIcon, UserIcon, LightningIcon, GlobeIcon, SparkleIcon } from "../components/icons.js";
 import type {
   AudiencePersonaCard,
+  CampaignGenerationFacts,
   CampaignGenerationJobStatus,
   CampaignGenerationPipelineStatus,
   CampaignStrategyOption,
@@ -472,6 +473,62 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
   );
 }
 
+const FACTS_PREVIEW_COUNT = 6;
+
+/** "Grounded in N verified facts from your website" — the trust panel. Every concrete
+ * claim the AI agents used (prices, named customers, guarantees) is shown with the exact
+ * page it was read from, so the campaign is auditable rather than take-our-word-for-it.
+ * Renders nothing while facts are loading or when the run produced none. */
+function VerifiedFactsSection({ jobId }: { jobId: string }) {
+  const [data, setData] = useState<CampaignGenerationFacts | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getCampaignGenerationFacts(jobId).then((d) => { if (!cancelled) setData(d); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [jobId]);
+
+  if (!data || data.facts.length === 0) return null;
+  const shown = expanded ? data.facts : data.facts.slice(0, FACTS_PREVIEW_COUNT);
+  const crawlHost = data.crawl ? new URL(data.crawl.url).hostname.replace(/^www\./, "") : null;
+
+  return (
+    <div className="verified-facts-section">
+      <p className="decision-section-title">
+        <span className="icon-badge verified-facts-badge" aria-hidden="true">✓</span>
+        Grounded in {data.facts.length} verified facts from your website
+      </p>
+      {data.crawl && (
+        <p className="verified-facts-subline">
+          We crawled {data.crawl.pagesCrawled} pages of {crawlHost} — every concrete claim in this campaign traces back
+          to one of the facts below, so nothing is invented.
+        </p>
+      )}
+      <ul className="verified-facts-list">
+        {shown.map((f, i) => (
+          <li key={`${f.field}-${i}`} className="verified-fact-row">
+            <span className="verified-fact-value">{f.value}</span>
+            <span className="verified-fact-meta">
+              {f.sourceUrl && (
+                <a href={f.sourceUrl} target="_blank" rel="noreferrer" className="verified-fact-source">
+                  {f.sourcePageType && f.sourcePageType !== "other" ? f.sourcePageType : new URL(f.sourceUrl).pathname}
+                </a>
+              )}
+              <span className="verified-fact-confidence">{Math.round(f.confidence * 100)}%</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {data.facts.length > FACTS_PREVIEW_COUNT && (
+        <button type="button" className="verified-facts-toggle" onClick={() => setExpanded((e) => !e)}>
+          {expanded ? "Show fewer" : `Show all ${data.facts.length} facts`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function NewCampaign() {
   const { workspaceId, businessId } = useAuth();
   const navigate = useNavigate();
@@ -496,6 +553,8 @@ export default function NewCampaign() {
       .catch(() => localStorage.removeItem(activeJobKey));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const factsVisible = job?.status === "completed" || job?.status === "building_campaign";
 
   useEffect(() => {
     if (!job || job.status === "completed" || job.status === "failed") {
@@ -663,6 +722,8 @@ export default function NewCampaign() {
           )}
 
           {job.decisionContext && <DecisionContextView decision={job.decisionContext} url={pageUrl} />}
+
+          {factsVisible && <VerifiedFactsSection jobId={job.id} />}
 
           {isDone && (
             <div className="all-set-banner">

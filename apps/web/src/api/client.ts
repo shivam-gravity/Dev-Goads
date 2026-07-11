@@ -172,6 +172,21 @@ export interface CampaignGenerationJobStatus {
   startedAt?: string; completedAt?: string; updatedAt: string;
 }
 
+/** One source-attributed fact extracted from the business's own website during generation. */
+export interface VerifiedCampaignFact {
+  field: string;
+  value: string;
+  confidence: number;
+  sourceUrl: string | null;
+  sourcePageType: string | null;
+  sourcePageTitle: string | null;
+}
+
+export interface CampaignGenerationFacts {
+  crawl: { url: string; pagesDiscovered: number; pagesCrawled: number } | null;
+  facts: VerifiedCampaignFact[];
+}
+
 export interface ResearchSession {
   id: string; workspaceId: string; businessId?: string; url: string;
   status: "queued" | "running" | "done" | "failed";
@@ -346,6 +361,7 @@ export const api = {
   generateCampaign: (input: { workspaceId: string; businessId: string; url: string; name?: string; dailyBudgetCents?: number }) =>
     request<CampaignGenerationJobStatus>("/campaigns/generate", { method: "POST", body: JSON.stringify(input) }),
   getCampaignGenerationStatus: (id: string) => request<CampaignGenerationJobStatus>(`/campaigns/generate/${id}/status`),
+  getCampaignGenerationFacts: (id: string) => request<CampaignGenerationFacts>(`/campaigns/generate/${id}/facts`),
 
   // Business
   createBusiness: (input: Omit<BusinessProfile, "id">) =>

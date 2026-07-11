@@ -5,6 +5,7 @@ import { asyncHandler } from "./asyncHandler.js";
 import { sendError } from "./errorResponse.js";
 import { objectStorage } from "../infra/objectStorage.js";
 import { proxyTo } from "./proxy.js";
+import { prisma } from "../db/prisma.js";
 import {
   requireNotificationAccess, requireAssetAccess, requireInsightAccess, requireSavedAudienceAccess,
   requireDraftAccess, requireDeveloperWebhookAccess, requireAutomationRuleAccess, requireGenerationJobAccess,
@@ -1006,6 +1007,38 @@ router.get("/campaigns/generate/:id/status", asyncHandler(async (req: AuthedRequ
     startedAt: job.startedAt,
     completedAt: job.completedAt,
     updatedAt: job.updatedAt,
+  });
+}));
+
+// The verified facts behind a generation — what the fact-grounded agents actually saw.
+// Resolved job -> CrawlJob (via researchJobId) -> CrawlFact rows with their source pages,
+// so the UI can show "this campaign is grounded in N facts from your website" with links.
+router.get("/campaigns/generate/:id/facts", asyncHandler(async (req: AuthedRequest, res) => {
+  const job = await getCampaignGenerationJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Campaign generation job not found" });
+  if (!(await getMembership(job.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this campaign generation job" });
+  }
+  if (!job.researchJobId) return res.json({ crawl: null, facts: [] });
+
+  const crawlJob = await prisma.crawlJob.findFirst({ where: { researchJobId: job.researchJobId } });
+  if (!crawlJob) return res.json({ crawl: null, facts: [] });
+
+  const facts = await prisma.crawlFact.findMany({
+    where: { crawlJobId: crawlJob.id },
+    orderBy: { confidence: "desc" },
+    include: { crawlPage: { select: { url: true, pageType: true, title: true } } },
+  });
+  res.json({
+    crawl: { url: crawlJob.url, pagesDiscovered: crawlJob.pagesDiscovered, pagesCrawled: crawlJob.pagesCrawled },
+    facts: facts.map((f) => ({
+      field: f.field,
+      value: f.value,
+      confidence: f.confidence,
+      sourceUrl: f.crawlPage?.url ?? null,
+      sourcePageType: f.crawlPage?.pageType ?? null,
+      sourcePageTitle: f.crawlPage?.title ?? null,
+    })),
   });
 }));
 
