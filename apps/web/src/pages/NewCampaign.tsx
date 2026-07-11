@@ -545,6 +545,7 @@ export default function NewCampaign() {
   const navigate = useNavigate();
   const wsId = workspaceId ?? localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
   const activeJobKey = `adgo_active_campaign_generation_${wsId}`;
+  const activeJobUrlKey = `${activeJobKey}_url`;
 
   const [pageUrl, setPageUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -554,14 +555,21 @@ export default function NewCampaign() {
 
   // Same resumability contract as the old flow: generation runs server-side (BullMQ worker)
   // regardless of whether this component is mounted — persisting just the job id means
-  // switching pages and back resumes exactly where it left off.
+  // switching pages and back resumes exactly where it left off. The URL is persisted
+  // alongside it purely for display (the resubmit bar / decision hero eyebrow) — the job
+  // itself doesn't need it re-sent, since generation is already running server-side.
   useEffect(() => {
     const savedId = localStorage.getItem(activeJobKey);
     if (!savedId) return;
+    const savedUrl = localStorage.getItem(activeJobUrlKey);
+    if (savedUrl) setPageUrl(savedUrl);
     api
       .getCampaignGenerationStatus(savedId)
       .then(setJob)
-      .catch(() => localStorage.removeItem(activeJobKey));
+      .catch(() => {
+        localStorage.removeItem(activeJobKey);
+        localStorage.removeItem(activeJobUrlKey);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -602,6 +610,7 @@ export default function NewCampaign() {
       const created = await api.generateCampaign({ workspaceId: wsId, businessId, url });
       setJob(created);
       localStorage.setItem(activeJobKey, created.id);
+      localStorage.setItem(activeJobUrlKey, url);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't start research — check the URL and try again.");
     } finally {
@@ -614,6 +623,7 @@ export default function NewCampaign() {
     setError(null);
     setPageUrl("");
     localStorage.removeItem(activeJobKey);
+    localStorage.removeItem(activeJobUrlKey);
   }
 
   const isActive = Boolean(job) && job!.status !== "completed" && job!.status !== "failed";
