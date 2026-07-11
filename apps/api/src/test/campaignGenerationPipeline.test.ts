@@ -103,6 +103,7 @@ function fakeDeps(opts: {
       await options?.onProgress?.(9, 9);
       return fakeResearchContext();
     },
+    async extractCrawlFacts() { return 0; },
     async runDecisionEngine() { return fakeDecisionContext(); },
     async runIntelligenceEnrichment() {},
     async runAgentCoordinator(_context, options): Promise<AgentPipelineResult> {
@@ -128,6 +129,44 @@ test("campaignGenerationPipeline - runs research -> agents -> strategy -> campai
   assert.ok(deps.persistedAgentResults && "campaign-agent" in deps.persistedAgentResults, "agent results must be persisted before the campaign is built");
   // 20 research units + 20 agent units + 1 build unit = 41 total; final call must reach it.
   assert.deepStrictEqual(progressCalls[progressCalls.length - 1], [41, 41]);
+});
+
+test("campaignGenerationPipeline - extracts crawl facts after research but BEFORE the agents run when the crawl was persisted, and skips extraction without a crawlJobId", async () => {
+  const job = fakeGenerationJob();
+  const calls: string[] = [];
+
+  // With a crawlJobId on the research context: extraction runs, and strictly before agents.
+  const deps = fakeDeps({ job });
+  deps.runResearchOrchestrator = async () => ({
+    ...fakeResearchContext(),
+    website: { title: "t", description: "d", excerpt: "e", images: [], crawledPages: [], pagesDiscovered: 1, dataSource: "crawl", crawlJobId: "crawl-1" },
+  });
+  deps.extractCrawlFacts = async (crawlJobId) => { calls.push(`extract:${crawlJobId}`); return 3; };
+  const innerRunAgents = deps.runAgentCoordinator;
+  deps.runAgentCoordinator = async (context, options) => { calls.push("agents"); return innerRunAgents(context, options); };
+
+  await runCampaignGenerationPipeline(job.id, { deps });
+  assert.deepStrictEqual(calls, ["extract:crawl-1", "agents"], "facts must be in the DB before agents start reading them");
+
+  // Without a crawlJobId (default fake context): extraction must not be called at all.
+  const noCrawlDeps = fakeDeps({ job });
+  let extractCalled = false;
+  noCrawlDeps.extractCrawlFacts = async () => { extractCalled = true; return 0; };
+  await runCampaignGenerationPipeline(job.id, { deps: noCrawlDeps });
+  assert.strictEqual(extractCalled, false, "no crawl persistence means nothing to extract from");
+});
+
+test("campaignGenerationPipeline - a fact-extraction failure never fails campaign generation", async () => {
+  const job = fakeGenerationJob();
+  const deps = fakeDeps({ job });
+  deps.runResearchOrchestrator = async () => ({
+    ...fakeResearchContext(),
+    website: { title: "t", description: "d", excerpt: "e", images: [], crawledPages: [], pagesDiscovered: 1, dataSource: "crawl", crawlJobId: "crawl-1" },
+  });
+  deps.extractCrawlFacts = async () => { throw new Error("extraction exploded"); };
+
+  const result = await runCampaignGenerationPipeline(job.id, { deps });
+  assert.strictEqual(result.campaignId, "campaign-1", "pipeline must complete despite the extraction failure");
 });
 
 test("campaignGenerationPipeline - persists the Decision Engine's output alongside the agent results", async () => {

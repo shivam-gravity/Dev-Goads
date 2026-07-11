@@ -4,6 +4,7 @@ import { runAgentCoordinator } from "../../agents/AgentCoordinator.js";
 import type { AgentResult, BudgetAgentOutput, CampaignAgentOutput } from "../../agents/types/index.js";
 import type { ResearchContext } from "../../research/types/index.js";
 import { createResearchJob, runResearchOrchestrator, type RunResearchOrchestratorOptions } from "../../research/research-orchestrator/index.js";
+import { extractAndPersistCrawlFacts } from "../../research/crawl/factExtraction.js";
 import { runDecisionEngine } from "../../research/decision/decision-engine.js";
 import type { DecisionContext } from "../../research/decision/types.js";
 import { runIntelligenceEnrichment } from "../../research/intelligenceEnrichment.js";
@@ -33,6 +34,7 @@ export interface CampaignGenerationDeps {
   markCompleted: typeof markCampaignGenerationCompleted;
   createResearchJob: typeof createResearchJob;
   runResearchOrchestrator: typeof runResearchOrchestrator;
+  extractCrawlFacts: typeof extractAndPersistCrawlFacts;
   runDecisionEngine: typeof runDecisionEngine;
   runIntelligenceEnrichment: typeof runIntelligenceEnrichment;
   runAgentCoordinator: typeof runAgentCoordinator;
@@ -50,6 +52,7 @@ export const defaultCampaignGenerationDeps: CampaignGenerationDeps = {
   markCompleted: markCampaignGenerationCompleted,
   createResearchJob,
   runResearchOrchestrator,
+  extractCrawlFacts: extractAndPersistCrawlFacts,
   runDecisionEngine,
   runIntelligenceEnrichment,
   runAgentCoordinator,
@@ -146,6 +149,18 @@ export async function runCampaignGenerationPipeline(
     completedUnits = RESEARCH_PROVIDER_COUNT;
     await markStatus("aggregating");
     await reportOverall();
+
+    // Fact extraction must finish BEFORE the agents run (unlike the Decision Engine below,
+    // which is concurrent) — the fact-grounded agents (creative/campaign/critic) read
+    // CrawlFact rows from the DB at execute time, so facts written after they start are
+    // invisible to them. Still best-effort: no crawl persistence or an extraction failure
+    // just means agents run un-grounded, exactly as they did before this step existed.
+    const crawlJobId = context.website?.crawlJobId;
+    if (crawlJobId) {
+      await withSpan("campaign_generation.fact_extraction", () => deps.extractCrawlFacts(crawlJobId))
+        .then((count) => logger.info(`Extracted ${count} crawl facts for campaign generation job ${jobId}`))
+        .catch((err) => logger.warn(`Crawl fact extraction failed for campaign generation job ${jobId} — agents run without verified facts`, err));
+    }
 
     // Decision Engine runs concurrently with the Agent Coordinator below (same input,
     // ResearchContext, independent output) so it adds no extra latency to the pipeline.
