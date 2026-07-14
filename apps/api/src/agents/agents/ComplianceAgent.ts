@@ -59,7 +59,7 @@ function fallback(proposals: Record<string, unknown>): ComplianceAgentOutput {
   };
 }
 
-const ALL_CONTEXT_FIELDS = ["company", "market"] as const;
+const ALL_CONTEXT_FIELDS = ["company", "market", "legalRegulatory"] as const;
 
 /**
  * The second reviewer agent (alongside CriticAgent) — reviews the OTHER agents' proposed
@@ -83,6 +83,7 @@ export class ComplianceAgent implements AIAgent<ComplianceAgentOutput> {
         vars: {
           company: JSON.stringify(context.company ?? {}),
           market: JSON.stringify(context.market ?? {}),
+          legalRegulatory: JSON.stringify(context.legalRegulatory ?? {}),
           proposals: JSON.stringify(proposals),
         },
         tool: COMPLIANCE_AGENT_TOOL,

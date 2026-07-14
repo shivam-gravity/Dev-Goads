@@ -72,7 +72,7 @@ interface PromotedProduct {
 
 export default function CampaignGenerator({ businessId }: { businessId: string }) {
   const navigate = useNavigate();
-  const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+  const workspaceId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
   const [countries, setCountries] = useState<string[]>([]);
   const [channels, setChannels] = useState<string[]>(["meta"]);
@@ -115,9 +115,9 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
   }, [productsModalOpen]);
 
   useEffect(() => {
-    const deepResearchRaw = sessionStorage.getItem("adgo_deep_research");
+    const deepResearchRaw = sessionStorage.getItem("polluxa_deep_research");
     if (deepResearchRaw) {
-      sessionStorage.removeItem("adgo_deep_research");
+      sessionStorage.removeItem("polluxa_deep_research");
       try {
         const parsed = JSON.parse(deepResearchRaw) as {
           url: string;
@@ -139,10 +139,10 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
       return;
     }
 
-    const prefillUrl = sessionStorage.getItem("adgo_new_campaign_url");
+    const prefillUrl = sessionStorage.getItem("polluxa_new_campaign_url");
     if (prefillUrl) {
       setProductUrl(prefillUrl);
-      sessionStorage.removeItem("adgo_new_campaign_url");
+      sessionStorage.removeItem("polluxa_new_campaign_url");
     }
   }, []);
 
@@ -317,9 +317,9 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
 
   return (
     <div className="page-campaign-generator">
-      <header className="adsgo-header" ref={headerRef}>
-        <h1 className="adsgo-header-title">Campaign Generator</h1>
-        <div className="adsgo-header-right">
+      <header className="polluxa-header" ref={headerRef}>
+        <h1 className="polluxa-header-title">Campaign Generator</h1>
+        <div className="polluxa-header-right">
           <div className="header-meta-item">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" />

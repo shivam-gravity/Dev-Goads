@@ -23,6 +23,12 @@ export interface MarketIntelligenceInput {
 
 export type MarketLevel = "low" | "medium" | "high";
 
+export interface GeographicDemandEntry {
+  region: string;
+  demandLevel: MarketLevel;
+  notes?: string;
+}
+
 export interface MarketIntelligenceReport {
   currentMarket: string;
   growth: string;
@@ -31,6 +37,12 @@ export interface MarketIntelligenceReport {
   trends: string[];
   emergingCompetitors: string[];
   regulations: string[];
+  /** Compound Annual Growth Rate, as stated/estimated in research, e.g. "14.2% CAGR (2024-2029)" */
+  cagr?: string;
+  /** Total Addressable Market size, e.g. "$42B globally" */
+  tam?: string;
+  /** Per-region demand breakdown, or empty if the research didn't surface regional detail. */
+  geographicDemand: GeographicDemandEntry[];
   /** Categorical read the model extracts directly from the research narrative — kept
    * separate from opportunityScore below so the score itself never has to be an LLM
    * self-report (see computeOpportunityScore). */
@@ -66,8 +78,25 @@ const MARKET_TOOL = {
       regulations: { type: "array", items: { type: "string" }, minItems: 0, maxItems: 6, description: "Regulatory factors affecting this market, or empty if none notable" },
       growthLevel: { type: "string", enum: ["low", "medium", "high"], description: "Categorical read of the growth rate/trajectory described in `growth`" },
       demandLevel: { type: "string", enum: ["low", "medium", "high"], description: "Categorical read of current demand strength described in `demand`" },
+      cagr: { type: "string", description: "Compound Annual Growth Rate if stated/estimated in the research, e.g. \"14.2% CAGR (2024-2029)\", or omit if not found" },
+      tam: { type: "string", description: "Total Addressable Market size if stated/estimated in the research, e.g. \"$42B globally\", or omit if not found" },
+      geographicDemand: {
+        type: "array",
+        minItems: 0,
+        maxItems: 6,
+        items: {
+          type: "object",
+          properties: {
+            region: { type: "string", description: "e.g. \"North America\", \"APAC\", \"Western Europe\"" },
+            demandLevel: { type: "string", enum: ["low", "medium", "high"] },
+            notes: { type: "string" },
+          },
+          required: ["region", "demandLevel"],
+        },
+        description: "Per-region demand breakdown, or empty if the research didn't surface regional detail",
+      },
     },
-    required: ["currentMarket", "growth", "demand", "seasonality", "trends", "emergingCompetitors", "regulations", "growthLevel", "demandLevel"],
+    required: ["currentMarket", "growth", "demand", "seasonality", "trends", "emergingCompetitors", "regulations", "growthLevel", "demandLevel", "geographicDemand"],
   },
 };
 
@@ -84,6 +113,7 @@ function fallbackFields(subject: string): MarketFields {
     regulations: [],
     growthLevel: "low",
     demandLevel: "low",
+    geographicDemand: [],
   };
 }
 
@@ -127,7 +157,7 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
   }
 
   const [marketResearch, regulatoryResearch, priorMatches] = await Promise.all([
-    runWebSearch(`What is the current market size, growth rate, demand trends, and seasonality for ${industry} (relevant to a business like "${subject}")? Include any notable trends.`),
+    runWebSearch(`What is the current market size (TAM), CAGR/growth rate, demand trends, seasonality, and regional/geographic demand breakdown for ${industry} (relevant to a business like "${subject}")? Include any notable trends.`),
     runWebSearch(`What emerging/newer competitors are gaining traction in ${industry}, and what regulatory factors affect this market?`),
     readMemory({ kind: MEMORY_KIND, queryText: `${subject} — ${industry}`, workspaceId: input.workspaceId, excludeBusinessId: input.businessId, topK: 2 }),
   ]);

@@ -98,7 +98,7 @@ export default function AIInsights({ businessId }: { businessId: string }) {
   const [brandProduct, setBrandProduct] = useState<ProductAnalysis | null>(null);
   const [brandAudience, setBrandAudience] = useState<AudienceAnalysis | null>(null);
 
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+  const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
   async function loadInsights() {
     setLoading(true);

@@ -7,8 +7,8 @@ import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
 import { initErrorTracking, registerCrashReporting, captureError } from "../infra/errorTracking.js";
 
-initErrorTracking("adgo-creative-generation-worker");
-registerCrashReporting("adgo-creative-generation-worker");
+initErrorTracking("polluxa-creative-generation-worker");
+registerCrashReporting("polluxa-creative-generation-worker");
 
 /**
  * Standalone process — run with `npm run dev:worker --workspace apps/api` alongside

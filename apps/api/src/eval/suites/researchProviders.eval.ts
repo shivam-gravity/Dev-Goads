@@ -59,7 +59,7 @@ export const researchProviderEvalCases: EvalCase<ProviderResult<unknown>>[] = [
   },
   {
     name: "competitor-provider / a nonsense domain degrades to a labeled, low-confidence fallback rather than an error",
-    run: () => new CompetitorProvider().execute(input("https://this-domain-should-not-plausibly-exist-adgo-eval.test")),
+    run: () => new CompetitorProvider().execute(input("https://this-domain-should-not-plausibly-exist-polluxa-eval.test")),
     check: (result) => {
       // The point of this case: it must NOT be "failed" (a made-up domain should never
       // crash the pipeline), and confidence must honestly reflect that no real data was

@@ -71,12 +71,14 @@ const CAMPAIGN_GENERATION_LOCK_TTL_MS = 10 * 60 * 1000;
 
 export interface RunCampaignGenerationOptions {
   deps?: CampaignGenerationDeps;
-  /** Called with (completed, total) across the WHOLE pipeline (research providers +
+  /** Called with (completed, total, stepName) across the WHOLE pipeline (research providers +
    * agents + the campaign-build step) on one consistent 0..total scale, so a single
    * BullMQ job.updateProgress call can represent the entire Gateway -> Campaign Route ->
    * Research Orchestrator -> Knowledge Aggregator -> AI Agent Coordinator -> Campaign
-   * Builder flow, not just one stage of it. */
-  onProgress?: (completed: number, total: number) => void | Promise<void>;
+   * Builder flow, not just one stage of it. `stepName` is the provider/agent that just
+   * settled (or a phase-boundary marker like "aggregating"/"campaign-built") — callers use
+   * it to show real live progress instead of a bare percentage. */
+  onProgress?: (completed: number, total: number, stepName?: string) => void | Promise<void>;
 }
 
 // Fixed fan-out widths of the two sub-pipelines this orchestrates — see
@@ -85,7 +87,9 @@ export interface RunCampaignGenerationOptions {
 // across all three phases rather than three separately-scaled ones.
 const RESEARCH_PROVIDER_COUNT = 20;
 const AGENT_COUNT = 20;
-const TOTAL_PIPELINE_UNITS = RESEARCH_PROVIDER_COUNT + AGENT_COUNT + 1;
+// Exported so the gateway's progress route (router.ts) can report a total alongside the
+// live step list without duplicating this arithmetic.
+export const TOTAL_PIPELINE_UNITS = RESEARCH_PROVIDER_COUNT + AGENT_COUNT + 1;
 
 function defaultCampaignName(job: CampaignGenerationJobRecord, business: { name: string; brandName?: string } | null): string {
   return job.name ?? business?.brandName ?? business?.name ?? `AI-generated campaign for ${job.url}`;
@@ -110,8 +114,8 @@ export async function runCampaignGenerationPipeline(
   if (!job) throw new Error(`Campaign generation job ${jobId} not found`);
 
   let completedUnits = 0;
-  const reportOverall = async () => {
-    await options.onProgress?.(completedUnits, TOTAL_PIPELINE_UNITS);
+  const reportOverall = async (stepName?: string) => {
+    await options.onProgress?.(completedUnits, TOTAL_PIPELINE_UNITS, stepName);
   };
 
   const markStatus = async (status: CampaignGenerationStatus, extra?: Parameters<typeof markCampaignGenerationStatus>[2]) => {
@@ -140,15 +144,15 @@ export async function runCampaignGenerationPipeline(
 
     const context: ResearchContext = await withSpan("campaign_generation.research", () =>
       deps.runResearchOrchestrator(researchJob.id, {
-        onProgress: async (completed) => {
+        onProgress: async (completed, _total, providerName) => {
           completedUnits = completed;
-          await reportOverall();
+          await reportOverall(providerName);
         },
       })
     );
     completedUnits = RESEARCH_PROVIDER_COUNT;
     await markStatus("aggregating");
-    await reportOverall();
+    await reportOverall("aggregating");
 
     // Fact extraction must finish BEFORE the agents run (unlike the Decision Engine below,
     // which is concurrent) — the fact-grounded agents (creative/campaign/critic) read
@@ -184,9 +188,9 @@ export async function runCampaignGenerationPipeline(
     await markStatus("running_agents");
     const pipeline: AgentPipelineResult = await withSpan("campaign_generation.agents", () =>
       deps.runAgentCoordinator(context, {
-        onProgress: async (completed) => {
+        onProgress: async (completed, _total, agentName) => {
           completedUnits = RESEARCH_PROVIDER_COUNT + completed;
-          await reportOverall();
+          await reportOverall(agentName);
         },
       } satisfies AgentCoordinatorOptions)
     );
@@ -228,7 +232,7 @@ export async function runCampaignGenerationPipeline(
     });
 
     completedUnits = TOTAL_PIPELINE_UNITS;
-    await reportOverall();
+    await reportOverall("campaign-built");
     await deps.markCompleted(jobId, campaign.id);
 
     return { campaignId: campaign.id, strategyId, researchJobId: researchJob.id };

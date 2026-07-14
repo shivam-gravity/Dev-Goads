@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate, NavLink, useLocation } from "react-router-dom";
-import AdsGoHeader from "../../components/AdsGoHeader.js";
+import PolluxaHeader from "../../components/PolluxaHeader.js";
 import AdPlatformConnectionTab from "./AdPlatformConnectionTab.js";
 import SubscribeTab from "./SubscribeTab.js";
 import YourProfileTab from "./YourProfileTab.js";
@@ -17,7 +17,7 @@ export default function UserCenter({ businessId }: { businessId: string }) {
 
   return (
     <div className="page-user-center">
-      <AdsGoHeader breadcrumb={["User Center", breadcrumbLabel]} />
+      <PolluxaHeader breadcrumb={["User Center", breadcrumbLabel]} />
 
       <nav className="admin-tabs-nav">
         <NavLink to="ad-platform-connection" className={({ isActive }) => `admin-tab-link ${isActive ? "active" : ""}`}>

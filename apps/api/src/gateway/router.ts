@@ -56,6 +56,9 @@ import { creativeGenerationQueue, researchSessionQueue, researchOrchestratorQueu
 import { createResearchJob, getResearchJob as getResearchOrchestratorJob, getResearchJobWithExecutions } from "../research/research-orchestrator/index.js";
 import { toStrategyInput } from "../research/knowledge/toStrategyInput.js";
 import { createCampaignGenerationJob, getCampaignGenerationJob } from "../modules/orchestrator/campaignGenerationService.js";
+import { TOTAL_PIPELINE_UNITS } from "../modules/orchestrator/campaignGenerationPipeline.js";
+import { getProgressSteps } from "../infra/liveProgress.js";
+import { freshnessScore, isStale } from "../research/knowledge/freshness.js";
 import { listDeadLetterEntries } from "../infra/deadLetterQueue.js";
 import {
   listSavedAudiences,
@@ -990,12 +993,20 @@ router.get("/campaigns/generate/:id", asyncHandler(async (req: AuthedRequest, re
   res.json(job);
 }));
 
+// How long a completed generation's research is considered fresh before the UI prompts a
+// re-run — reuses the same freshnessScore/isStale math Research Memory's retrieval already
+// applies (research/knowledge/freshness.ts), just with a far shorter horizon: a business's
+// own market/competitor/pricing landscape moves much faster than the 180-day corroboration
+// window that's appropriate for cross-business RAG retrieval.
+const CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
 router.get("/campaigns/generate/:id/status", asyncHandler(async (req: AuthedRequest, res) => {
   const job = await getCampaignGenerationJob(req.params.id);
   if (!job) return res.status(404).json({ error: "Campaign generation job not found" });
   if (!(await getMembership(job.workspaceId, req.userId!))) {
     return res.status(403).json({ error: "You do not have access to this campaign generation job" });
   }
+  const researchedAt = job.completedAt ?? job.startedAt ?? job.createdAt;
   res.json({
     id: job.id,
     status: job.status,
@@ -1003,11 +1014,94 @@ router.get("/campaigns/generate/:id/status", asyncHandler(async (req: AuthedRequ
     strategyId: job.strategyId,
     campaignId: job.campaignId,
     decisionContext: job.decisionContext,
+    // The 20-agent pipeline's raw per-agent output (Record<agentName, AgentResult<unknown>>) —
+    // already computed and persisted, previously never returned to any caller. Exposed here so
+    // the UI can show which data sources actually grounded each agent's recommendation and flag
+    // any that had to fall back to a generic guess, instead of only showing decisionContext's
+    // separate ranked-recommendation view.
+    agentResults: job.agentResults,
     error: job.error,
     startedAt: job.startedAt,
     completedAt: job.completedAt,
     updatedAt: job.updatedAt,
+    url: job.url,
+    // Freshness of the underlying research, for a "Researched N days ago" UI badge — computed
+    // the same way Research Memory scores its own retrieved entries' age (see freshness.ts),
+    // just against this job's own completion time rather than a memory row's createdAt.
+    researchedAt,
+    researchFreshness: freshnessScore(researchedAt, CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS),
+    researchIsStale: isStale(researchedAt, CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS),
   });
+}));
+
+router.get("/campaigns/generate/:id/progress", asyncHandler(async (req: AuthedRequest, res) => {
+  const job = await getCampaignGenerationJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Campaign generation job not found" });
+  if (!(await getMembership(job.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this campaign generation job" });
+  }
+  const completedSteps = await getProgressSteps("campaign-generation", job.id);
+  res.json({ completedSteps, total: TOTAL_PIPELINE_UNITS });
+}));
+
+// Provider.name (e.g. "social-media", "legal-regulatory") -> the ResearchContext field name
+// an AgentEvidenceItem.source actually uses (e.g. "socialMedia", "legalRegulatory") — the two
+// diverged because providers were named for their own module/file (kebab-case) well before
+// the 20-agent layer's evidence trail existed. Keyed here (not in the frontend) so the UI can
+// do a direct evidence.source -> citations lookup with no mapping logic of its own. "search"
+// (SearchProvider) is deliberately omitted — its output feeds metadata.generalSearch, already
+// surfaced under evidence source "general-search" by CampaignAgent, not a ResearchContext field.
+const PROVIDER_NAME_TO_CONTEXT_FIELD: Record<string, string> = {
+  competitor: "competitors",
+  seo: "keywords",
+  "social-media": "socialMedia",
+  "hiring-signals": "hiringSignals",
+  "content-marketing": "contentMarketing",
+  "backlink-authority": "backlinkAuthority",
+  "app-store": "appStore",
+  "video-presence": "videoPresence",
+  "local-presence": "localPresence",
+  "legal-regulatory": "legalRegulatory",
+  "search-ranking": "searchRanking",
+  "ad-library": "adLibrary",
+  "serp-features": "serpFeatures",
+  reddit: "communityDiscussion",
+};
+
+// Real citation URLs behind the research, keyed by the same field names the Agent Reasoning
+// panel's evidence already uses — resolves job -> ResearchJob (via researchJobId) ->
+// ProviderExecution rows, so that panel can show actual clickable sources instead of just
+// each field's generic dataSource label.
+router.get("/campaigns/generate/:id/citations", asyncHandler(async (req: AuthedRequest, res) => {
+  const job = await getCampaignGenerationJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Campaign generation job not found" });
+  if (!(await getMembership(job.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this campaign generation job" });
+  }
+  if (!job.researchJobId) return res.json({ citationsByField: {}, siteMap: null, competitorAds: null });
+
+  const executions = await prisma.providerExecution.findMany({
+    where: { researchJobId: job.researchJobId },
+    orderBy: { createdAt: "desc" },
+  });
+  const citationsByField: Record<string, { url: string; title: string }[]> = {};
+  let siteMap: unknown = null;
+  let competitorAds: unknown = null;
+  for (const e of executions) {
+    const field = PROVIDER_NAME_TO_CONTEXT_FIELD[e.provider] ?? e.provider;
+    if (!citationsByField[field]) {
+      // rows are ordered newest-first — keep only the latest attempt per provider
+      const citations = Array.isArray(e.citations) ? (e.citations as { url: string; title: string }[]) : [];
+      if (citations.length > 0) citationsByField[field] = citations;
+    }
+    // The Agent Reasoning panel's Site map / Competitor ads cards need each provider's actual
+    // structured output (page list / ad list), not just its citations — pulled straight from
+    // ProviderExecution.data since NavigationProvider/AdLibraryProvider aren't wired into any
+    // agent's evidence trail (navigation) or need more than the citation label (ad library).
+    if (e.provider === "navigation" && siteMap === null) siteMap = e.data;
+    if (e.provider === "ad-library" && competitorAds === null) competitorAds = e.data;
+  }
+  res.json({ citationsByField, siteMap, competitorAds });
 }));
 
 // The verified facts behind a generation — what the fact-grounded agents actually saw.

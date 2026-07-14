@@ -9,7 +9,7 @@
 
 x-app-env: &app-env
   NODE_ENV: production
-  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-adgo}?schema=public
+  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-polluxa}?schema=public
   REDIS_URL: redis://redis:6379
   JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set — see .env.example}
   INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY must be set — see .env.example}
@@ -49,7 +49,7 @@ x-api-image: &api-image
     args:
       WORKSPACE: apps/api
       DIST_ENTRY: dist/index.js
-  image: adgo-api:local
+  image: polluxa-api:local
 
 x-depends-on-datastores: &depends-on-datastores
   postgres:
@@ -64,7 +64,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-adgo}
+      POSTGRES_DB: ${POSTGRES_DB:-polluxa}
     ports:
       - "5432:5432"
     volumes:
@@ -130,7 +130,7 @@ services:
       args:
         WORKSPACE: apps/auth-service
         DIST_ENTRY: dist/auth-service/src/index.js
-    image: adgo-auth-service:local
+    image: polluxa-auth-service:local
     restart: unless-stopped
     environment: *app-env
     ports:
@@ -150,7 +150,7 @@ services:
       args:
         WORKSPACE: apps/campaign-service
         DIST_ENTRY: dist/campaign-service/src/index.js
-    image: adgo-campaign-service:local
+    image: polluxa-campaign-service:local
     restart: unless-stopped
     environment: *app-env
     ports:
@@ -167,7 +167,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.scraper-service
-    image: adgo-scraper-service:local
+    image: polluxa-scraper-service:local
     restart: unless-stopped
     environment: *app-env
     ports:

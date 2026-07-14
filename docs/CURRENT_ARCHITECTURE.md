@@ -1,4 +1,4 @@
-# AdGo / CRM Ads — Current-State Technical Architecture Document
+# Polluxa / CRM Ads — Current-State Technical Architecture Document
 
 **Audience**: senior engineers onboarding onto this codebase.
 **Scope**: the entire repo as it exists today, verified file-by-file (not inferred). Where `docs/architecture-roadmap.md` describes a *target* architecture, this document describes *what is actually running* — and several claims in that roadmap are now out of date (Postgres, Redis/BullMQ, and three of the five target services already exist). Deltas are called out inline in §16/§18.
@@ -7,7 +7,7 @@
 
 ## 0. Executive Summary
 
-AdGo (product-facing name "CRM Ads") is an AI-driven ad-campaign automation platform: a business connects Meta/Google ad accounts, AdGo scrapes their website, runs an AI research pipeline (product/audience/competitor/market/persona analysis), generates a media strategy and campaign creative (copy + AI image + optional AI video), and launches/optimizes real ad campaigns — with an AI chat "Strategist" and a separate "Copilot" for ongoing account management.
+Polluxa (product-facing name "CRM Ads") is an AI-driven ad-campaign automation platform: a business connects Meta/Google ad accounts, Polluxa scrapes their website, runs an AI research pipeline (product/audience/competitor/market/persona analysis), generates a media strategy and campaign creative (copy + AI image + optional AI video), and launches/optimizes real ad campaigns — with an AI chat "Strategist" and a separate "Copilot" for ongoing account management.
 
 It is **not** a single monolith and **not** a fully-separated microservice fleet — it's a **hybrid**: one Express "gateway" process owns most business logic and the Prisma/Postgres connection; three sibling processes (`auth-service`, `campaign-service`, `scraper-service`) run independently but **import gateway service-layer code directly via relative TypeScript imports**, not over HTTP. Five more standalone Node processes are BullMQ workers. One Python FastAPI sidecar exists purely as a no-API-key research fallback. Nothing is containerized for deployment (Docker Compose exists, but only to provision local Postgres/Redis — there is no Dockerfile for any app).
 
@@ -344,7 +344,7 @@ graph TD
 
 Exactly two React Contexts, no Redux/Zustand/MobX:
 
-- **`AuthContext`** (`src/context/AuthContext.tsx`): `user`, `workspace`, `workspaceId`, `businessId`, `isAuthenticated`, `login`/`signup`/`logout`. Backed by a bearer token in `localStorage` (`adgo_token`), validated on mount via `GET /auth/me`.
+- **`AuthContext`** (`src/context/AuthContext.tsx`): `user`, `workspace`, `workspaceId`, `businessId`, `isAuthenticated`, `login`/`signup`/`logout`. Backed by a bearer token in `localStorage` (`polluxa_token`), validated on mount via `GET /auth/me`.
 - **`CopilotProvider`** (`src/providers/CopilotProvider.tsx`): the floating "AI Copilot" chat's own message history/status state, calls `api.chatWithCopilot`.
 
 Everything else — every page's data, loading flag, error message, form fields — is local `useState`/`useEffect`. This is simple and consistent, but means: no shared cache (navigating away and back to a page always refetches), no request deduplication (two components mounting simultaneously and both wanting the same data both fetch independently), and no built-in retry/stale-while-revalidate behavior.
@@ -363,7 +363,7 @@ const [error, setError] = useState<string | null>(null);
 useEffect(() => { load(); }, [deps]);
 async function load() { setLoading(true); try { setData(await api.list(...)); } catch { setError(...); } finally { setLoading(false); } }
 ```
-Component structure is one file per page under `src/pages/`, shared chrome (`AdsGoHeader`, sidebar) composed at the `AuthenticatedApp` level, a handful of shared components (`FormattedMessage` for markdown-lite AI-reply rendering, `HelpWidget`, `ErrorBoundary`, `CopilotDrawer`). No component library (no MUI/Chakra) — all hand-rolled CSS in one large `styles.css`.
+Component structure is one file per page under `src/pages/`, shared chrome (`PolluxaHeader`, sidebar) composed at the `AuthenticatedApp` level, a handful of shared components (`FormattedMessage` for markdown-lite AI-reply rendering, `HelpWidget`, `ErrorBoundary`, `CopilotDrawer`). No component library (no MUI/Chakra) — all hand-rolled CSS in one large `styles.css`.
 
 ---
 

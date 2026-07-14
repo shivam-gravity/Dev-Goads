@@ -47,12 +47,13 @@ export class BudgetAgent implements AIAgent<BudgetAgentOutput> {
 
   async execute(context: ResearchContext): Promise<AgentResult<BudgetAgentOutput>> {
     return runAgentStep(this.name, async () => {
-      const fields = ["market", "competitors"] as const;
+      const fields = ["market", "competitors", "funding"] as const;
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           market: JSON.stringify(context.market ?? {}),
           competitors: JSON.stringify(context.competitors ?? {}),
+          funding: JSON.stringify(context.funding ?? {}),
         },
         tool: BUDGET_AGENT_TOOL,
         schema: budgetAgentSchema,

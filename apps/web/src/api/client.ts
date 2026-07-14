@@ -166,10 +166,41 @@ export interface DecisionContext {
   simulations: StrategySimulationResult[]; generatedAt: string;
 }
 export type CampaignGenerationPipelineStatus = "pending" | "researching" | "aggregating" | "running_agents" | "building_campaign" | "completed" | "failed";
+
+/** Which ResearchContext field an agent drew from, and that field's own dataSource label —
+ * mirrors apps/api/src/agents/types/index.ts's AgentEvidenceItem exactly. */
+export interface AgentEvidenceItem {
+  source: string;
+  detail: string;
+}
+/** One of the 20 AI agents' raw output — mirrors apps/api/src/agents/types/index.ts's
+ * AgentResult<T>. `data` is left loosely typed here since each agent's shape differs and
+ * the reasoning panel only needs to render it generically (key: value pairs), not consume
+ * specific fields the way the backend's own agents do. */
+export interface AgentRunResult {
+  agent: string;
+  promptId: string;
+  promptVersion: number;
+  data: Record<string, unknown>;
+  confidence: number;
+  evidence: AgentEvidenceItem[];
+  usedFallback: boolean;
+  generatedAt: string;
+  durationMs: number;
+  error?: string;
+}
 export interface CampaignGenerationJobStatus {
   id: string; status: CampaignGenerationPipelineStatus; researchJobId?: string; strategyId?: string;
-  campaignId?: string; decisionContext: DecisionContext | null; error?: string;
+  campaignId?: string; decisionContext: DecisionContext | null;
+  agentResults?: Record<string, AgentRunResult> | null; error?: string;
   startedAt?: string; completedAt?: string; updatedAt: string;
+  url?: string;
+  /** When the underlying research was last run, and how fresh it still is (14-day horizon —
+   * see apps/api/src/gateway/router.ts's CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS) — lets the UI show
+   * a "Researched N days ago" badge and prompt a refresh once it's gone stale. */
+  researchedAt?: string;
+  researchFreshness?: number;
+  researchIsStale?: boolean;
 }
 
 /** One source-attributed fact extracted from the business's own website during generation. */
@@ -185,6 +216,53 @@ export interface VerifiedCampaignFact {
 export interface CampaignGenerationFacts {
   crawl: { url: string; pagesDiscovered: number; pagesCrawled: number } | null;
   facts: VerifiedCampaignFact[];
+}
+
+/** Real-time step names as they complete (research providers, then agents, then the
+ * campaign build step) — backed by a short-lived Redis record, not a durable one; an old
+ * or already-finished job will just return an empty `completedSteps`. */
+export interface CampaignGenerationProgress {
+  completedSteps: string[];
+  total: number;
+}
+
+export interface SiteMapPage {
+  url: string;
+  title?: string;
+  pageType: string;
+  discovered: boolean;
+}
+
+export interface SiteMapData {
+  pages: SiteMapPage[];
+  totalDiscovered: number;
+  dataSource: string;
+}
+
+export interface CompetitorAdEntry {
+  platform: "meta" | "google";
+  advertiserName: string;
+  headline?: string;
+  bodyText?: string;
+  previewUrl?: string;
+  sourceUrl: string;
+}
+
+export interface CompetitorAdsData {
+  ads: CompetitorAdEntry[];
+  dataSource: string;
+}
+
+/** Real citation URLs behind the research, keyed by the same ResearchContext field names
+ * AgentEvidenceItem.source already uses (e.g. "market", "competitors") — lets the Agent
+ * Reasoning panel show actual clickable sources instead of just a dataSource label.
+ * siteMap/competitorAds are each provider's raw structured output — NavigationProvider isn't
+ * wired into any agent's evidence trail, and AdLibraryProvider's ad list needs more than a
+ * citation label to render, so both ride alongside citationsByField rather than through it. */
+export interface CampaignGenerationCitations {
+  citationsByField: Record<string, { url: string; title: string }[]>;
+  siteMap: SiteMapData | null;
+  competitorAds: CompetitorAdsData | null;
 }
 
 export interface ResearchSession {
@@ -362,6 +440,8 @@ export const api = {
     request<CampaignGenerationJobStatus>("/campaigns/generate", { method: "POST", body: JSON.stringify(input) }),
   getCampaignGenerationStatus: (id: string) => request<CampaignGenerationJobStatus>(`/campaigns/generate/${id}/status`),
   getCampaignGenerationFacts: (id: string) => request<CampaignGenerationFacts>(`/campaigns/generate/${id}/facts`),
+  getCampaignGenerationProgress: (id: string) => request<CampaignGenerationProgress>(`/campaigns/generate/${id}/progress`),
+  getCampaignGenerationCitations: (id: string) => request<CampaignGenerationCitations>(`/campaigns/generate/${id}/citations`),
 
   // Business
   createBusiness: (input: Omit<BusinessProfile, "id">) =>
@@ -386,7 +466,7 @@ export const api = {
   getCampaign: (id: string) => request<Campaign>(`/campaigns/${id}`),
   updateCampaign: (id: string, patch: CampaignBuilderPatch) =>
     request<Campaign>(`/campaigns/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
-  launchCampaign: (id: string, workspaceId: string = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace") =>
+  launchCampaign: (id: string, workspaceId: string = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace") =>
     request<Campaign>(`/campaigns/${id}/launch`, { method: "POST", body: JSON.stringify({ workspaceId }) }),
   pauseVariant: (campaignId: string, variantId: string) =>
     request<Campaign>(`/campaigns/${campaignId}/variants/${variantId}/pause`, { method: "POST" }),

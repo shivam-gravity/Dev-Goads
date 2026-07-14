@@ -42,12 +42,14 @@ export class CompetitorAgent implements AIAgent<CompetitorAgentOutput> {
 
   async execute(context: ResearchContext): Promise<AgentResult<CompetitorAgentOutput>> {
     return runAgentStep(this.name, async () => {
-      const fields = ["competitors", "market"] as const;
+      const fields = ["competitors", "market", "partnerships", "adLibrary"] as const;
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           competitors: JSON.stringify(context.competitors ?? {}),
           market: JSON.stringify(context.market ?? {}),
+          partnerships: JSON.stringify(context.partnerships ?? {}),
+          adLibrary: JSON.stringify(context.adLibrary ?? {}),
         },
         tool: COMPETITOR_AGENT_TOOL,
         schema: competitorAgentSchema,

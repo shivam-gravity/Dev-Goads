@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import AdsGoHeader from "../components/AdsGoHeader.js";
+import PolluxaHeader from "../components/PolluxaHeader.js";
 import FormattedMessage from "../components/FormattedMessage.js";
 import { api } from "../api/client.js";
 import type { StrategistChatMessage } from "../api/client.js";
@@ -45,7 +45,7 @@ interface ChatSession {
   messages: ChatMessage[];
 }
 
-const HISTORY_KEY_PREFIX = "adgo-strategist-history:";
+const HISTORY_KEY_PREFIX = "polluxa-strategist-history:";
 const MAX_HISTORY_SESSIONS = 20;
 
 function loadSessions(businessId: string): ChatSession[] {
@@ -181,7 +181,7 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
 
   return (
     <div className="page-media-plan">
-      <AdsGoHeader breadcrumb={["Media Plan"]} />
+      <PolluxaHeader breadcrumb={["Media Plan"]} />
 
       <div className="media-plan-layout">
         <section className="media-plan-hero-card">

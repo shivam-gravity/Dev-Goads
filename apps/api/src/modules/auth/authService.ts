@@ -13,7 +13,7 @@ export interface User {
 }
 
 function hashPassword(password: string, salt: string): string {
-  return createHash("sha256").update(salt + password + "adgo-secret").digest("hex");
+  return createHash("sha256").update(salt + password + "polluxa-secret").digest("hex");
 }
 
 function generateSalt(): string {

@@ -17,7 +17,7 @@ test("robots - honors Disallow prefixes for the wildcard agent", () => {
 
 test("robots - a group naming our bot overrides the wildcard group entirely", () => {
   const rules = parseRobots(
-    "User-agent: *\nDisallow: /\n\nUser-agent: AdGoOnboardingBot\nDisallow: /admin"
+    "User-agent: *\nDisallow: /\n\nUser-agent: PolluxaOnboardingBot\nDisallow: /admin"
   );
   assert.strictEqual(isPathAllowed(rules, "/pricing"), true, "the * group's Disallow: / must not apply to our named group");
   assert.strictEqual(isPathAllowed(rules, "/admin"), false);

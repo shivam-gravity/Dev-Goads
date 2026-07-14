@@ -17,7 +17,7 @@ const DEFAULT_LOGS: AuditLog[] = [
     who: "ssrivastava",
     action: "Updated workspace settings",
     when: new Date(Date.now() - 1000 * 60 * 15).toLocaleString(), // 15 mins ago
-    oldValue: "Name: AdGo Platform",
+    oldValue: "Name: Polluxa Platform",
     newValue: "Name: Default Brand",
     ip: "192.168.1.104",
     device: "Chrome 126 / Windows"

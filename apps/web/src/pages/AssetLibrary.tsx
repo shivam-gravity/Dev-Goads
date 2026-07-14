@@ -107,7 +107,7 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
   const [itemFilter, setItemFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
 
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+  const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
   async function loadAssets() {
     setLoading(true);

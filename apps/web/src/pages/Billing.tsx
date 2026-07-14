@@ -30,7 +30,7 @@ export default function Billing({ businessId }: { businessId: string }) {
   const [savingCard, setSavingCard] = useState(false);
   const [cardError, setCardError] = useState<string | null>(null);
 
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+  const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
   async function refresh() {
     try {

@@ -4,11 +4,14 @@ import { redisConnection, RESEARCH_ORCHESTRATOR_QUEUE } from "../infra/queue.js"
 import { runResearchOrchestrator } from "../research/research-orchestrator/ResearchOrchestrator.js";
 import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
 import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
+import { recordProgressStep } from "../infra/liveProgress.js";
 import { logger } from "../modules/logger/logger.js";
 import { initErrorTracking, registerCrashReporting, captureError } from "../infra/errorTracking.js";
 
-initErrorTracking("adgo-research-orchestrator-worker");
-registerCrashReporting("adgo-research-orchestrator-worker");
+const PROGRESS_PREFIX = "research";
+
+initErrorTracking("polluxa-research-orchestrator-worker");
+registerCrashReporting("polluxa-research-orchestrator-worker");
 
 /**
  * Standalone process — run with `npm run dev:research-orchestrator-worker --workspace
@@ -21,8 +24,9 @@ const worker = new Worker(
   async (job: Job) => {
     const { jobId } = job.data as { jobId: string };
     return runResearchOrchestrator(jobId, {
-      onProgress: async (completed, total) => {
+      onProgress: async (completed, total, providerName) => {
         await job.updateProgress(Math.round((completed / total) * 100));
+        if (providerName) await recordProgressStep(PROGRESS_PREFIX, jobId, providerName);
       },
     });
   },

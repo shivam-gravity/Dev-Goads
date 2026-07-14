@@ -55,6 +55,11 @@ export class AudienceIntelligenceProvider implements ResearchProvider<AudienceDa
         // actually needs painPoints for.
         painPoints: [...report.painPoints, ...report.objections],
         interestTags: report.channels,
+        buyingCommittee: report.buyingCommittee.length > 0 ? report.buyingCommittee : undefined,
+        decisionHierarchy: report.decisionHierarchy,
+        budgetOwner: report.budgetOwner,
+        procurementCycle: report.procurementCycle,
+        buyingTriggers: report.buyingTriggers,
         dataSource,
       };
 

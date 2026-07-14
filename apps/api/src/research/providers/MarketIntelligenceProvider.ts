@@ -10,11 +10,11 @@ import { citationsToEvidence, NO_CITATIONS_DATA_SOURCE, NO_SEARCH_DATA_SOURCE, r
  * shape the 9-provider pipeline already expects, replacing the older single-search
  * MarketProvider as the production "market" slot.
  *
- * MarketData itself isn't extended with new fields (no opportunityScore/regulations/
- * emergingCompetitors properties) to avoid changing a type every other provider/consumer
- * already relies on — the richer findings are folded into the existing marketSize/
- * trends/competitionLevel strings instead, same approach CompetitorIntelligenceProvider
- * takes with CompetitorEntry.notes.
+ * opportunityScore/regulations/emergingCompetitors are folded into the existing marketSize/
+ * trends/competitionLevel strings (same approach CompetitorIntelligenceProvider takes with
+ * CompetitorEntry.notes) so nothing that already relies on those fields needs to change.
+ * cagr/tam/geographicDemand are genuinely new, optional MarketData fields — additive, since
+ * every existing ResearchContext fixture keeps compiling without them.
  */
 export class MarketIntelligenceProvider implements ResearchProvider<MarketData> {
   readonly name = "market";
@@ -42,6 +42,9 @@ export class MarketIntelligenceProvider implements ResearchProvider<MarketData> 
         growthRate: report.growth,
         trends: [...report.trends, `Demand: ${report.demand}`, `Seasonality: ${report.seasonality}`],
         competitionLevel,
+        cagr: report.cagr,
+        tam: report.tam,
+        geographicDemand: report.geographicDemand.length > 0 ? report.geographicDemand : undefined,
         dataSource,
       };
 

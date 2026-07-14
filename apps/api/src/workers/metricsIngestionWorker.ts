@@ -11,8 +11,8 @@ import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
 import { initErrorTracking, registerCrashReporting, captureError } from "../infra/errorTracking.js";
 
-initErrorTracking("adgo-metrics-ingestion-worker");
-registerCrashReporting("adgo-metrics-ingestion-worker");
+initErrorTracking("polluxa-metrics-ingestion-worker");
+registerCrashReporting("polluxa-metrics-ingestion-worker");
 
 const INGEST_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const REPEATABLE_JOB_NAME = "ingest-active-campaigns";

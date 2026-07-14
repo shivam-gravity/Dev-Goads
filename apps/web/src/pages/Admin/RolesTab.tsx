@@ -33,7 +33,7 @@ const DEFAULT_MATRIX: Record<typeof ROLES[number], Record<string, boolean>> = {
   "Billing Admin": { create_campaign: false, delete_campaign: false, launch_campaign: false, billing: true, integrations: false, workspace: false }
 };
 
-const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
 export default function RolesTab() {
   const [matrix, setMatrix] = useState<RbacMatrix>(DEFAULT_MATRIX);

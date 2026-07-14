@@ -1,5 +1,5 @@
 import { useState } from "react";
-import AdsGoHeader from "../components/AdsGoHeader.js";
+import PolluxaHeader from "../components/PolluxaHeader.js";
 import { api, ProductAnalysis } from "../api/client.js";
 import { SparkleIcon, ClockIcon, GlobeIcon, CloseIcon } from "../components/icons.js";
 
@@ -33,8 +33,8 @@ export default function BrandProfile() {
   }
 
   return (
-    <div className={`page-brand-profile ${modalOpen ? "adsgo-modal-dimmed" : ""}`}>
-      <AdsGoHeader breadcrumb={["Brand Center", "Brand Profile"]} />
+    <div className={`page-brand-profile ${modalOpen ? "polluxa-modal-dimmed" : ""}`}>
+      <PolluxaHeader breadcrumb={["Brand Center", "Brand Profile"]} />
 
       {profile ? (
         <section className="card">
@@ -61,24 +61,24 @@ export default function BrandProfile() {
       )}
 
       {modalOpen && (
-        <div className="adsgo-modal-overlay" onClick={closeModal}>
-          <div className="adsgo-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="adsgo-modal-header">
-              <span className="adsgo-modal-icon"><SparkleIcon /></span>
+        <div className="polluxa-modal-overlay" onClick={closeModal}>
+          <div className="polluxa-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="polluxa-modal-header">
+              <span className="polluxa-modal-icon"><SparkleIcon /></span>
               <h2>Create Brand Profile</h2>
-              <button type="button" className="adsgo-modal-close" onClick={closeModal} aria-label="Close">
+              <button type="button" className="polluxa-modal-close" onClick={closeModal} aria-label="Close">
                 <CloseIcon />
               </button>
             </div>
 
-            <div className="adsgo-modal-info-banner">
+            <div className="polluxa-modal-info-banner">
               <ClockIcon />
               <span>2-3 min for AI to complete brand profile analysis</span>
             </div>
 
             {error && <p className="error">{error}</p>}
 
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span><GlobeIcon /> Brand Url</span>
               <input
                 type="text"
@@ -92,7 +92,7 @@ export default function BrandProfile() {
 
             <button
               type="button"
-              className="btn btn-primary adsgo-modal-submit"
+              className="btn btn-primary polluxa-modal-submit"
               onClick={handleStartAnalysis}
               disabled={analyzing || !url.trim()}
             >

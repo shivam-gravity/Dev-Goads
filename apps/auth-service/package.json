@@ -1,5 +1,5 @@
 {
-  "name": "@adgo/auth-service",
+  "name": "@polluxa/auth-service",
   "private": true,
   "version": "0.1.0",
   "type": "module",

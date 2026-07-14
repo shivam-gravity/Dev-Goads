@@ -51,7 +51,7 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
     setRevealedTokens((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+  const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
   async function load() {
     setLoading(true);
@@ -157,7 +157,7 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
               Paste tokens from the{" "}
               <a href="https://developers.facebook.com/tools/explorer" target="_blank" rel="noreferrer">Meta Graph API Explorer</a>.
             </p>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Access Token</span>
               <div className="token-reveal-field">
                 <input
@@ -170,15 +170,15 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
                 </button>
               </div>
             </label>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Ad Account ID (e.g. act_123456)</span>
               <input type="text" value={metaManualForm.adAccountId} onChange={(e) => setMetaManualForm((f) => ({ ...f, adAccountId: e.target.value }))} />
             </label>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Page ID</span>
               <input type="text" value={metaManualForm.pageId} onChange={(e) => setMetaManualForm((f) => ({ ...f, pageId: e.target.value }))} />
             </label>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Page Access Token</span>
               <div className="token-reveal-field">
                 <input
@@ -196,15 +196,15 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
         ) : (
           <>
             <p className="muted-text">Paste credentials from the Google Ads API Center.</p>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Customer ID (e.g. 123-456-7890)</span>
               <input type="text" value={googleManualForm.customerId} onChange={(e) => setGoogleManualForm((f) => ({ ...f, customerId: e.target.value }))} />
             </label>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Developer Token</span>
               <input type="password" value={googleManualForm.developerToken} onChange={(e) => setGoogleManualForm((f) => ({ ...f, developerToken: e.target.value }))} />
             </label>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Access Token</span>
               <div className="token-reveal-field">
                 <input
@@ -217,15 +217,15 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
                 </button>
               </div>
             </label>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Client ID (optional)</span>
               <input type="text" value={googleManualForm.clientId} onChange={(e) => setGoogleManualForm((f) => ({ ...f, clientId: e.target.value }))} />
             </label>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Client Secret (optional)</span>
               <input type="password" value={googleManualForm.clientSecret} onChange={(e) => setGoogleManualForm((f) => ({ ...f, clientSecret: e.target.value }))} />
             </label>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Refresh Token (optional)</span>
               <div className="token-reveal-field">
                 <input
@@ -237,11 +237,11 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
                   {revealedTokens.googleRefreshToken ? "Hide" : "Reveal"}
                 </button>
               </div>
-              <div className="field-hint">Without this, AdGo can't refresh the token once it expires (~1hr) — you'll need to reconnect.</div>
+              <div className="field-hint">Without this, Polluxa can't refresh the token once it expires (~1hr) — you'll need to reconnect.</div>
             </label>
           </>
         )}
-        <button type="button" className="btn btn-primary adsgo-modal-submit" onClick={() => handleManualConnect(platform)} disabled={manualSubmitting}>
+        <button type="button" className="btn btn-primary polluxa-modal-submit" onClick={() => handleManualConnect(platform)} disabled={manualSubmitting}>
           {manualSubmitting ? "Connecting..." : "Connect manually"}
         </button>
       </div>

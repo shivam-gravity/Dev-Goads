@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, AnalyticsSummary, TrendPoint } from "../api/client.js";
-import AdsGoHeader from "../components/AdsGoHeader.js";
+import PolluxaHeader from "../components/PolluxaHeader.js";
 
 interface DayTotals {
   impressions: number;
@@ -127,18 +127,18 @@ export default function Dashboard({ businessId }: { businessId: string }) {
   const avgValue = chartValues.reduce((s, v) => s + v, 0) / (chartValues.length || 1);
 
   return (
-    <div className="adsgo-dashboard">
-      <AdsGoHeader breadcrumb={["Home"]} />
+    <div className="polluxa-dashboard">
+      <PolluxaHeader breadcrumb={["Home"]} />
 
       {error && <p className="error" style={{ marginBottom: "20px" }}>{error}</p>}
 
       {/* Date Controls Row */}
-      <div className="adsgo-controls-row">
-        <div className="adsgo-date-pills">
+      <div className="polluxa-controls-row">
+        <div className="polluxa-date-pills">
           {PERIODS.map(({ label }) => (
             <button
               key={label}
-              className={`adsgo-date-pill ${activePeriod === label ? "active" : ""}`}
+              className={`polluxa-date-pill ${activePeriod === label ? "active" : ""}`}
               onClick={() => setActivePeriod(label)}
             >
               {label}
@@ -146,7 +146,7 @@ export default function Dashboard({ businessId }: { businessId: string }) {
           ))}
         </div>
 
-        <div className="adsgo-datepicker-container">
+        <div className="polluxa-datepicker-container">
           <input type="text" readOnly value={dateRangeStr} />
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
@@ -158,14 +158,14 @@ export default function Dashboard({ businessId }: { businessId: string }) {
       </div>
 
       {/* Metric Cards Grid */}
-      <div className="adsgo-metrics-grid">
+      <div className="polluxa-metrics-grid">
         {METRICS.map((metric) => (
           <div
             key={metric}
-            className={`adsgo-metric-card ${activeMetric === metric ? "active" : ""}`}
+            className={`polluxa-metric-card ${activeMetric === metric ? "active" : ""}`}
             onClick={() => setActiveMetric(metric)}
           >
-            <div className="adsgo-metric-card-top">
+            <div className="polluxa-metric-card-top">
               <span className={`metric-dot ${metric === "Spend" ? "purple" : "grey"}`}></span>
               <span>{metric}</span>
             </div>
@@ -178,7 +178,7 @@ export default function Dashboard({ businessId }: { businessId: string }) {
       </div>
 
       {/* SVG Chart Card */}
-      <div className="adsgo-chart-card">
+      <div className="polluxa-chart-card">
         <svg width="100%" height="240" viewBox="0 0 1000 240" preserveAspectRatio="none">
           <defs>
             <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
@@ -242,14 +242,14 @@ export default function Dashboard({ businessId }: { businessId: string }) {
       </div>
 
       {/* Daily Performance Section */}
-      <section className="adsgo-section">
-        <div className="adsgo-section-header">
-          <div className="adsgo-section-indicator"></div>
-          <h2 className="adsgo-section-title">Daily Performance</h2>
+      <section className="polluxa-section">
+        <div className="polluxa-section-header">
+          <div className="polluxa-section-indicator"></div>
+          <h2 className="polluxa-section-title">Daily Performance</h2>
         </div>
 
-        <div className="adsgo-table-container">
-          <table className="adsgo-table">
+        <div className="polluxa-table-container">
+          <table className="polluxa-table">
             <thead>
               <tr>
                 <th>Date</th>

@@ -1,7 +1,48 @@
+import * as cheerio from "cheerio";
 import { openai, runStructured, runWebSearch } from "../../infra/openaiClient.js";
+import { normalizeUrl } from "../../modules/onboarding/scraper.js";
 import { hostnameOf } from "../providers/support.js";
 import type { Citation } from "../../types/index.js";
 import type { CompetitorProfile, DiscoveredCompetitor } from "./types.js";
+
+const CRAWL_TIMEOUT_MS = 8000;
+const MAX_CRAWL_EXCERPT_LENGTH = 3000;
+
+/**
+ * Best-effort single-page fetch of a discovered competitor's own homepage — folded into
+ * the enrichment prompt alongside the web-search narrative below, so the profile draws on
+ * the competitor's own stated positioning/pricing (real page text), not only on how OTHER
+ * sites describe them. Deliberately one page, not a full multi-page crawl like
+ * WebsiteProvider's: this runs once per enriched competitor (up to MAX_ENRICHED_COMPETITORS
+ * per job), so a full crawl per competitor would multiply job cost/latency substantially
+ * for a supporting signal, not the primary one (real web search still is). Never throws —
+ * returns null on any failure so a competitor with an unreachable/nonexistent site still
+ * gets the existing search-only enrichment.
+ */
+async function crawlCompetitorExcerpt(url?: string): Promise<string | null> {
+  if (!url) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CRAWL_TIMEOUT_MS);
+  try {
+    const res = await fetch(normalizeUrl(url), {
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; PolluxaResearchBot/1.0)" },
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    $("script, style, noscript, svg, nav, footer").remove();
+    const title = $("title").first().text().trim();
+    const description = $('meta[name="description"]').attr("content")?.trim() ?? "";
+    const bodyText = $("body").text().replace(/\s+/g, " ").trim();
+    const excerpt = [title, description, bodyText].filter(Boolean).join("\n").slice(0, MAX_CRAWL_EXCERPT_LENGTH);
+    return excerpt || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const ENRICHMENT_TOOL = {
   name: "emit_competitor_profile",
@@ -17,8 +58,11 @@ const ENRICHMENT_TOOL = {
       weaknesses: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
       technologyStack: { type: "array", items: { type: "string" }, minItems: 0, maxItems: 10, description: "Known or inferred technologies this competitor uses/builds on" },
       estimatedMarketingStrategy: { type: "string", description: "Best-effort read on their acquisition/marketing approach (channels, messaging themes, etc.)" },
+      marketShare: { type: "string", description: "Best-effort market-share estimate/read, e.g. \"~15% of named-competitor set\", or \"Unknown\" if no credible data" },
+      estimatedAdBudget: { type: "string", description: "Best-effort estimate of this competitor's ad spend, e.g. \"$50K-$100K/mo (estimated)\", or \"Unknown\" if no credible data" },
+      differentiation: { type: "string", description: "How this competitor differentiates itself from the rest of the field" },
     },
-    required: ["positioning", "pricing", "targetAudience", "valueProposition", "strengths", "weaknesses", "technologyStack", "estimatedMarketingStrategy"],
+    required: ["positioning", "pricing", "targetAudience", "valueProposition", "strengths", "weaknesses", "technologyStack", "estimatedMarketingStrategy", "marketShare", "estimatedAdBudget", "differentiation"],
   },
 };
 
@@ -34,6 +78,9 @@ function fallbackProfile(name: string): EnrichmentFields {
     weaknesses: ["Not yet researched"],
     technologyStack: [],
     estimatedMarketingStrategy: "Unknown",
+    marketShare: "Unknown",
+    estimatedAdBudget: "Unknown",
+    differentiation: "Unknown",
   };
 }
 
@@ -121,15 +168,26 @@ export async function enrichCompetitor(discovered: DiscoveredCompetitor, busines
     };
   }
 
-  const research = await runWebSearch(
-    `Research the company/product "${discovered.name}"${businessContext.industry ? ` in ${businessContext.industry}` : ""}: its market positioning, pricing, target audience, value proposition, strengths, weaknesses, technology stack, and marketing strategy.`
-  );
+  const [research, crawlExcerpt] = await Promise.all([
+    runWebSearch(
+      `Research the company/product "${discovered.name}"${businessContext.industry ? ` in ${businessContext.industry}` : ""}: its market positioning, pricing, target audience, value proposition, strengths, weaknesses, technology stack, marketing strategy, estimated market share, estimated advertising budget/spend, and how it differentiates itself from competitors.`
+    ),
+    crawlCompetitorExcerpt(discovered.url),
+  ]);
 
   const structured = research.narrative
     ? await runStructured<EnrichmentFields>({
         maxTokens: 1024,
         tool: ENRICHMENT_TOOL,
-        messages: [{ role: "user", content: `Using this research, produce a competitive-intelligence profile for "${discovered.name}".\n\nResearch findings:\n${research.narrative}` }],
+        messages: [
+          {
+            role: "user",
+            content:
+              `Using this research, produce a competitive-intelligence profile for "${discovered.name}".\n\n` +
+              `Research findings:\n${research.narrative}` +
+              (crawlExcerpt ? `\n\nReal page content fetched directly from ${discovered.name}'s own website (ground positioning/pricing in this over secondhand descriptions where they conflict):\n${crawlExcerpt}` : ""),
+          },
+        ],
       })
     : null;
 

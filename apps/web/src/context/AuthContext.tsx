@@ -29,7 +29,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [workspace, setWorkspaceState] = useState<Workspace | null>(null);
-  const [workspaceId, setWorkspaceId] = useState<string | null>(localStorage.getItem("adgo_workspace_id") ?? DEMO_WORKSPACE_ID);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(localStorage.getItem("polluxa_workspace_id") ?? DEMO_WORKSPACE_ID);
   const [businessId, setBusinessIdState] = useState<string | null>(localStorage.getItem("businessId") ?? DEMO_BUSINESS_ID);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -41,7 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function setWorkspace(ws: Workspace) {
     setWorkspaceState(ws);
     setWorkspaceId(ws.id);
-    localStorage.setItem("adgo_workspace_id", ws.id);
+    localStorage.setItem("polluxa_workspace_id", ws.id);
   }
 
   async function refreshWorkspace() {
@@ -54,8 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Resolve the demo identity on mount instead of restoring a session from a token.
   useEffect(() => {
-    if (!localStorage.getItem("adgo_workspace_id")) {
-      localStorage.setItem("adgo_workspace_id", DEMO_WORKSPACE_ID);
+    if (!localStorage.getItem("polluxa_workspace_id")) {
+      localStorage.setItem("polluxa_workspace_id", DEMO_WORKSPACE_ID);
     }
     if (!localStorage.getItem("businessId")) {
       localStorage.setItem("businessId", DEMO_BUSINESS_ID);

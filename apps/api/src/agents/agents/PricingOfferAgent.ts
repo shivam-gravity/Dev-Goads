@@ -44,7 +44,7 @@ export class PricingOfferAgent implements AIAgent<PricingOfferAgentOutput> {
 
   async execute(context: ResearchContext): Promise<AgentResult<PricingOfferAgentOutput>> {
     return runAgentStep(this.name, async () => {
-      const fields = ["competitors", "market"] as const;
+      const fields = ["competitors", "market", "funding"] as const;
       const verifiedFacts = await loadVerifiedFacts(context);
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
@@ -52,6 +52,7 @@ export class PricingOfferAgent implements AIAgent<PricingOfferAgentOutput> {
           verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
           competitors: JSON.stringify(context.competitors ?? {}),
           market: JSON.stringify(context.market ?? {}),
+          funding: JSON.stringify(context.funding ?? {}),
         },
         tool: PRICING_OFFER_AGENT_TOOL,
         schema: pricingOfferAgentSchema,

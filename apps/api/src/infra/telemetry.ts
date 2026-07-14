@@ -5,7 +5,7 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 
-const SERVICE_NAME = "adgo-api";
+const SERVICE_NAME = "polluxa-api";
 
 /**
  * Manual span-based tracing, not auto-instrumentation — this codebase's ESM (NodeNext)

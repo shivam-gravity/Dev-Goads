@@ -75,6 +75,7 @@ export class CampaignAgent implements AIAgent<CampaignAgentOutput> {
     return runAgentStep(this.name, async () => {
       const fields = ["website", "company", "audience", "market", "competitors"] as const;
       const verifiedFacts = await loadVerifiedFacts(context);
+      const generalSearch = context.metadata.generalSearch;
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
         vars: {
@@ -84,6 +85,7 @@ export class CampaignAgent implements AIAgent<CampaignAgentOutput> {
           audience: JSON.stringify(context.audience ?? {}),
           market: JSON.stringify(context.market ?? {}),
           competitors: JSON.stringify(context.competitors ?? {}),
+          generalSearch: generalSearch?.narrative ?? "Not available.",
         },
         tool: CAMPAIGN_AGENT_TOOL,
         schema: campaignAgentSchema,
@@ -100,6 +102,9 @@ export class CampaignAgent implements AIAgent<CampaignAgentOutput> {
           ...collectEvidence(context, [...fields]),
           ...(verifiedFacts.length > 0
             ? [{ source: "crawl-facts", detail: `Strategy grounded in ${verifiedFacts.length} verified facts from the site crawl` }]
+            : []),
+          ...(generalSearch
+            ? [{ source: "general-search", detail: generalSearch.dataSource }]
             : []),
         ],
       };

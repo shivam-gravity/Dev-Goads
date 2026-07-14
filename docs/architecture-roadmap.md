@@ -69,7 +69,7 @@ Infra provider choices (AWS/GCP/self-hosted) are deliberately left open — this
 | Budget Optimizer (worker) | `optimization/optimizationEngine.ts` — pause/reallocate logic, run synchronously/on-demand, not event-driven |
 | Analytics (worker) | `pipeline/performancePipeline.ts` + `analytics/` — metric ingestion/summary, synchronous |
 | Integration Layer | `adapters/` defines an `AdAdapter` interface with `googleAdapter.ts` + `metaAdapter.ts`; **both fall back to fully mocked responses when live credentials are absent** — real API wiring exists but is unverified. **No TikTok Ads, Shopify, or WooCommerce adapters exist.** |
-| PostgreSQL | `apps/api/prisma/schema.prisma` defines a full normalized Postgres schema (Organization, User, Business, Campaign, Metric, etc.) but **it is not wired up** — the running app uses `better-sqlite3` against `apps/api/data/adgo.sqlite` with hand-written JSON-blob tables instead |
+| PostgreSQL | `apps/api/prisma/schema.prisma` defines a full normalized Postgres schema (Organization, User, Business, Campaign, Metric, etc.) but **it is not wired up** — the running app uses `better-sqlite3` against `apps/api/data/polluxa.sqlite` with hand-written JSON-blob tables instead |
 | Redis | Does not exist — no caching or session store beyond JWT |
 | ClickHouse | Does not exist — the Prisma schema has a comment noting `Metric` is intended to become a TimescaleDB hypertable eventually, not ClickHouse |
 | Vector DB | Does not exist — no embeddings/vector search anywhere |
@@ -86,7 +86,7 @@ Infra provider choices (AWS/GCP/self-hosted) are deliberately left open — this
 - Decide real vs. mock ad-adapter testing strategy; add integration tests around `googleAdapter.ts`/`metaAdapter.ts` before they're relied on by more services.
 
 ### Phase 1 — Real database, still a monolith
-- Wire up the existing `apps/api/prisma/schema.prisma` against real Postgres, replacing `better-sqlite3`/`adgo.sqlite`. Write a one-time migration script to move existing SQLite JSON-blob rows into the normalized schema.
+- Wire up the existing `apps/api/prisma/schema.prisma` against real Postgres, replacing `better-sqlite3`/`polluxa.sqlite`. Write a one-time migration script to move existing SQLite JSON-blob rows into the normalized schema.
 - Introduce Redis for session/cache and as a lightweight job queue (e.g. BullMQ) so long-running work (scraping, Claude analysis, creative generation) moves off the request thread — this is a prerequisite for later event-driven workers and costs nothing architecturally since it stays in-process.
 - No service extraction yet; this phase is purely "swap the data layer, add async job execution."
 

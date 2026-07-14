@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { ClockIcon, GlobeIcon, BellIcon, UserIcon, CreditCardIcon, LinkIcon } from "./icons.js";
 import { useAuth } from "../context/AuthContext.js";
 
-export default function AdsGoHeader({ breadcrumb }: { breadcrumb: string[] }) {
+export default function PolluxaHeader({ breadcrumb }: { breadcrumb: string[] }) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -29,15 +29,15 @@ export default function AdsGoHeader({ breadcrumb }: { breadcrumb: string[] }) {
   }
 
   return (
-    <header className="adsgo-header">
-      <div className="adsgo-crumb">
+    <header className="polluxa-header">
+      <div className="polluxa-crumb">
         {breadcrumb.map((label, i) => (
-          <span key={label} className={i === breadcrumb.length - 1 ? "adsgo-crumb-current" : undefined}>
+          <span key={label} className={i === breadcrumb.length - 1 ? "polluxa-crumb-current" : undefined}>
             {i > 0 ? `› ${label}` : label}
           </span>
         ))}
       </div>
-      <div className="adsgo-header-right">
+      <div className="polluxa-header-right">
         <div className="header-meta-item">
           <ClockIcon />
           <span>UTC+5.5</span>

@@ -8,8 +8,8 @@ import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
 import { initErrorTracking, registerCrashReporting, captureError } from "../infra/errorTracking.js";
 
-initErrorTracking("adgo-crm-webhook-worker");
-registerCrashReporting("adgo-crm-webhook-worker");
+initErrorTracking("polluxa-crm-webhook-worker");
+registerCrashReporting("polluxa-crm-webhook-worker");
 
 // 30s, 2m, 10m, 30m, 2h — matches the queue's `attempts: 5` in infra/queue.ts.
 const CRM_WEBHOOK_BACKOFF_DELAYS_MS = [30_000, 120_000, 600_000, 1_800_000, 7_200_000];
@@ -45,7 +45,7 @@ const worker = new Worker<CrmWebhookJobData>(
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (config.secret) {
-      headers["x-adgo-signature-256"] = `sha256=${createHmac("sha256", config.secret).update(body).digest("hex")}`;
+      headers["x-polluxa-signature-256"] = `sha256=${createHmac("sha256", config.secret).update(body).digest("hex")}`;
     }
 
     const startedAt = Date.now();

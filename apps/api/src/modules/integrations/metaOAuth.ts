@@ -172,10 +172,10 @@ export async function handleMetaOAuthCallback(code: string, state: string): Prom
 // returns null for mock-connected or disconnected workspaces) — same "(mock)" naming
 // convention as connectIntegration's mock connect above, so the campaign builder always
 // has something to show in local/demo mode.
-const MOCK_AD_ACCOUNTS = [{ id: "act_1000000001", name: "AdGo Meta Business Manager (mock)", currency: "USD", timezoneName: "America/Los_Angeles", accountStatus: "ACTIVE" }];
-const MOCK_PAGES = [{ id: "200000000001", name: "AdGo Demo Page (mock)" }];
-const MOCK_INSTAGRAM_ACCOUNTS = [{ id: "300000000001", username: "adgo_demo_mock" }];
-const MOCK_PIXELS = [{ id: "400000000001", name: "AdGo Demo Pixel (mock)" }];
+const MOCK_AD_ACCOUNTS = [{ id: "act_1000000001", name: "Polluxa Meta Business Manager (mock)", currency: "USD", timezoneName: "America/Los_Angeles", accountStatus: "ACTIVE" }];
+const MOCK_PAGES = [{ id: "200000000001", name: "Polluxa Demo Page (mock)" }];
+const MOCK_INSTAGRAM_ACCOUNTS = [{ id: "300000000001", username: "polluxa_demo_mock" }];
+const MOCK_PIXELS = [{ id: "400000000001", name: "Polluxa Demo Pixel (mock)" }];
 
 export async function listAdAccounts(workspaceId: string): Promise<{ id: string; name: string; currency: string; timezoneName?: string; accountStatus?: string }[]> {
   const credentials = await getMetaCredentials(workspaceId);

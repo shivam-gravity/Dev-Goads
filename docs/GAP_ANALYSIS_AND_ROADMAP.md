@@ -1,4 +1,4 @@
-# AdGo — Production Gap Analysis vs. AdsGo.ai-Class Platform
+# Polluxa — Production Gap Analysis vs. AdsGo.ai-Class Platform
 
 **Reviewer framing**: Principal Architect review. Current-state facts below are drawn from the verified reverse-engineering in `docs/CURRENT_ARCHITECTURE.md` and `docs/architecture-spec.json` — not re-derived here. "What AdsGo.ai likely has" is an **informed architectural inference** based on what mature, production AI-adtech platforms at that tier (Smartly.io, Madgicx, AdCreative.ai-class systems) typically require to operate at scale — not verified insider fact about one company. Stated once here rather than caveated 39 times below.
 

@@ -43,7 +43,7 @@ async function main() {
       createdAt: now,
       data: {
         id: "demo-business",
-        name: "AdsGo Demo Business",
+        name: "Polluxa Demo Business",
         industry: "General",
         monthlyBudgetCents: 100000,
         goals: ["Leads"],

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AdsGoHeader from "../components/AdsGoHeader.js";
+import PolluxaHeader from "../components/PolluxaHeader.js";
 import { useAuth } from "../context/AuthContext.js";
 import { api, Integration } from "../api/client.js";
 import {
@@ -28,7 +28,7 @@ const KPI_OPTIONS = ["Lowest CPA", "Highest ROAS", "Most Conversions", "Most Cli
 
 export default function OptimizeGoal() {
   const { workspaceId: authWorkspaceId } = useAuth();
-  const workspaceId = authWorkspaceId ?? localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+  const workspaceId = authWorkspaceId ?? localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
   const [locations, setLocations] = useState<string[]>([]);
   const [locationInput, setLocationInput] = useState("");
@@ -127,7 +127,7 @@ export default function OptimizeGoal() {
 
   return (
     <div className="page-optimize-goal">
-      <AdsGoHeader breadcrumb={["Brand Center", "Optimize Goal"]} />
+      <PolluxaHeader breadcrumb={["Brand Center", "Optimize Goal"]} />
 
       <div className="optimize-goal-layout">
         <section className="gen-card optimize-goal-overview">
@@ -156,7 +156,7 @@ export default function OptimizeGoal() {
 
         <div>
           <section className="gen-card" id="optimize-goal-strategy">
-            <h2>Budget &amp; Performance KPI <span className="adsgo-required">*</span></h2>
+            <h2>Budget &amp; Performance KPI <span className="polluxa-required">*</span></h2>
             <p className="optimize-goal-section-desc">Define the core logic and positioning to guide AI content depth.</p>
 
             <div className="optimize-goal-kpi-row">

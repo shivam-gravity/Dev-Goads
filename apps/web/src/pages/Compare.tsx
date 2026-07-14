@@ -5,11 +5,11 @@ import BackToTop from "../components/BackToTop.js";
 import Reveal from "../components/Reveal.js";
 
 const ROWS = [
-  { label: "Strategy & audience research", manual: "Hours of manual research per campaign", agency: "Billed hourly, turnaround in days", adgo: "Generated in under a minute" },
-  { label: "Creative variants", manual: "Written one at a time", agency: "Limited by retainer scope", adgo: "Multiple variants per launch, regenerated from performance data" },
-  { label: "Budget reallocation", manual: "Manual, usually weekly at best", agency: "Manual, on the agency's schedule", adgo: "Continuous, automated bandit optimization" },
-  { label: "Multi-network management", manual: "Separate logins and dashboards", agency: "Depends on the agency's tooling", adgo: "One dashboard for Google Ads and Meta" },
-  { label: "Pricing", manual: "Your time", agency: "Retainer + ad spend", adgo: "Flat fee + % of managed spend, no contract" },
+  { label: "Strategy & audience research", manual: "Hours of manual research per campaign", agency: "Billed hourly, turnaround in days", polluxa: "Generated in under a minute" },
+  { label: "Creative variants", manual: "Written one at a time", agency: "Limited by retainer scope", polluxa: "Multiple variants per launch, regenerated from performance data" },
+  { label: "Budget reallocation", manual: "Manual, usually weekly at best", agency: "Manual, on the agency's schedule", polluxa: "Continuous, automated bandit optimization" },
+  { label: "Multi-network management", manual: "Separate logins and dashboards", agency: "Depends on the agency's tooling", polluxa: "One dashboard for Google Ads and Meta" },
+  { label: "Pricing", manual: "Your time", agency: "Retainer + ad spend", polluxa: "Flat fee + % of managed spend, no contract" },
 ];
 
 export default function Compare() {
@@ -18,7 +18,7 @@ export default function Compare() {
       <SiteNav />
       <section className="hero hero-compact">
         <span className="eyebrow">Compare</span>
-        <h1>AdGo vs. doing it yourself vs. hiring an agency</h1>
+        <h1>Polluxa vs. doing it yourself vs. hiring an agency</h1>
         <p className="lead">
           A general comparison of approaches to running paid ads — not a comparison against any specific competing
           product.
@@ -34,7 +34,7 @@ export default function Compare() {
                   <th></th>
                   <th>Manual (you)</th>
                   <th>Agency</th>
-                  <th>AdGo</th>
+                  <th>Polluxa</th>
                 </tr>
               </thead>
               <tbody>
@@ -43,7 +43,7 @@ export default function Compare() {
                     <td className="compare-row-label">{r.label}</td>
                     <td>{r.manual}</td>
                     <td>{r.agency}</td>
-                    <td className="compare-adgo-cell">{r.adgo}</td>
+                    <td className="compare-polluxa-cell">{r.polluxa}</td>
                   </tr>
                 ))}
               </tbody>
@@ -55,7 +55,7 @@ export default function Compare() {
       <section className="cta-banner">
         <Reveal>
           <div className="cta-banner-inner">
-            <h2>Try the AdGo column yourself</h2>
+            <h2>Try the Polluxa column yourself</h2>
             <p>Free to run the full flow — no credit card required.</p>
             <Link to="/get-started" className="btn btn-primary btn-lg">
               Get started free

@@ -15,8 +15,8 @@ import { generateAdCopy } from "./pipeline/creativeGenerator.js";
 import { suggestCampaign } from "./pipeline/campaignSuggestions.js";
 import { initErrorTracking, registerCrashReporting, captureError } from "../../api/src/infra/errorTracking.js";
 
-initErrorTracking("adgo-scraper-service");
-registerCrashReporting("adgo-scraper-service");
+initErrorTracking("polluxa-scraper-service");
+registerCrashReporting("polluxa-scraper-service");
 
 const app = express();
 const PORT = Number(process.env.SCRAPER_SERVICE_PORT ?? 4003);
@@ -73,12 +73,12 @@ app.use((_req, res) => {
 });
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  captureError(err, { service: "adgo-scraper-service" });
+  captureError(err, { service: "polluxa-scraper-service" });
   res.status(500).json({ error: "Internal server error" });
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`AdGo Scraper Service listening on http://localhost:${PORT}`);
+  console.log(`Polluxa Scraper Service listening on http://localhost:${PORT}`);
 });
 
 process.on("SIGTERM", async () => {

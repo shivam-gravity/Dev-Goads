@@ -37,6 +37,9 @@ export class CompetitorIntelligenceProvider implements ResearchProvider<Competit
         name: c.name,
         url: c.url,
         notes: `${c.positioning} Pricing: ${c.pricing}. ${c.valueProposition}`.trim(),
+        marketShare: c.marketShare,
+        estimatedAdBudget: c.estimatedAdBudget,
+        differentiation: c.differentiation,
       }));
 
       // Real, evidence-derived differentiation angles — where researched competitors'

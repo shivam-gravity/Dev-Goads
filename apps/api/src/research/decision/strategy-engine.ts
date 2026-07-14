@@ -56,7 +56,68 @@ interface StrategyFields {
   weaknesses: string[];
 }
 
-const DEFAULT_DAILY_BUDGET_CENTS = 10000;
+const BASE_DAILY_BUDGET_CENTS = 5000;
+const MIN_DAILY_BUDGET_CENTS = 2000;
+const MAX_DAILY_BUDGET_CENTS = 50000;
+
+/** Higher competitive pressure means more spend is needed to be seen at all — reads the
+ * same competitionIntensity/competitor-count signal CompetitorAgent already surfaces to
+ * the UI, so this multiplier and what a user sees in the Competitor tab never disagree. */
+function competitionMultiplier(context: ResearchContext): number {
+  const intensity = (context.competitors?.competitionIntensity ?? "").toLowerCase();
+  const competitorCount = context.competitors?.competitors.length ?? 0;
+  if (intensity.includes("high") || competitorCount >= 4) return 1.6;
+  if (intensity.includes("moderate") || competitorCount >= 2) return 1.2;
+  if (intensity.includes("low")) return 0.85;
+  return 1;
+}
+
+/** A well-funded/public company can sustain a higher daily spend than a bootstrapped one —
+ * best-effort keyword read of CompanyProvider's free-text fundingStage, defaulting to 1x
+ * (no adjustment) whenever the stage is missing/unrecognized rather than guessing. */
+function companySizeMultiplier(context: ResearchContext): number {
+  const stage = (context.company?.fundingStage ?? "").toLowerCase();
+  if (/public|ipo|series [c-f]/.test(stage)) return 1.8;
+  if (/series [ab]/.test(stage)) return 1.3;
+  if (/seed|bootstrap/.test(stage)) return 0.8;
+  return 1;
+}
+
+/** More platforms = more inventory to fund; a single-platform play can run leaner. */
+function platformMultiplier(platformCount: number): number {
+  if (platformCount >= 3) return 1.3;
+  if (platformCount === 2) return 1.1;
+  return 0.9;
+}
+
+/** Reach/awareness objectives are inherently more expensive to fund at meaningful scale
+ * than a narrow, high-intent conversion play. */
+function objectiveMultiplier(objective: string): number {
+  const o = objective.toLowerCase();
+  if (/reach|awareness|impression/.test(o)) return 1.2;
+  if (/conversion|cpa|sign-?up|purchase/.test(o)) return 0.9;
+  return 1;
+}
+
+/**
+ * Deterministic per-strategy daily budget — never an LLM self-report, same principle as
+ * every other score in this engine (see MarketIntelligenceEngine's computeOpportunityScore).
+ * Blends real signals already sitting in ResearchContext (competition, company stage) with
+ * this specific strategy's own shape (platform count, objective), so the 3 candidate
+ * strategies actually differ from each other and from one business to the next — replacing
+ * a flat constant that gave every business and every strategy the same $100/day regardless
+ * of research.
+ */
+function computeStrategyDailyBudgetCents(context: ResearchContext, platforms: Platform[], objective: string): number {
+  const raw =
+    BASE_DAILY_BUDGET_CENTS *
+    competitionMultiplier(context) *
+    companySizeMultiplier(context) *
+    platformMultiplier(platforms.length) *
+    objectiveMultiplier(objective);
+  const roundedToNearest500 = Math.round(raw / 500) * 500;
+  return Math.max(MIN_DAILY_BUDGET_CENTS, Math.min(MAX_DAILY_BUDGET_CENTS, roundedToNearest500));
+}
 
 function fallbackStrategies(businessLabel: string): StrategyFields[] {
   return [
@@ -140,7 +201,7 @@ export async function generateStrategies(context: ResearchContext, recommendatio
     targetAudience: f.targetAudience,
     platforms: f.platforms,
     objective: f.objective,
-    budgetDailyCents: DEFAULT_DAILY_BUDGET_CENTS,
+    budgetDailyCents: computeStrategyDailyBudgetCents(context, f.platforms, f.objective),
     creativeDirection: f.creativeDirection,
     messaging: f.messaging,
     offer: f.offer,

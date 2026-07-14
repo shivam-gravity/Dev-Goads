@@ -1,6 +1,12 @@
+import { firecrawlScrape, firecrawlSearch } from "../../infra/firecrawlClient.js";
+import { runStructured } from "../../infra/openaiClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProviderResult, ResearchProviderInput, SocialMediaData } from "../types/index.js";
-import { citationsToEvidence, runProviderStep, webSearchThenStructure } from "./support.js";
+import { citationsToEvidence, hostnameOf, runProviderStep, webSearchThenStructure } from "./support.js";
+
+const SOCIAL_DOMAINS = ["linkedin.com", "x.com", "twitter.com", "instagram.com", "facebook.com", "tiktok.com", "youtube.com"];
+const MAX_PROFILES = 4;
+const MAX_EXCERPT_LENGTH = 1500;
 
 const SOCIAL_MEDIA_TOOL = {
   name: "emit_social_media_analysis",
@@ -29,14 +35,23 @@ const SOCIAL_MEDIA_TOOL = {
   },
 };
 
-/** Social media presence/engagement analysis — independent of every other provider,
- * reasoning from live search on the target URL/business name alone. */
+/**
+ * Real profile crawl first (Firecrawl search scoped to the major platforms + scrape of the
+ * business's actual profile page(s) for bio/caption text), falling back to the original pure-LLM
+ * web-search behavior when no real profile is found or Firecrawl isn't configured. Realistic
+ * expectation: Instagram/TikTok/LinkedIn gate most content behind login even for Firecrawl, so
+ * this typically improves bio/meta-tag grounding rather than full feed history.
+ */
 export class SocialMediaProvider implements ResearchProvider<SocialMediaData> {
   readonly name = "social-media";
   readonly priority = 100;
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<SocialMediaData>> {
     return runProviderStep(this.name, 1, input, async () => {
+      const query = input.businessName ?? hostnameOf(input.url).replace(/^www\./i, "").split(".")[0];
+      const grounded = await this.fromRealProfiles(query);
+      if (grounded) return grounded;
+
       const { status, data, citations } = await webSearchThenStructure<SocialMediaData>({
         maxTokens: 768,
         tool: SOCIAL_MEDIA_TOOL,
@@ -50,5 +65,32 @@ export class SocialMediaProvider implements ResearchProvider<SocialMediaData> {
       });
       return { status, data, citations, evidence: citationsToEvidence(citations) };
     });
+  }
+
+  private async fromRealProfiles(query: string): Promise<{ status: "success" | "partial"; data: SocialMediaData; evidence: { url: string; title?: string }[] } | null> {
+    const searchResult = await firecrawlSearch(query, { includeDomains: SOCIAL_DOMAINS, limit: MAX_PROFILES });
+    if (searchResult.outage || searchResult.web.length === 0) return null;
+
+    const excerpts: string[] = [];
+    const evidence: { url: string; title?: string }[] = [];
+    for (const profile of searchResult.web.slice(0, MAX_PROFILES)) {
+      const scraped = await firecrawlScrape(profile.url, ["markdown"]);
+      if (scraped.outage) break;
+      if (scraped.data?.markdown) {
+        excerpts.push(`### ${profile.title}\n${profile.url}\n${scraped.data.markdown.slice(0, MAX_EXCERPT_LENGTH)}`);
+        evidence.push({ url: profile.url, title: profile.title });
+      }
+    }
+    if (excerpts.length === 0) return null;
+
+    const structured = await runStructured<Omit<SocialMediaData, "dataSource">>({
+      maxTokens: 768,
+      tool: SOCIAL_MEDIA_TOOL,
+      messages: [{ role: "user", content: `Summarize the real social media presence for "${query}" from these actual profile page excerpts (note: some platforms only expose limited public content without login):\n\n${excerpts.join("\n\n")}` }],
+    }).catch(() => null);
+    if (!structured) return null;
+
+    const data: SocialMediaData = { ...structured, dataSource: `Firecrawl crawl of real profile pages (${evidence.map((e) => hostnameOf(e.url)).join(", ")})` };
+    return { status: "success", data, evidence };
   }
 }

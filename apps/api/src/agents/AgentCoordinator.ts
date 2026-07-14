@@ -20,10 +20,10 @@ function sleep(ms: number): Promise<void> {
 export interface AgentCoordinatorOptions {
   /** Injectable for tests — defaults to the real createAIAgents() (all 10 agents). */
   agents?: AIAgent<unknown>[];
-  /** Called once per agent settlement (including the critic) with (completed, total) —
-   * same shape as ResearchOrchestrator's onProgress, so a worker can wire both to
-   * job.updateProgress with one consistent meaning. */
-  onProgress?: (completed: number, total: number) => void | Promise<void>;
+  /** Called once per agent settlement (including the critic) with (completed, total, agentName) —
+   * same shape as ResearchOrchestrator's onProgress, so a worker can wire both to job.updateProgress
+   * (the count) and a live-progress record (the name) with one consistent meaning. */
+  onProgress?: (completed: number, total: number, agentName?: string) => void | Promise<void>;
 }
 
 export interface AgentPipelineResult {
@@ -87,15 +87,15 @@ export async function runAgentCoordinator(
   const total = allAgents.length;
 
   let completed = 0;
-  const reportProgress = async () => {
+  const reportProgress = async (agentName: string) => {
     completed += 1;
-    await options.onProgress?.(completed, total);
+    await options.onProgress?.(completed, total, agentName);
   };
 
   const producerResults = await Promise.all(
     producerAgents.map(async (agent) => {
       const result = await runAgentWithRetry(agent, context, undefined);
-      await reportProgress();
+      await reportProgress(agent.name);
       return result;
     })
   );
@@ -116,7 +116,7 @@ export async function runAgentCoordinator(
     const reviewerResults = await Promise.all(
       reviewerAgents.map(async (agent) => {
         const result = await runAgentWithRetry(agent, context, { priorResults: priorResultsSnapshot });
-        await reportProgress();
+        await reportProgress(agent.name);
         return result;
       })
     );

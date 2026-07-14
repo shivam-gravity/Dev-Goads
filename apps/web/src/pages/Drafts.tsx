@@ -226,7 +226,7 @@ export default function Drafts({ businessId }: { businessId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [platform, setPlatform] = useState("meta");
-  const [autoPublish, setAutoPublish] = useState(() => localStorage.getItem("adgo_auto_publish") === "1");
+  const [autoPublish, setAutoPublish] = useState(() => localStorage.getItem("polluxa_auto_publish") === "1");
 
   const [editingDraft, setEditingDraft] = useState<Draft | null>(null);
   const [editName, setEditName] = useState("");
@@ -237,7 +237,7 @@ export default function Drafts({ businessId }: { businessId: string }) {
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+  const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
   async function loadDrafts() {
     setLoading(true);
@@ -259,7 +259,7 @@ export default function Drafts({ businessId }: { businessId: string }) {
   function toggleAutoPublish() {
     setAutoPublish(prev => {
       const next = !prev;
-      localStorage.setItem("adgo_auto_publish", next ? "1" : "0");
+      localStorage.setItem("polluxa_auto_publish", next ? "1" : "0");
       return next;
     });
   }
@@ -474,33 +474,33 @@ export default function Drafts({ businessId }: { businessId: string }) {
       </div>
 
       {editingDraft && (
-        <div className="adsgo-modal-overlay" onClick={handleCloseEdit}>
-          <div className="adsgo-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="adsgo-modal-header">
+        <div className="polluxa-modal-overlay" onClick={handleCloseEdit}>
+          <div className="polluxa-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="polluxa-modal-header">
               <h2>Edit Draft</h2>
-              <button type="button" className="adsgo-modal-close" onClick={handleCloseEdit} aria-label="Close">×</button>
+              <button type="button" className="polluxa-modal-close" onClick={handleCloseEdit} aria-label="Close">×</button>
             </div>
 
             {editError && <p className="error">{editError}</p>}
 
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Name</span>
               <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} autoFocus />
             </label>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Daily budget (USD)</span>
               <input type="number" min="0" step="0.01" value={editBudget} onChange={(e) => setEditBudget(e.target.value)} />
             </label>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Audience</span>
               <input type="text" value={editAudience} onChange={(e) => setEditAudience(e.target.value)} placeholder="e.g. Lookalike — Purchasers" />
             </label>
-            <label className="adsgo-modal-field">
+            <label className="polluxa-modal-field">
               <span>Product</span>
               <input type="text" value={editProduct} onChange={(e) => setEditProduct(e.target.value)} placeholder="e.g. Aurora Wireless Earbuds" />
             </label>
 
-            <button type="button" className="btn btn-primary adsgo-modal-submit" onClick={handleSaveEdit} disabled={saving}>
+            <button type="button" className="btn btn-primary polluxa-modal-submit" onClick={handleSaveEdit} disabled={saving}>
               {saving ? "Saving..." : "Save Changes"}
             </button>
           </div>

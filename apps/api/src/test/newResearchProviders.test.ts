@@ -14,6 +14,9 @@ import { VideoPresenceProvider } from "../research/providers/VideoPresenceProvid
 import type { ResearchProviderInput } from "../research/types/index.js";
 
 delete process.env.OPENAI_API_KEY;
+// ReviewsProvider/SocialMediaProvider now try a real Firecrawl crawl before falling back to the
+// LLM-web-search path tested below — unset so the "zero network calls" assertion still holds.
+delete process.env.FIRECRAWL_API_KEY;
 
 const INPUT: ResearchProviderInput = { jobId: "job-1", workspaceId: "ws-1", url: "https://example.com", businessName: "Example Co", industry: "widgets" };
 

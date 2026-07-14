@@ -1,5 +1,5 @@
 /**
- * One-time backfill from the legacy apps/api/data/adgo.sqlite file into Postgres.
+ * One-time backfill from the legacy apps/api/data/polluxa.sqlite file into Postgres.
  * Safe to re-run: every insert is an upsert keyed on the row's original id.
  *
  * Usage: npm run db:migrate-from-sqlite --workspace apps/api
@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { prisma } from "../src/db/prisma.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const sqlitePath = path.resolve(__dirname, "../data/adgo.sqlite");
+const sqlitePath = path.resolve(__dirname, "../data/polluxa.sqlite");
 
 function toDate(value: string | null | undefined): Date {
   return value ? new Date(value) : new Date();

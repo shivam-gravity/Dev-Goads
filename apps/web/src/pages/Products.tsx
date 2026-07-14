@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import AdsGoHeader from "../components/AdsGoHeader.js";
+import PolluxaHeader from "../components/PolluxaHeader.js";
 import { api, CatalogSourceResult, ProductAnalysis, ProductCatalogItem, ProductCatalogSource } from "../api/client.js";
 import {
   SearchIcon,
@@ -38,7 +38,7 @@ function formatDate(ts: number) {
 
 export default function Products() {
   const navigate = useNavigate();
-  const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+  const workspaceId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [search, setSearch] = useState("");
@@ -158,10 +158,10 @@ export default function Products() {
 
   return (
     <div className="page-products">
-      <AdsGoHeader breadcrumb={["Brand Center", "Products"]} />
+      <PolluxaHeader breadcrumb={["Brand Center", "Products"]} />
 
-      <div className="adsgo-table-toolbar">
-        <label className="adsgo-search-input">
+      <div className="polluxa-table-toolbar">
+        <label className="polluxa-search-input">
           <SearchIcon />
           <input
             type="text"
@@ -175,8 +175,8 @@ export default function Products() {
         </button>
       </div>
 
-      <div className="adsgo-table-card">
-        <div className="adsgo-table-row adsgo-table-head">
+      <div className="polluxa-table-card">
+        <div className="polluxa-table-row polluxa-table-head">
           <span>Products</span>
           <span>Source</span>
           <span>Updated</span>
@@ -184,20 +184,20 @@ export default function Products() {
         </div>
 
         {filtered.length === 0 ? (
-          <div className="adsgo-table-empty">
+          <div className="polluxa-table-empty">
             <InboxIcon />
             <p>No data</p>
           </div>
         ) : (
           filtered.map((p) => (
-            <div key={p.id} className="adsgo-table-row">
-              <span className="adsgo-table-row-name">{p.name}</span>
-              <span className="adsgo-table-row-source">{p.source}</span>
+            <div key={p.id} className="polluxa-table-row">
+              <span className="polluxa-table-row-name">{p.name}</span>
+              <span className="polluxa-table-row-source">{p.source}</span>
               <span>{formatDate(p.updatedAt)}</span>
               <span>
                 <button
                   type="button"
-                  className="adsgo-table-row-remove"
+                  className="polluxa-table-row-remove"
                   onClick={() => removeProduct(p.id)}
                   aria-label={`Remove ${p.name}`}
                 >
@@ -210,11 +210,11 @@ export default function Products() {
       </div>
 
       {modalOpen && (
-        <div className="adsgo-modal-overlay" onClick={closeModal}>
-          <div className="adsgo-modal adsgo-modal-wide" onClick={(e) => e.stopPropagation()}>
-            <div className="adsgo-modal-header">
+        <div className="polluxa-modal-overlay" onClick={closeModal}>
+          <div className="polluxa-modal polluxa-modal-wide" onClick={(e) => e.stopPropagation()}>
+            <div className="polluxa-modal-header">
               {step !== "choose" && (
-                <button type="button" className="adsgo-modal-close" onClick={backToChoose} aria-label="Back">
+                <button type="button" className="polluxa-modal-close" onClick={backToChoose} aria-label="Back">
                   <ArrowLeftIcon />
                 </button>
               )}
@@ -224,7 +224,7 @@ export default function Products() {
                 {step === "manual" && "Enter product details"}
                 {activeSyncMethod?.title}
               </h2>
-              <button type="button" className="adsgo-modal-close" onClick={closeModal} aria-label="Close">
+              <button type="button" className="polluxa-modal-close" onClick={closeModal} aria-label="Close">
                 <CloseIcon />
               </button>
             </div>
@@ -267,7 +267,7 @@ export default function Products() {
             {step === "url" && (
               <>
                 {error && <p className="error">{error}</p>}
-                <label className="adsgo-modal-field">
+                <label className="polluxa-modal-field">
                   <span>Product URL</span>
                   <input
                     type="text"
@@ -280,7 +280,7 @@ export default function Products() {
                 </label>
                 <button
                   type="button"
-                  className="btn btn-primary adsgo-modal-submit"
+                  className="btn btn-primary polluxa-modal-submit"
                   onClick={handleAddProduct}
                   disabled={adding || !url.trim()}
                 >
@@ -292,23 +292,23 @@ export default function Products() {
             {step === "manual" && (
               <>
                 {error && <p className="error">{error}</p>}
-                <label className="adsgo-modal-field">
+                <label className="polluxa-modal-field">
                   <span>Product name</span>
                   <input type="text" placeholder="e.g. Aurora Wireless Earbuds" value={manualName} onChange={(e) => setManualName(e.target.value)} autoFocus />
                 </label>
-                <label className="adsgo-modal-field">
+                <label className="polluxa-modal-field">
                   <span>Category</span>
                   <input type="text" placeholder="e.g. Electronics" value={manualCategory} onChange={(e) => setManualCategory(e.target.value)} />
                 </label>
-                <label className="adsgo-modal-field">
+                <label className="polluxa-modal-field">
                   <span>Price (USD)</span>
                   <input type="number" min="0" placeholder="e.g. 49.99" value={manualPrice} onChange={(e) => setManualPrice(e.target.value)} />
                 </label>
-                <label className="adsgo-modal-field">
+                <label className="polluxa-modal-field">
                   <span>Product URL (optional)</span>
                   <input type="text" placeholder="e.g. https://www.yourstore.com/products/item" value={manualUrl} onChange={(e) => setManualUrl(e.target.value)} />
                 </label>
-                <button type="button" className="btn btn-primary adsgo-modal-submit" onClick={handleManualSubmit} disabled={!manualName.trim()}>
+                <button type="button" className="btn btn-primary polluxa-modal-submit" onClick={handleManualSubmit} disabled={!manualName.trim()}>
                   <PlusIcon /> Add Product
                 </button>
               </>

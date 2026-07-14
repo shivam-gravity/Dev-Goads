@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { SparkleIcon } from "../components/icons.js";
-import AdsGoHeader from "../components/AdsGoHeader.js";
+import PolluxaHeader from "../components/PolluxaHeader.js";
 import { api, GenerationJob } from "../api/client.js";
 
 const SELECT_TYPES = [
@@ -124,7 +124,7 @@ export default function CreativeStudio({ businessId }: { businessId: string }) {
 
   return (
     <div className="ai-generate-page" data-business-id={businessId}>
-      <AdsGoHeader breadcrumb={["Creative Hub", "AI Generate"]} />
+      <PolluxaHeader breadcrumb={["Creative Hub", "AI Generate"]} />
 
       <div className="ai-generate-toolbar">
         <a className="how-to-use-link" href="#" onClick={(e) => e.preventDefault()}>
@@ -151,7 +151,7 @@ export default function CreativeStudio({ businessId }: { businessId: string }) {
           {selectType === "product-url" && (
             <label className="ai-generate-field">
               <span className="ai-generate-field-label">
-                <span className="adsgo-required">*</span> Product URL
+                <span className="polluxa-required">*</span> Product URL
                 <span className="ai-generate-info-icon" title="Paste a link to the product page you want to advertise.">i</span>
               </span>
               <div className="ai-generate-url-row">
@@ -180,7 +180,7 @@ export default function CreativeStudio({ businessId }: { businessId: string }) {
           {selectType === "text-prompt" && (
             <label className="ai-generate-field">
               <span className="ai-generate-field-label">
-                <span className="adsgo-required">*</span> Describe the creative
+                <span className="polluxa-required">*</span> Describe the creative
               </span>
               <textarea
                 className="ai-generate-url-input"

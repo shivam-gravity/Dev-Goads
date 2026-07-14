@@ -29,8 +29,8 @@ import { getBusiness } from "../../api/src/modules/business/businessService.js";
 import type { AuthedRequest } from "../../api/src/gateway/middleware/auth.js";
 import { initErrorTracking, registerCrashReporting, captureError } from "../../api/src/infra/errorTracking.js";
 
-initErrorTracking("adgo-campaign-service");
-registerCrashReporting("adgo-campaign-service");
+initErrorTracking("polluxa-campaign-service");
+registerCrashReporting("polluxa-campaign-service");
 
 const app = express();
 const PORT = Number(process.env.CAMPAIGN_SERVICE_PORT ?? 4002);
@@ -266,10 +266,10 @@ app.use((_req, res) => {
 });
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  captureError(err, { service: "adgo-campaign-service" });
+  captureError(err, { service: "polluxa-campaign-service" });
   res.status(500).json({ error: "Internal server error" });
 });
 
 app.listen(PORT, () => {
-  console.log(`AdGo Campaign Service listening on http://localhost:${PORT}`);
+  console.log(`Polluxa Campaign Service listening on http://localhost:${PORT}`);
 });

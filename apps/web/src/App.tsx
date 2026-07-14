@@ -108,11 +108,11 @@ function AuthenticatedApp() {
   return (
     <div className="app-shell-sidebar">
       {/* Sidebar */}
-      <aside className={`sidebar adsgo-sidebar ${sidebarOpen ? "sidebar-open" : ""} ${brandMenuOpen ? "sidebar-pinned" : ""}`}>
-        <div className="sidebar-brand adsgo-brand">
-          <NavLink to="/dashboard" className="brand-lockup-adsgo" onClick={() => setSidebarOpen(false)}>
+      <aside className={`sidebar polluxa-sidebar ${sidebarOpen ? "sidebar-open" : ""} ${brandMenuOpen ? "sidebar-pinned" : ""}`}>
+        <div className="sidebar-brand polluxa-brand">
+          <NavLink to="/dashboard" className="brand-lockup-polluxa" onClick={() => setSidebarOpen(false)}>
             <span className="brand-logo-badge"><img src="/logo-icon.png" alt="CRM Ads" /></span>
-            <span className="brand-text-adsgo">CRM Ads</span>
+            <span className="brand-text-polluxa">CRM Ads</span>
           </NavLink>
         </div>
 
@@ -168,90 +168,90 @@ function AuthenticatedApp() {
 
         {businessId && (
           <>
-          <nav className="sidebar-nav adsgo-nav" style={{ overflowY: "auto", paddingBottom: "24px" }}>
-            <NavLink to="/dashboard" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+          <nav className="sidebar-nav polluxa-nav" style={{ overflowY: "auto", paddingBottom: "24px" }}>
+            <NavLink to="/dashboard" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>
                 <span className="sidebar-link-label">Home</span>
               </span>
             </NavLink>
-            <NavLink to="/media-plan" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/media-plan" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
                 <span className="sidebar-link-label">Media Plan</span>
               </span>
             </NavLink>
-            <NavLink to="/campaigns/new" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/campaigns/new" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="9" y1="3" x2="9" y2="21" /><line x1="15" y1="3" x2="15" y2="21" /></svg>
                 <span className="sidebar-link-label">New Campaign</span>
               </span>
             </NavLink>
-            <NavLink to="/wizard" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/wizard" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
                 <span className="sidebar-link-label">Campaign Generator</span>
               </span>
             </NavLink>
 
-            <div className="sidebar-nav-group-label adsgo-label">AI OPTIMIZE</div>
-            <NavLink to="/manager" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <div className="sidebar-nav-group-label polluxa-label">AI OPTIMIZE</div>
+            <NavLink to="/manager" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="9" /><rect x="14" y="3" width="7" height="5" /><rect x="14" y="12" width="7" height="9" /><rect x="3" y="16" width="7" height="5" /></svg>
                 <span className="sidebar-link-label">Ads Manager</span>
               </span>
             </NavLink>
-            <NavLink to="/drafts" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/drafts" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
                 <span className="sidebar-link-label">Draft & AI Recs</span>
               </span>
             </NavLink>
-            <div className="sidebar-nav-group-label adsgo-label">CREATIVE HUB</div>
-            <NavLink to="/studio" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <div className="sidebar-nav-group-label polluxa-label">CREATIVE HUB</div>
+            <NavLink to="/studio" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /><path d="M12 8l-2 4 2 4 2-4-2-4z" /></svg>
                 <span className="sidebar-link-label">AI Generate</span>
               </span>
             </NavLink>
-            <NavLink to="/assets" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/assets" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>
                 <span className="sidebar-link-label">Creative Library</span>
               </span>
             </NavLink>
 
-            <div className="sidebar-nav-group-label adsgo-label">ANALYTICS</div>
-            <NavLink to="/analytics" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <div className="sidebar-nav-group-label polluxa-label">ANALYTICS</div>
+            <NavLink to="/analytics" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>
                 <span className="sidebar-link-label">Ad Insights</span>
               </span>
             </NavLink>
-            <NavLink to="/insights" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/insights" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><line x1="9" y1="9" x2="9.01" y2="9" /><line x1="15" y1="9" x2="15.01" y2="9" /></svg>
                 <span className="sidebar-link-label">AI Analysis</span>
               </span>
             </NavLink>
 
-            <div className="sidebar-nav-group-label adsgo-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+            <div className="sidebar-nav-group-label polluxa-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
               <span>BRAND CENTER</span>
               <span style={{ fontSize: '10px' }}>▼</span>
             </div>
-            <NavLink to="/goal" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/goal" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" /></svg>
                 <span className="sidebar-link-label">Optimize Goal</span>
               </span>
             </NavLink>
-            <NavLink to="/brand" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/brand" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3h12l3 5-9 13L3 8Z" /><path d="M3 8h18M9 3l3 5 3-5M12 8l-2 13M12 8l2 13" /></svg>
                 <span className="sidebar-link-label">Brand Profile</span>
               </span>
             </NavLink>
-            <NavLink to="/products" className={({ isActive }) => `sidebar-link adsgo-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/products" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><polyline points="3.27 6.96 12 12.01 20.73 6.96" /><line x1="12" y1="22.08" x2="12" y2="12" /></svg>
                 <span className="sidebar-link-label">Products</span>
@@ -259,10 +259,10 @@ function AuthenticatedApp() {
             </NavLink>
 
           </nav>
-          <div className="sidebar-footer adsgo-footer">
+          <div className="sidebar-footer polluxa-footer">
             <button
               type="button"
-              className={`sidebar-link adsgo-link help-widget-trigger ${helpOpen ? "active" : ""}`}
+              className={`sidebar-link polluxa-link help-widget-trigger ${helpOpen ? "active" : ""}`}
               onClick={() => setHelpOpen((o) => !o)}
             >
               <span className="sidebar-link-inner">
@@ -282,7 +282,7 @@ function AuthenticatedApp() {
       )}
 
       {/* Main */}
-      <div className="sidebar-main adsgo-main">
+      <div className="sidebar-main polluxa-main">
         {/* Mobile topbar */}
         <header className="mobile-topbar">
           <button
@@ -294,11 +294,11 @@ function AuthenticatedApp() {
           </button>
           <NavLink to="/" className="brand brand-lockup">
             <MascotIcon className="mascot mascot-sm" />
-            <span className="brand-text">AdGo</span>
+            <span className="brand-text">Polluxa</span>
           </NavLink>
         </header>
 
-        <main className="sidebar-content adsgo-content">
+        <main className="sidebar-content polluxa-content">
           {/* businessId is guaranteed non-null here — RequireAuth (below) already redirects
               to /get-started before AuthenticatedApp ever mounts without one. */}
           <Routes>

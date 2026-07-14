@@ -84,7 +84,7 @@ async function fetchPage(url: string): Promise<FetchedPage> {
   try {
     const res = await fetch(url, {
       signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; AdGoOnboardingBot/1.0)" },
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; PolluxaOnboardingBot/1.0)" },
       redirect: "follow",
     });
     if (!res.ok) throw new Error(`Site responded with ${res.status}`);
@@ -171,7 +171,7 @@ async function fetchText(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<str
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 (compatible; AdGoOnboardingBot/1.0)" } });
+    const res = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 (compatible; PolluxaOnboardingBot/1.0)" } });
     if (!res.ok) return null;
     return await res.text();
   } catch {
@@ -243,7 +243,7 @@ async function discoverSitemapPages(origin: string): Promise<DiscoveredPage[]> {
  * priority (when present) with the existing FOLLOW_HINTS path/text heuristic, so a page that's
  * both high-priority in the sitemap AND looks like a product/about/pricing page sorts first.
  */
-async function discoverAndSelectPages(entryUrl: string, entry$: cheerio.CheerioAPI): Promise<{ toCrawl: DiscoveredPage[]; totalDiscovered: number }> {
+export async function discoverAndSelectPages(entryUrl: string, entry$: cheerio.CheerioAPI): Promise<{ toCrawl: DiscoveredPage[]; totalDiscovered: number }> {
   const base = new URL(entryUrl);
   const homepageLinks = extractSameOriginLinks(entry$, entryUrl);
 

@@ -9,8 +9,8 @@ import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
 import { initErrorTracking, registerCrashReporting, captureError } from "../infra/errorTracking.js";
 
-initErrorTracking("adgo-lead-ingestion-worker");
-registerCrashReporting("adgo-lead-ingestion-worker");
+initErrorTracking("polluxa-lead-ingestion-worker");
+registerCrashReporting("polluxa-lead-ingestion-worker");
 
 type IngestOneJob = { name: "ingest-one"; data: { workspaceId: string; leadgenId: string } };
 type BackfillJob = { name: "backfill"; data: { workspaceId: string; platform: "meta" | "google" } };

@@ -12,10 +12,10 @@ export default function AboutUs() {
       <section className="hero hero-compact">
         <MascotIcon className="mascot" />
         <span className="eyebrow">About us</span>
-        <h1>Why we built AdGo</h1>
+        <h1>Why we built Polluxa</h1>
         <p className="lead">
           Running ads well means constant, tedious work: researching audiences, writing variants, checking dashboards,
-          and moving budget around by hand. AdGo exists to automate that loop end to end, from the first strategy
+          and moving budget around by hand. Polluxa exists to automate that loop end to end, from the first strategy
           draft to the ongoing optimization, so the people running the business can spend less time managing tabs and
           more time on the business itself.
         </p>

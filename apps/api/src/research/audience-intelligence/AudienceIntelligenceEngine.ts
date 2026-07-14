@@ -41,6 +41,14 @@ export interface IdealCustomerProfile {
   behavioralSignals: ICPCriterion[];
 }
 
+/** One role in the buying committee, with its relative influence over the purchase
+ * decision — distinct from `decisionMakers` (a flat title list): this is *who's in the
+ * room and how much weight they carry*. */
+export interface BuyingCommitteeRole {
+  role: string;
+  influence: string;
+}
+
 export interface AudienceIntelligenceReport {
   icp: IdealCustomerProfile;
   decisionMakers: string[];
@@ -49,6 +57,13 @@ export interface AudienceIntelligenceReport {
   objections: string[];
   motivations: string[];
   channels: string[];
+  buyingCommittee: BuyingCommitteeRole[];
+  /** How the buying committee's roles relate/report to each other for this kind of purchase. */
+  decisionHierarchy: string;
+  /** The role that actually controls/signs off on budget for this kind of purchase. */
+  budgetOwner: string;
+  /** Typical steps/duration from first evaluation to signed deal. */
+  procurementCycle: string;
   evidence: string[];
   citations: Citation[];
   confidence: number;
@@ -99,8 +114,25 @@ const AUDIENCE_TOOL = {
       objections: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6, description: "Reasons a prospect hesitates or says no" },
       motivations: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6, description: "Underlying goals/outcomes the audience actually wants" },
       channels: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6, description: "Where this audience can realistically be reached (platforms, communities, publications)" },
+      buyingCommittee: {
+        type: "array",
+        minItems: 1,
+        maxItems: 6,
+        items: {
+          type: "object",
+          properties: {
+            role: { type: "string", description: "Job title/role in the buying committee" },
+            influence: { type: "string", description: "This role's relative influence over the purchase decision, e.g. \"Final approver\", \"Champion/influencer\", \"Blocker/gatekeeper\"" },
+          },
+          required: ["role", "influence"],
+        },
+        description: "Who's in the room for this kind of purchase decision, and how much weight each role carries",
+      },
+      decisionHierarchy: { type: "string", description: "How the buying committee's roles relate/report to each other for this kind of purchase" },
+      budgetOwner: { type: "string", description: "The role that actually controls/signs off on budget for this kind of purchase" },
+      procurementCycle: { type: "string", description: "Typical steps/duration from first evaluation to signed deal" },
     },
-    required: ["icp", "decisionMakers", "buyingTriggers", "painPoints", "objections", "motivations", "channels"],
+    required: ["icp", "decisionMakers", "buyingTriggers", "painPoints", "objections", "motivations", "channels", "buyingCommittee", "decisionHierarchy", "budgetOwner", "procurementCycle"],
   },
 };
 
@@ -119,6 +151,10 @@ function fallbackFields(businessName: string): AudienceFields {
     objections: ["Not yet researched"],
     motivations: ["Not yet researched"],
     channels: ["Not yet researched"],
+    buyingCommittee: [],
+    decisionHierarchy: "Unknown — no live research performed.",
+    budgetOwner: "Unknown — no live research performed.",
+    procurementCycle: "Unknown — no live research performed.",
   };
 }
 
@@ -136,7 +172,7 @@ function computeConfidence(usedFallback: boolean, citationCount: number, hadMemo
 async function searchAudienceSignals(input: AudienceIntelligenceInput): Promise<{ narrative: string; citations: Citation[] }> {
   const subject = input.businessName ?? hostnameOf(input.url);
   const research = await runWebSearch(
-    `Who is the target audience/ideal customer profile for the business at ${input.url}${input.businessName ? ` ("${input.businessName}")` : ""} in ${input.industry ?? "its category"}? Include likely decision-maker roles, what triggers someone to buy, and how they'd typically be reached.`
+    `Who is the target audience/ideal customer profile for the business at ${input.url}${input.businessName ? ` ("${input.businessName}")` : ""} in ${input.industry ?? "its category"}? Include likely decision-maker roles and their relative influence (buying committee), the decision-making hierarchy, who typically owns/controls budget, the typical procurement cycle, what triggers someone to buy, and how they'd typically be reached.`
   );
   return { narrative: research.narrative, citations: research.citations };
 }

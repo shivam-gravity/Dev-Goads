@@ -17,8 +17,8 @@ import { redisClient } from "./infra/redisClient.js";
 import { logger } from "./modules/logger/logger.js";
 import { initErrorTracking, registerCrashReporting, captureError } from "./infra/errorTracking.js";
 
-initErrorTracking("adgo-api");
-registerCrashReporting("adgo-api");
+initErrorTracking("polluxa-api");
+registerCrashReporting("polluxa-api");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -85,12 +85,12 @@ app.use((_req, res) => {
 });
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  captureError(err, { service: "adgo-api" });
+  captureError(err, { service: "polluxa-api" });
   res.status(500).json({ error: "Internal server error" });
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`AdGo API gateway listening on http://localhost:${PORT}`);
+  console.log(`Polluxa API gateway listening on http://localhost:${PORT}`);
 });
 
 // Stop accepting new connections and let in-flight requests finish before exiting —

@@ -7,7 +7,7 @@
  * robots.txt files without pulling in a dependency.
  */
 
-export const OUR_USER_AGENT = "adgoonboardingbot";
+export const OUR_USER_AGENT = "polluxaonboardingbot";
 const MAX_CRAWL_DELAY_MS = 2_000; // a site asking for 30s/page would blow the crawl budget — cap politeness at something sane
 
 export interface RobotsRules {

@@ -20,8 +20,8 @@ import {
 } from "../../api/src/modules/workspace/workspaceService.js";
 import { initErrorTracking, registerCrashReporting, captureError } from "../../api/src/infra/errorTracking.js";
 
-initErrorTracking("adgo-auth-service");
-registerCrashReporting("adgo-auth-service");
+initErrorTracking("polluxa-auth-service");
+registerCrashReporting("polluxa-auth-service");
 
 const MANAGE_ROLES = new Set(["owner", "admin"]);
 
@@ -158,10 +158,10 @@ app.use((_req, res) => {
 });
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  captureError(err, { service: "adgo-auth-service" });
+  captureError(err, { service: "polluxa-auth-service" });
   res.status(500).json({ error: "Internal server error" });
 });
 
 app.listen(PORT, () => {
-  console.log(`AdGo Auth Service listening on http://localhost:${PORT}`);
+  console.log(`Polluxa Auth Service listening on http://localhost:${PORT}`);
 });

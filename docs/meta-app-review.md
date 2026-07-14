@@ -1,4 +1,4 @@
-# Meta App Review submission draft — AdGo
+# Meta App Review submission draft — Polluxa
 
 Draft only. Everything below is either (a) grounded in what's actually built and
 verified in this repo, or (b) an invented placeholder clearly marked `[MADE UP —
@@ -11,20 +11,20 @@ submission to mean anything; there's no way to usefully fabricate those.
 
 | Field | Value |
 |---|---|
-| App name | AdGo `[MADE UP — confirm final product name]` |
+| App name | Polluxa `[MADE UP — confirm final product name]` |
 | Business Manager ID | `[MADE UP — 000000000000000, replace with real ID]` |
 | App ID | `[MADE UP — 0000000000000000, replace with real ID]` |
 | App type | Business |
-| Production domain | `[MADE UP — https://www.adgo.ai]` |
+| Production domain | `[MADE UP — https://www.polluxa.ai]` |
 | Privacy Policy URL | `{domain}/privacy` (real page, built in this repo at `apps/web/src/pages/Privacy.tsx`) |
 | Terms of Service URL | `{domain}/terms` (real page, built in this repo at `apps/web/src/pages/Terms.tsx`) |
 
 ## 2. One-paragraph description (for the App Review form)
 
-> AdGo is a self-serve advertising automation platform. A business describes
-> itself and its goals; AdGo's strategy engine (built on Claude) generates a
+> Polluxa is a self-serve advertising automation platform. A business describes
+> itself and its goals; Polluxa's strategy engine (built on Claude) generates a
 > recommended audience, budget split, and ad creatives. Once the business
-> reviews and approves the strategy, AdGo uses the Meta Marketing API and
+> reviews and approves the strategy, Polluxa uses the Meta Marketing API and
 > Google Ads API — under the business's own OAuth authorization — to create
 > and launch campaigns on their connected ad account. An optimization engine
 > then monitors performance and reallocates budget toward better-performing
@@ -39,11 +39,11 @@ management contract" — different review framing.
 
 ## 3. Permissions requested and justification
 
-| Permission | Why AdGo needs it |
+| Permission | Why Polluxa needs it |
 |---|---|
 | `ads_management` | Create, read, update, and pause campaigns/ad sets/ads on the connected ad account, and update daily budgets, on behalf of the business that authorized the connection. |
 | `ads_read` | Pull performance insights (impressions, clicks, conversions, spend) per ad to feed the optimization engine. |
-| `business_management` | Let the authorizing user select which ad account(s) under their Business Manager AdGo should manage. |
+| `business_management` | Let the authorizing user select which ad account(s) under their Business Manager Polluxa should manage. |
 
 `[MADE UP — confirm against what's actually configured in the App Dashboard]`
 — I can't see requested/approved permissions from the codebase; these three
@@ -62,8 +62,8 @@ are what the built features actually call for, no more.
   strategy generation), payment processor (billing amounts only).
 - **Retention**: for the life of the account plus a limited billing/audit
   window; deletable on request; revoking OAuth access in Meta/Google account
-  settings immediately cuts off AdGo's access.
-- **Not done**: AdGo does not sell data, and does not use ad account data for
+  settings immediately cuts off Polluxa's access.
+- **Not done**: Polluxa does not sell data, and does not use ad account data for
   anything beyond the connected business's own campaigns.
 
 This matches the real Privacy Policy draft now live at `/privacy`.

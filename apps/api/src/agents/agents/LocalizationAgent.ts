@@ -44,13 +44,14 @@ export class LocalizationAgent implements AIAgent<LocalizationAgentOutput> {
 
   async execute(context: ResearchContext): Promise<AgentResult<LocalizationAgentOutput>> {
     return runAgentStep(this.name, async () => {
-      const fields = ["market", "company", "audience"] as const;
+      const fields = ["market", "company", "audience", "localPresence"] as const;
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           market: JSON.stringify(context.market ?? {}),
           company: JSON.stringify(context.company ?? {}),
           audience: JSON.stringify(context.audience ?? {}),
+          localPresence: JSON.stringify(context.localPresence ?? {}),
         },
         tool: LOCALIZATION_AGENT_TOOL,
         schema: localizationAgentSchema,

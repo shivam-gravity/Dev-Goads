@@ -95,7 +95,7 @@ export default function Onboarding({ onOnboarded }: { onOnboarded: (businessId: 
   return (
     <div className="onboarding">
       <h1>Set up your business</h1>
-      <p className="subtitle">Start from your website and AdGo will draft the groundwork for you.</p>
+      <p className="subtitle">Start from your website and Polluxa will draft the groundwork for you.</p>
 
       <div className="onboarding-steps">
         <span className={stepIndex >= 0 ? "onboarding-step-dot active" : "onboarding-step-dot"}>1. Website</span>

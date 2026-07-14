@@ -9,7 +9,7 @@ function formatReach(estimate: { usersLowerBound: number; usersUpperBound: numbe
 }
 
 export default function AudienceBuilder({ businessId }: { businessId: string }) {
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+  const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
   const [audienceName, setAudienceName] = useState("");
   
   // Demographics

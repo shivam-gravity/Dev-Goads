@@ -239,10 +239,10 @@ function toLeadRecord(
 
 const MOCK_FORM_TEMPLATES: Record<LeadPlatform, { name: string; headline: string; business_name: string; call_to_action_type: string; fields: string[] }[]> = {
   meta: [
-    { name: "Get a Free Quote", headline: "See your custom quote in 60 seconds", business_name: "AdGo Demo Store", call_to_action_type: "GET_QUOTE", fields: ["FULL_NAME", "EMAIL", "PHONE_NUMBER"] },
+    { name: "Get a Free Quote", headline: "See your custom quote in 60 seconds", business_name: "Polluxa Demo Store", call_to_action_type: "GET_QUOTE", fields: ["FULL_NAME", "EMAIL", "PHONE_NUMBER"] },
   ],
   google: [
-    { name: "Request a Callback", headline: "Talk to our team today", business_name: "AdGo Demo Store", call_to_action_type: "CALL_NOW", fields: ["FULL_NAME", "PHONE_NUMBER", "EMAIL"] },
+    { name: "Request a Callback", headline: "Talk to our team today", business_name: "Polluxa Demo Store", call_to_action_type: "CALL_NOW", fields: ["FULL_NAME", "PHONE_NUMBER", "EMAIL"] },
   ],
 };
 

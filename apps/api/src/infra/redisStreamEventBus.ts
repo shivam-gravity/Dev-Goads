@@ -4,7 +4,7 @@ import { logger } from "../modules/logger/logger.js";
 import type { DomainEvent, EventBus, EventHandler } from "./eventBus.js";
 
 const STREAM_PREFIX = "events:"; // one stream per event type, e.g. "events:campaign.launched"
-const CONSUMER_GROUP = "adgo-api";
+const CONSUMER_GROUP = "polluxa-api";
 const MAX_STREAM_LENGTH = 10_000; // approx trim (MAXLEN ~) — an audit trail, not unbounded storage
 const READ_BLOCK_MS = 5000;
 const READ_BATCH_SIZE = 10;
@@ -26,7 +26,7 @@ function fieldsToRecord(fields: string[]): Record<string, string> {
  * asked for (unlike pgvector, Redis is already a live, working dependency in this stack —
  * see ResearchMemoryStore.ts's doc comment for the case where a requested real backend
  * genuinely wasn't installable; this one is). One stream per event type, a single shared
- * consumer group ("adgo-api") so multiple subscriber processes split the work rather than
+ * consumer group ("polluxa-api") so multiple subscriber processes split the work rather than
  * each seeing every event, and explicit XACK only after a handler succeeds — a handler
  * that throws leaves its message unacked (visible in the stream's pending-entries list for
  * manual/future reclaim) rather than silently losing it, the same "don't lose a failure"

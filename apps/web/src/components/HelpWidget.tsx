@@ -97,7 +97,7 @@ export default function HelpWidget({ onClose, panelRef }: { onClose: () => void;
 
   async function handleSendMessage() {
     if (!messageText.trim() || sending) return;
-    const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+    const workspaceId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
     setSending(true);
     setSendError(null);
     try {

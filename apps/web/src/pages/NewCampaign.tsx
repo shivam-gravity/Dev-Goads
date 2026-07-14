@@ -4,13 +4,17 @@ import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.js";
 import { TargetIcon, UserIcon, LightningIcon, GlobeIcon, SparkleIcon } from "../components/icons.js";
 import type {
+  AgentRunResult,
   AudiencePersonaCard,
+  CampaignGenerationCitations,
   CampaignGenerationFacts,
   CampaignGenerationJobStatus,
   CampaignGenerationPipelineStatus,
   CampaignStrategyOption,
+  CompetitorAdsData,
   DecisionContext,
   RankedRecommendation,
+  SiteMapData,
   StrategySimulationResult,
 } from "../api/client.js";
 
@@ -70,6 +74,94 @@ function phaseSubline(key: CampaignGenerationPipelineStatus): string {
   return lines[Math.floor(Date.now() / 2500) % lines.length];
 }
 
+// Human-readable labels for the real step names GET /campaigns/generate/:id/progress
+// returns (research provider names, then agent names, then phase-boundary markers) — falls
+// back to the raw name for anything added on the backend before this map is updated, so a
+// new provider/agent shows up as slightly-less-polished text instead of nothing.
+const STEP_LABELS: Record<string, string> = {
+  website: "Reading your website",
+  company: "Researching your company",
+  market: "Analyzing the market",
+  technology: "Detecting your tech stack",
+  competitor: "Searching competitors",
+  seo: "Finding keywords",
+  audience: "Building your audience profile",
+  news: "Checking recent news",
+  "social-media": "Checking social presence",
+  reviews: "Reading customer reviews",
+  funding: "Checking funding signals",
+  "hiring-signals": "Checking hiring activity",
+  "content-marketing": "Analyzing content marketing",
+  "backlink-authority": "Checking domain authority",
+  "app-store": "Checking app store presence",
+  "video-presence": "Checking video presence",
+  "local-presence": "Checking local presence",
+  partnerships: "Checking partnerships",
+  "legal-regulatory": "Checking legal & regulatory risk",
+  search: "Searching the web",
+  product: "Crawling product & pricing pages",
+  navigation: "Mapping your site structure",
+  "search-ranking": "Checking real search rankings",
+  "ad-library": "Checking competitor ad libraries",
+  autocomplete: "Checking search autocomplete",
+  "serp-features": "Checking related searches",
+  reddit: "Checking community discussion",
+  aggregating: "Fusing research into one context",
+  "product-agent": "Defining your product positioning",
+  "audience-agent": "Refining your audience",
+  "competitor-agent": "Mapping competitive differentiation",
+  "market-agent": "Scoring market opportunity",
+  "keyword-agent": "Building keyword strategy",
+  "creative-agent": "Writing ad creative",
+  "budget-agent": "Calculating your budget",
+  "persona-agent": "Building personas",
+  "campaign-agent": "Synthesizing your campaign strategy",
+  "landing-page-agent": "Reviewing your landing page",
+  "pricing-offer-agent": "Analyzing pricing",
+  "localization-agent": "Planning localization",
+  "seo-content-agent": "Planning SEO content",
+  "seasonality-timing-agent": "Timing your launch",
+  "channel-placement-agent": "Choosing ad placements",
+  "funnel-retargeting-agent": "Planning your funnel",
+  "objection-handling-agent": "Preparing objection handling",
+  "forecasting-kpi-agent": "Forecasting performance",
+  "critic-agent": "Reviewing for quality",
+  "compliance-agent": "Reviewing for compliance",
+  "campaign-built": "Assembling your campaign",
+};
+
+function stepLabel(step: string): string {
+  return STEP_LABELS[step] ?? step;
+}
+
+function formatRelativeAge(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const days = Math.floor(ms / (24 * 60 * 60 * 1000));
+  if (days <= 0) {
+    const hours = Math.floor(ms / (60 * 60 * 1000));
+    return hours <= 0 ? "just now" : `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  }
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/** "Researched N days ago" — surfaces `researchedAt`/`researchIsStale`, computed server-side
+ * (router.ts, reusing research/knowledge/freshness.ts) against a 14-day horizon. Past that
+ * horizon, offers a one-click re-run rather than leaving the user to guess whether a 3-week-old
+ * campaign still reflects the business's current market/competitor/pricing landscape. */
+function FreshnessBadge({ job, onRefresh, refreshing }: { job: CampaignGenerationJobStatus; onRefresh: () => void; refreshing: boolean }) {
+  if (!job.researchedAt) return null;
+  return (
+    <div className={`freshness-badge${job.researchIsStale ? " stale" : ""}`}>
+      <span>Researched {formatRelativeAge(job.researchedAt)}</span>
+      {job.researchIsStale && (
+        <button type="button" className="freshness-refresh-btn" onClick={onRefresh} disabled={refreshing}>
+          {refreshing ? "Refreshing…" : "May be outdated — refresh"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function formatCents(cents: number): string {
   return `$${Math.round(cents / 100).toLocaleString()}`;
 }
@@ -85,7 +177,7 @@ function AssistantTag({ time }: { time: string }) {
   return (
     <div className="decision-assistant-tag">
       <span className="copilot-avatar">🤖</span>
-      <span className="decision-assistant-name">AdGo AI</span>
+      <span className="decision-assistant-name">Polluxa AI</span>
       {stamp && <span className="decision-assistant-time">{stamp}</span>}
     </div>
   );
@@ -540,17 +632,208 @@ function VerifiedFactsSection({ jobId }: { jobId: string }) {
   );
 }
 
+// Display labels for the 20 agents' internal `name` values (apps/api/src/agents/agents/*.ts) —
+// falls back to the raw name for any agent added on the backend before this map is updated.
+const AGENT_LABELS: Record<string, string> = {
+  "product-agent": "Product",
+  "audience-agent": "Audience",
+  "competitor-agent": "Competitor",
+  "market-agent": "Market",
+  "keyword-agent": "Keyword",
+  "creative-agent": "Creative",
+  "budget-agent": "Budget",
+  "persona-agent": "Persona",
+  "campaign-agent": "Campaign",
+  "landing-page-agent": "Landing Page",
+  "pricing-offer-agent": "Pricing & Offer",
+  "localization-agent": "Localization",
+  "seo-content-agent": "SEO Content",
+  "seasonality-timing-agent": "Seasonality & Timing",
+  "channel-placement-agent": "Channel Placement",
+  "funnel-retargeting-agent": "Funnel & Retargeting",
+  "objection-handling-agent": "Objection Handling",
+  "forecasting-kpi-agent": "Forecasting & KPI",
+  "critic-agent": "Critic (review)",
+  "compliance-agent": "Compliance (review)",
+};
+
+// Some evidence sources (Critic/Compliance in particular) legitimately aggregate citations
+// across many sub-checks — rendering all of them as inline [N] links reads as an unreadable
+// wall of brackets past a certain count. Capped, with the true remaining count always shown
+// (never silently dropped), same "show N, reveal the rest" convention as the page's other
+// evidence toggles (Data sources / Show all supporting evidence).
+const MAX_INLINE_CITATIONS = 8;
+
+function CitationLinks({ citations }: { citations: { url: string; title: string }[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? citations : citations.slice(0, MAX_INLINE_CITATIONS);
+  const hiddenCount = citations.length - visible.length;
+  return (
+    <span className="agent-reasoning-citations">
+      {visible.map((c, ci) => (
+        <a key={c.url} href={c.url} target="_blank" rel="noreferrer" title={c.title}>
+          [{ci + 1}]
+        </a>
+      ))}
+      {hiddenCount > 0 && (
+        <button type="button" className="agent-reasoning-citations-more" onClick={() => setExpanded(true)}>
+          +{hiddenCount} more
+        </button>
+      )}
+    </span>
+  );
+}
+
+function AgentReasoningRow({ result, citationsByField }: { result: AgentRunResult; citationsByField: Record<string, { url: string; title: string }[]> }) {
+  const confidencePct = Math.round(result.confidence * 100);
+  const label = AGENT_LABELS[result.agent] ?? result.agent;
+  return (
+    <div className="agent-reasoning-row">
+      <div className="agent-reasoning-row-head">
+        <span className="agent-reasoning-name">{label}</span>
+        <span className={`score-badge ${scoreTier(confidencePct)}`}>{confidencePct}%</span>
+        {result.usedFallback && (
+          <span
+            className="agent-reasoning-fallback-flag"
+            title="This agent couldn't reach a live model, or the research it needed was missing — it used a generic fallback instead of a researched conclusion."
+          >
+            ⚠ not grounded — used fallback
+          </span>
+        )}
+      </div>
+      {result.evidence.length > 0 && (
+        <details className="agent-reasoning-evidence">
+          <summary>Data sources ({result.evidence.length})</summary>
+          <ul>
+            {result.evidence.map((e, i) => {
+              const citations = citationsByField[e.source] ?? [];
+              return (
+                <li key={`${e.source}-${i}`}>
+                  <strong>{e.source}</strong>: {e.detail}
+                  {citations.length > 0 && <CitationLinks citations={citations} />}
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** Surfaces the 20-agent pipeline's own reasoning — which real research each agent drew
+ * from and whether it had to fall back to a generic guess — alongside the separate Decision
+ * Engine panel above. `job.agentResults` was already computed and persisted server-side
+ * (CampaignGenerationJob.agentResults) but never rendered anywhere before this.
+ * `citationsByField` cross-references each evidence source against the real citation URLs
+ * GET /campaigns/generate/:id/citations returns, so a source reads as a verifiable link
+ * trail rather than just a descriptive label. */
+function AgentReasoningView({
+  agentResults,
+  citationsByField,
+}: {
+  agentResults: Record<string, AgentRunResult>;
+  citationsByField: Record<string, { url: string; title: string }[]>;
+}) {
+  const rows = Object.values(agentResults);
+  if (rows.length === 0) return null;
+  const fallbackCount = rows.filter((r) => r.usedFallback).length;
+
+  return (
+    <div className="decision-section agent-reasoning-section">
+      <p className="decision-section-title"><span className="icon-badge"><SparkleIcon /></span>Agent Reasoning — Data Sources &amp; Confidence</p>
+      <p className="agent-reasoning-subline">
+        Each of the {rows.length} AI agents below shows what real research it actually drew from
+        {fallbackCount > 0 ? ` — ${fallbackCount} couldn't and fell back to a generic guess (flagged below)` : ""}.
+      </p>
+      <div className="agent-reasoning-list">
+        {rows.map((r) => <AgentReasoningRow key={r.agent} result={r} citationsByField={citationsByField} />)}
+      </div>
+    </div>
+  );
+}
+
+/** Read-only list of what NavigationProvider actually discovered/crawled on the business's own
+ * site — its whole value is showing the user what got crawled and why, not feeding an agent, so
+ * it renders as its own small card rather than through the generic evidence display. */
+function SiteMapCard({ siteMap }: { siteMap: SiteMapData }) {
+  if (siteMap.pages.length === 0) return null;
+  return (
+    <div className="decision-section site-map-card">
+      <p className="decision-section-title"><span className="icon-badge"><GlobeIcon /></span>Site Map — {siteMap.totalDiscovered} pages discovered</p>
+      <ul className="site-map-list">
+        {siteMap.pages.slice(0, 20).map((p) => (
+          <li key={p.url} className="site-map-row">
+            <span className={`site-map-type-badge site-map-type-${p.pageType}`}>{p.pageType}</span>
+            <a href={p.url} target="_blank" rel="noreferrer" className="site-map-url">{p.title || p.url}</a>
+            {p.discovered && <span className="site-map-crawled-flag" title="Crawled">✓</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Real competitor ad creative (Meta Ad Library API + Google Ads Transparency Center) — the one
+ * new field that doesn't fit the generic evidence-link display, since each entry is a
+ * headline/body/preview object rather than a narrative string. */
+function CompetitorAdsCard({ competitorAds }: { competitorAds: CompetitorAdsData }) {
+  if (competitorAds.ads.length === 0) return null;
+  return (
+    <div className="decision-section competitor-ads-card">
+      <p className="decision-section-title"><span className="icon-badge"><TargetIcon /></span>Competitor Ads — {competitorAds.ads.length} found</p>
+      <ul className="competitor-ads-list">
+        {competitorAds.ads.slice(0, 10).map((ad, i) => (
+          <li key={`${ad.sourceUrl}-${i}`} className="competitor-ad-row">
+            <span className={`competitor-ad-platform-badge competitor-ad-platform-${ad.platform}`}>{ad.platform === "meta" ? "Meta" : "Google"}</span>
+            <span className="competitor-ad-advertiser">{ad.advertiserName}</span>
+            {ad.headline && <span className="competitor-ad-headline">{ad.headline}</span>}
+            {ad.bodyText && <span className="competitor-ad-body">{ad.bodyText}</span>}
+            <a href={ad.sourceUrl} target="_blank" rel="noreferrer" className="competitor-ad-link">View ad</a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Fetches real citation URLs (plus the Site Map / Competitor Ads raw data riding alongside
+ * them) once (same one-shot pattern as VerifiedFactsSection above) and renders AgentReasoningView
+ * plus the two dedicated cards — kept separate from that view so it stays a pure/presentational
+ * component testable without a network fetch. A citations-fetch failure just means sources
+ * render without links, never a broken page. */
+function AgentReasoningSection({ jobId, agentResults }: { jobId: string; agentResults: Record<string, AgentRunResult> }) {
+  const [citations, setCitations] = useState<CampaignGenerationCitations | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getCampaignGenerationCitations(jobId).then((d) => { if (!cancelled) setCitations(d); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [jobId]);
+
+  return (
+    <>
+      <AgentReasoningView agentResults={agentResults} citationsByField={citations?.citationsByField ?? {}} />
+      {citations?.siteMap && <SiteMapCard siteMap={citations.siteMap} />}
+      {citations?.competitorAds && <CompetitorAdsCard competitorAds={citations.competitorAds} />}
+    </>
+  );
+}
+
 export default function NewCampaign() {
   const { workspaceId, businessId } = useAuth();
   const navigate = useNavigate();
-  const wsId = workspaceId ?? localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
-  const activeJobKey = `adgo_active_campaign_generation_${wsId}`;
+  const wsId = workspaceId ?? localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
+  const activeJobKey = `polluxa_active_campaign_generation_${wsId}`;
   const activeJobUrlKey = `${activeJobKey}_url`;
 
   const [pageUrl, setPageUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [job, setJob] = useState<CampaignGenerationJobStatus | null>(null);
+  const [progressSteps, setProgressSteps] = useState<string[]>([]);
+  const [progressTotal, setProgressTotal] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const pollRef = useRef<number | null>(null);
 
   // Same resumability contract as the old flow: generation runs server-side (BullMQ worker)
@@ -587,6 +870,13 @@ export default function NewCampaign() {
       } catch {
         // transient poll failure — the next tick will retry
       }
+      try {
+        const progress = await api.getCampaignGenerationProgress(job.id);
+        setProgressSteps(progress.completedSteps);
+        setProgressTotal(progress.total);
+      } catch {
+        // no live progress available (older job, Redis miss) — the static fallback messaging still shows
+      }
     }, POLL_INTERVAL_MS);
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
@@ -609,6 +899,8 @@ export default function NewCampaign() {
     try {
       const created = await api.generateCampaign({ workspaceId: wsId, businessId, url });
       setJob(created);
+      setProgressSteps([]);
+      setProgressTotal(null);
       localStorage.setItem(activeJobKey, created.id);
       localStorage.setItem(activeJobUrlKey, url);
     } catch (err) {
@@ -618,10 +910,34 @@ export default function NewCampaign() {
     }
   }
 
+  // Re-runs the exact same generation pipeline against the same URL/business — deliberately
+  // just another POST /campaigns/generate call (same path `handleStart` uses), not a separate
+  // "refresh" endpoint: there's no caching/invalidation to bypass, staleness here just means
+  // "the last run is old," so the fix is running the same real pipeline again.
+  async function handleRefresh() {
+    if (!job?.url || !businessId) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      const created = await api.generateCampaign({ workspaceId: wsId, businessId, url: job.url });
+      setJob(created);
+      setProgressSteps([]);
+      setProgressTotal(null);
+      localStorage.setItem(activeJobKey, created.id);
+      localStorage.setItem(activeJobUrlKey, job.url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't refresh research — try again in a moment.");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   function handleReset() {
     setJob(null);
     setError(null);
     setPageUrl("");
+    setProgressSteps([]);
+    setProgressTotal(null);
     localStorage.removeItem(activeJobKey);
     localStorage.removeItem(activeJobUrlKey);
   }
@@ -725,6 +1041,11 @@ export default function NewCampaign() {
                   const done = currentPhaseIndex > i;
                   const active = currentPhaseIndex === i;
                   const PhaseIcon = phase.icon;
+                  // Real steps as they actually complete (GET /campaigns/generate/:id/progress)
+                  // take over from the static rotating message the moment any exist — an older
+                  // job or a Redis miss just leaves progressSteps empty and the static message
+                  // still shows, so this never regresses to a blank line.
+                  const liveLine = active && progressSteps.length > 0 ? stepLabel(progressSteps[progressSteps.length - 1]) : null;
                   return (
                     <li key={phase.key} className={done ? "done" : active ? "active" : "pending"}>
                       <div className="crawler-trace-step-row">
@@ -734,17 +1055,24 @@ export default function NewCampaign() {
                         <span>{phase.label}</span>
                         {done && <span className="crawler-trace-step-done-mark" aria-hidden="true">✓</span>}
                       </div>
-                      {active && <p className="phase-subline">{phaseSubline(phase.key)}</p>}
+                      {active && <p className="phase-subline">{liveLine ? `${liveLine}…` : phaseSubline(phase.key)}</p>}
                     </li>
                   );
                 })}
               </ul>
+              {progressSteps.length > 0 && progressTotal !== null && (
+                <p className="crawler-trace-progress-count">{progressSteps.length} of {progressTotal} steps complete</p>
+              )}
             </div>
           )}
+
+          {isDone && <FreshnessBadge job={job} onRefresh={handleRefresh} refreshing={refreshing} />}
 
           {job.decisionContext && <DecisionContextView decision={job.decisionContext} url={pageUrl} />}
 
           {factsVisible && <VerifiedFactsSection jobId={job.id} />}
+
+          {job.agentResults && <AgentReasoningSection jobId={job.id} agentResults={job.agentResults} />}
 
           {isDone && (
             <div className="all-set-banner">

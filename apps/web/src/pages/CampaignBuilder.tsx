@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import AdsGoHeader from "../components/AdsGoHeader.js";
+import PolluxaHeader from "../components/PolluxaHeader.js";
 import { DropdownField, type Option } from "../components/DropdownField.js";
 import {
   api,
@@ -60,7 +60,7 @@ export default function CampaignBuilder() {
   // "demo-workspace" matches AuthContext's own default and the seeded demo Business —
   // "demo" is a separate, also-real seeded workspace that demo-business does NOT belong
   // to, so falling back to it here would silently 403 every workspace-scoped call below.
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+  const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -450,7 +450,7 @@ export default function CampaignBuilder() {
 
   return (
     <div className="campaign-builder">
-      <AdsGoHeader breadcrumb={["New Campaign", campaign.name]} />
+      <PolluxaHeader breadcrumb={["New Campaign", campaign.name]} />
 
       {usingMockMetaAccounts && activeVariant?.network !== "google" && activeVariant?.network !== "tiktok" && (
         <p className="demo-data-banner">
@@ -764,7 +764,7 @@ export default function CampaignBuilder() {
       <div className="campaign-builder-footer">
         <button type="button" className="btn btn-secondary" onClick={() => navigate(-1)}>Previous</button>
         <span className="campaign-builder-footer-note campaign-builder-footer-note-disabled">
-          No ad account? Publish with adsgo account (coming soon)
+          No ad account? Publish with polluxa account (coming soon)
         </span>
         <div className="campaign-builder-footer-actions">
           <button type="button" className="btn btn-secondary" onClick={handleSaveDraft} disabled={saving}>{saving ? "Saving…" : "Save draft"}</button>

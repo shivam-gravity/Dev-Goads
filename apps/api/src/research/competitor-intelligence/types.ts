@@ -29,6 +29,12 @@ export interface CompetitorProfile {
   weaknesses: string[];
   technologyStack: string[];
   estimatedMarketingStrategy: string;
+  /** e.g. "~15% of named-competitor set" or "Unknown — no market-share data found" */
+  marketShare: string;
+  /** Best-effort estimate of this competitor's ad spend, e.g. "$50K-$100K/mo (estimated)" */
+  estimatedAdBudget: string;
+  /** How this competitor differentiates itself from the rest of the field. */
+  differentiation: string;
   evidence: string[];
   citations: Citation[];
   /** 0-1 — see enrichment.ts's computeProfileConfidence for exactly what feeds this. */

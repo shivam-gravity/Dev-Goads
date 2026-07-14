@@ -31,15 +31,22 @@ end
  * lock could survive a single node's failure. Good enough to prevent the concrete race
  * this exists for (two BullMQ jobs processing the same business concurrently), not
  * intended as a general-purpose distributed-systems primitive beyond that. */
+// Locks currently held by this process — tracked purely so a SIGTERM/SIGINT (e.g. a
+// dev-server restart mid-run) can release them on the way out instead of leaving the
+// Redis key stuck for its full TTL just because the process died before its own
+// try/finally got a chance to run.
+const activeLocks = new Set<DistributedLock>();
+
 export async function acquireLock(key: string, ttlMs: number): Promise<DistributedLock | null> {
   const token = randomUUID();
   const result = await redisClient.set(key, token, "PX", ttlMs, "NX");
   if (result !== "OK") return null;
 
-  return {
+  const lock: DistributedLock = {
     key,
     token,
     async release() {
+      activeLocks.delete(lock);
       try {
         await redisClient.eval(RELEASE_SCRIPT, 1, key, token);
       } catch (err) {
@@ -47,7 +54,29 @@ export async function acquireLock(key: string, ttlMs: number): Promise<Distribut
       }
     },
   };
+  activeLocks.add(lock);
+  return lock;
 }
+
+// Registered once per process regardless of how many times this module is imported.
+// Doesn't call process.exit itself — other SIGTERM/SIGINT listeners (see
+// gracefulShutdown.ts) already own that decision; this just races the release against
+// whatever grace period they allow before the process actually goes down.
+let shutdownReleaseRegistered = false;
+function registerShutdownRelease(): void {
+  if (shutdownReleaseRegistered) return;
+  shutdownReleaseRegistered = true;
+
+  const releaseAllOnShutdown = (signal: string) => {
+    if (activeLocks.size === 0) return;
+    logger.info(`${signal}: releasing ${activeLocks.size} held distributed lock(s) before exit`);
+    void Promise.all([...activeLocks].map((lock) => lock.release()));
+  };
+
+  process.on("SIGTERM", () => releaseAllOnShutdown("SIGTERM"));
+  process.on("SIGINT", () => releaseAllOnShutdown("SIGINT"));
+}
+registerShutdownRelease();
 
 /**
  * Acquires `key`, runs `fn`, always releases afterward (success or throw). Throws

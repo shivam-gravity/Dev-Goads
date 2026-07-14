@@ -13,7 +13,7 @@ export interface SavedAudience {
   type?: AudienceType;
   platform?: AudiencePlatform | null;
   // Only meaningful when type === "lookalike" — references another SavedAudience.id used
-  // as the seed. This is AdGo's own bookkeeping only, not a real Meta/Google seed linkage.
+  // as the seed. This is Polluxa's own bookkeeping only, not a real Meta/Google seed linkage.
   lookalikeSourceId?: string | null;
   ageMin: number;
   ageMax: number;

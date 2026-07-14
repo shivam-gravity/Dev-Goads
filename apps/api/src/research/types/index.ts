@@ -96,6 +96,22 @@ export interface CompanyData {
   headquarters?: string;
   employeeRange?: string;
   fundingStage?: string;
+  /** Best-effort estimate (e.g. "$5M-$10M ARR") — from public signals (funding, headcount,
+   * pricing x estimated customer count), never a confident/exact figure. */
+  revenueEstimate?: string;
+  /** e.g. "Cloud/SaaS (multi-tenant)", "Self-hosted/on-prem", "Hybrid" */
+  deploymentModel?: string;
+  /** e.g. "Per-seat subscription", "Usage-based", "Freemium + paid tiers" */
+  pricingModel?: string;
+  /** Business-level tech stack the company builds on/integrates with (distinct from
+   * TechnologyData, which is the *website's own* fingerprinted CMS/analytics/hosting). */
+  technologyStack?: string[];
+  /** Named integrations/ecosystem partners the product connects with. */
+  integrations?: string[];
+  /** e.g. "Self-serve/PLG", "Inside sales", "Enterprise/field sales" */
+  salesMotion?: string;
+  /** How a customer typically moves from trial/first purchase to renewal/expansion. */
+  customerLifecycle?: string;
   dataSource: string;
 }
 
@@ -105,6 +121,13 @@ export interface MarketData {
   trends: string[];
   recommendedRegion?: string;
   competitionLevel: string;
+  /** Compound Annual Growth Rate, as stated/estimated in research, e.g. "14.2% CAGR (2024-2029)" */
+  cagr?: string;
+  /** Total Addressable Market size, e.g. "$42B globally" */
+  tam?: string;
+  /** Per-region demand breakdown — distinct from the single `recommendedRegion` summary
+   * string above, which stays as the one-line takeaway. */
+  geographicDemand?: { region: string; demandLevel: string; notes?: string }[];
   dataSource: string;
 }
 
@@ -112,6 +135,12 @@ export interface CompetitorEntry {
   name: string;
   url?: string;
   notes?: string;
+  /** e.g. "~15% of named-competitor set" or "Unknown — no market-share data found" */
+  marketShare?: string;
+  /** Best-effort estimate of this competitor's ad spend, e.g. "$50K-$100K/mo (estimated)" */
+  estimatedAdBudget?: string;
+  /** How this competitor differentiates itself from the rest of the field. */
+  differentiation?: string;
 }
 
 export interface CompetitorData {
@@ -132,6 +161,17 @@ export interface AudienceData {
   painPoints: string[];
   interestTags: string[];
   demographics?: { ageDistribution: string; genderRatio: string };
+  /** Roles typically involved in the buying decision, each with their relative influence —
+   * distinct from a flat decision-maker list: this is *who's in the room*, not just titles. */
+  buyingCommittee?: { role: string; influence: string }[];
+  /** How the buying committee's roles relate/report to each other for this kind of purchase. */
+  decisionHierarchy?: string;
+  /** The role that actually controls/signs off on budget for this kind of purchase. */
+  budgetOwner?: string;
+  /** Typical steps/duration from first evaluation to signed deal. */
+  procurementCycle?: string;
+  /** Events/situations that prompt someone to start looking for this kind of product. */
+  buyingTriggers?: string[];
   dataSource: string;
 }
 
@@ -248,6 +288,82 @@ export interface LegalRegulatoryData {
   dataSource: string;
 }
 
+/* ─────────────────────────  Firecrawl-backed crawler batch  ───────────────────────── */
+
+export interface ProductEntry {
+  name: string;
+  priceText?: string;
+  features: string[];
+  availability?: string;
+}
+
+export interface ProductData {
+  products: ProductEntry[];
+  dataSource: string;
+}
+
+export interface NavigationPage {
+  url: string;
+  title?: string;
+  pageType: string;
+  discovered: boolean;
+}
+
+export interface NavigationData {
+  pages: NavigationPage[];
+  totalDiscovered: number;
+  dataSource: string;
+}
+
+export interface SearchRankingEntry {
+  query: string;
+  position: number;
+  title: string;
+  url: string;
+}
+
+export interface SearchRankingData {
+  rankings: SearchRankingEntry[];
+  dataSource: string;
+}
+
+export interface AdLibraryEntry {
+  platform: "meta" | "google";
+  advertiserName: string;
+  headline?: string;
+  bodyText?: string;
+  previewUrl?: string;
+  sourceUrl: string;
+}
+
+export interface AdLibraryData {
+  ads: AdLibraryEntry[];
+  dataSource: string;
+}
+
+export interface AutocompleteData {
+  suggestions: string[];
+  dataSource: string;
+}
+
+export interface SerpFeaturesData {
+  peopleAlsoAsk: string[];
+  relatedSearches: string[];
+  dataSource: string;
+}
+
+export interface CommunityDiscussionThread {
+  title: string;
+  url: string;
+  sentiment: string;
+}
+
+export interface CommunityDiscussionData {
+  threads: CommunityDiscussionThread[];
+  summary: string;
+  dataSource: string;
+}
+
 /* ─────────────────────────────  Aggregated context  ───────────────────────────── */
 
 export interface ResearchContextMetadata {
@@ -307,5 +423,14 @@ export interface ResearchContext {
   localPresence?: LocalPresenceData | null;
   partnerships?: PartnershipData | null;
   legalRegulatory?: LegalRegulatoryData | null;
+  /** Firecrawl-backed crawler batch — same "optional, additive" convention as the 11 fields
+   * above, for the same reason (existing ResearchContext fixtures keep compiling unchanged). */
+  product?: ProductData | null;
+  navigation?: NavigationData | null;
+  searchRanking?: SearchRankingData | null;
+  adLibrary?: AdLibraryData | null;
+  autocomplete?: AutocompleteData | null;
+  serpFeatures?: SerpFeaturesData | null;
+  communityDiscussion?: CommunityDiscussionData | null;
   metadata: ResearchContextMetadata;
 }

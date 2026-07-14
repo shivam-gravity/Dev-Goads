@@ -17,8 +17,8 @@ import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
 import { initErrorTracking, registerCrashReporting, captureError } from "../infra/errorTracking.js";
 
-initErrorTracking("adgo-research-session-worker");
-registerCrashReporting("adgo-research-session-worker");
+initErrorTracking("polluxa-research-session-worker");
+registerCrashReporting("polluxa-research-session-worker");
 
 /**
  * Standalone process — run with `npm run dev:research-worker --workspace apps/api`

@@ -32,12 +32,12 @@ function ToggleSwitch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   return (
     <button
       type="button"
-      className={`adsgo-toggle-switch ${on ? "on" : ""}`}
+      className={`polluxa-toggle-switch ${on ? "on" : ""}`}
       onClick={onToggle}
       aria-pressed={on}
       aria-label={on ? "Turn off" : "Turn on"}
     >
-      <span className="adsgo-toggle-knob" />
+      <span className="polluxa-toggle-knob" />
     </button>
   );
 }
@@ -61,24 +61,24 @@ function PagerCard({
   }, [items]);
 
   return (
-    <div className={`adsgo-pager-card ${variant}`}>
-      <div className="adsgo-pager-card-head">
-        <span className="adsgo-pager-card-title">
-          <span className="adsgo-pager-card-icon">{icon}</span> {title}
+    <div className={`polluxa-pager-card ${variant}`}>
+      <div className="polluxa-pager-card-head">
+        <span className="polluxa-pager-card-title">
+          <span className="polluxa-pager-card-icon">{icon}</span> {title}
         </span>
-        <span className="adsgo-pager-nav">
+        <span className="polluxa-pager-nav">
           <button type="button" onClick={() => setIdx((idx - 1 + total) % total)} aria-label="Previous">‹</button>
           <span>{idx + 1}/{total}</span>
           <button type="button" onClick={() => setIdx((idx + 1) % total)} aria-label="Next">›</button>
         </span>
       </div>
-      <p className="adsgo-pager-card-body">{items[idx]}</p>
+      <p className="polluxa-pager-card-body">{items[idx]}</p>
     </div>
   );
 }
 
 export default function AdsManager({ businessId }: { businessId: string }) {
-  const wsId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+  const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
   const [mode, setMode] = useState<Mode>("campaigns");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [adSets, setAdSets] = useState<AdSet[]>([]);
@@ -267,15 +267,15 @@ export default function AdsManager({ businessId }: { businessId: string }) {
   const risks = activeAiInsights.filter((i) => i.type === "anomaly").map((i) => `${i.title} — ${i.description}`);
 
   return (
-    <div className="adsgo-ads-page">
+    <div className="polluxa-ads-page">
       {/* Top bar */}
-      <div className="adsgo-topbar">
-        <div className="adsgo-breadcrumb">
+      <div className="polluxa-topbar">
+        <div className="polluxa-breadcrumb">
           <span>AI Optimize</span>
-          <span className="adsgo-breadcrumb-sep">›</span>
-          <span className="adsgo-breadcrumb-current">Ads Manager</span>
+          <span className="polluxa-breadcrumb-sep">›</span>
+          <span className="polluxa-breadcrumb-current">Ads Manager</span>
         </div>
-        <div className="adsgo-header-right">
+        <div className="polluxa-header-right">
           <div className="header-meta-item">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" />
@@ -311,15 +311,15 @@ export default function AdsManager({ businessId }: { businessId: string }) {
       {error && <p className="error">{error}</p>}
 
       {/* Overview */}
-      <div className="adsgo-overview-card">
-        <div className="adsgo-overview-header">
-          <h2 className="adsgo-overview-title">Overview</h2>
-          <div className="adsgo-network-tabs">
+      <div className="polluxa-overview-card">
+        <div className="polluxa-overview-header">
+          <h2 className="polluxa-overview-title">Overview</h2>
+          <div className="polluxa-network-tabs">
             {(["meta", "google", "tiktok"] as Network[]).map((n) => (
               <button
                 key={n}
                 type="button"
-                className={`adsgo-network-tab ${network === n ? "active" : ""}`}
+                className={`polluxa-network-tab ${network === n ? "active" : ""}`}
                 onClick={() => setNetwork(n)}
               >
                 {NETWORK_LABELS[n]}
@@ -328,7 +328,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
           </div>
           <button
             type="button"
-            className={`adsgo-collapse-btn ${overviewOpen ? "open" : ""}`}
+            className={`polluxa-collapse-btn ${overviewOpen ? "open" : ""}`}
             onClick={() => setOverviewOpen((o) => !o)}
             aria-label="Toggle overview"
           >
@@ -337,46 +337,46 @@ export default function AdsManager({ businessId }: { businessId: string }) {
         </div>
 
         {overviewOpen && (
-          <div className="adsgo-overview-body">
-            <div className="adsgo-overview-grid">
+          <div className="polluxa-overview-body">
+            <div className="polluxa-overview-grid">
               {/* Left column: insights */}
-              <div className="adsgo-insights-col">
-                <div className="adsgo-brief-card">
-                  <div className="adsgo-brief-card-head">
+              <div className="polluxa-insights-col">
+                <div className="polluxa-brief-card">
+                  <div className="polluxa-brief-card-head">
                     <div>
-                      <span className="adsgo-brief-title">
-                        {briefTitle} {adInsights?.isDemo && <span className="adsgo-demo-badge">Demo</span>}
+                      <span className="polluxa-brief-title">
+                        {briefTitle} {adInsights?.isDemo && <span className="polluxa-demo-badge">Demo</span>}
                       </span>
-                      <div className="adsgo-brief-period">All time</div>
+                      <div className="polluxa-brief-period">All time</div>
                     </div>
-                    <button type="button" className="adsgo-icon-btn" onClick={loadData} aria-label="Refresh">
+                    <button type="button" className="polluxa-icon-btn" onClick={loadData} aria-label="Refresh">
                       ↻
                     </button>
                   </div>
-                  <div className="adsgo-stat-grid">
+                  <div className="polluxa-stat-grid">
                     {briefStats.map((s) => (
-                      <div className="adsgo-stat-tile" key={s.label}>
-                        <div className="adsgo-stat-tile-head">
+                      <div className="polluxa-stat-tile" key={s.label}>
+                        <div className="polluxa-stat-tile-head">
                           <span title={s.label}>{s.label}</span>
                         </div>
-                        <div className="adsgo-stat-value">{s.value}</div>
+                        <div className="polluxa-stat-value">{s.value}</div>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                <div className="adsgo-analysis-row">
-                  <div className="adsgo-analysis-card">
-                    <div className="adsgo-analysis-head">
-                      <span className="adsgo-analysis-icon">✓</span>
+                <div className="polluxa-analysis-row">
+                  <div className="polluxa-analysis-card">
+                    <div className="polluxa-analysis-head">
+                      <span className="polluxa-analysis-icon">✓</span>
                       <span>AI Analysis Insights</span>
-                      <button type="button" className="adsgo-icon-btn adsgo-ai-refresh-btn" onClick={handleRefreshAiAnalysis} disabled={generatingAi} aria-label="Refresh AI analysis">
+                      <button type="button" className="polluxa-icon-btn polluxa-ai-refresh-btn" onClick={handleRefreshAiAnalysis} disabled={generatingAi} aria-label="Refresh AI analysis">
                         {generatingAi ? "…" : "↻"}
                       </button>
                     </div>
-                    <p className="adsgo-analysis-body">{mainNarrative}</p>
+                    <p className="polluxa-analysis-body">{mainNarrative}</p>
                   </div>
-                  <div className="adsgo-side-cards">
+                  <div className="polluxa-side-cards">
                     <PagerCard variant="highlight" icon="↗" title="Key Highlight" items={highlights.length > 0 ? highlights : ["No highlights yet — refresh to generate AI analysis."]} />
                     <PagerCard variant="risk" icon="⚠" title="Potential Risk" items={risks.length > 0 ? risks : ["No risks identified from current data."]} />
                   </div>
@@ -384,79 +384,79 @@ export default function AdsManager({ businessId }: { businessId: string }) {
               </div>
 
               {/* Right column: optimization hub */}
-              <div className="adsgo-opt-col">
-                <div className="adsgo-opt-hub-card">
-                  <div className="adsgo-opt-hub-head">
-                    <span className="adsgo-opt-hub-icon">◎</span>
+              <div className="polluxa-opt-col">
+                <div className="polluxa-opt-hub-card">
+                  <div className="polluxa-opt-hub-head">
+                    <span className="polluxa-opt-hub-icon">◎</span>
                     <div>
-                      <div className="adsgo-opt-hub-title">Optimization Hub</div>
-                      <div className="adsgo-opt-hub-updated">Last update: {new Date().toTimeString().slice(0, 5)}</div>
+                      <div className="polluxa-opt-hub-title">Optimization Hub</div>
+                      <div className="polluxa-opt-hub-updated">Last update: {new Date().toTimeString().slice(0, 5)}</div>
                     </div>
                   </div>
 
-                  <div className="adsgo-opt-rule-pill">
-                    <span className="adsgo-opt-rule-icon">◎</span> Budget $500 · Goal: Purchases
+                  <div className="polluxa-opt-rule-pill">
+                    <span className="polluxa-opt-rule-icon">◎</span> Budget $500 · Goal: Purchases
                   </div>
 
-                  <div className="adsgo-opt-summary-title">Summary</div>
-                  <div className="adsgo-opt-summary-grid">
-                    <div className="adsgo-opt-summary-item scaleup">
-                      <span className="adsgo-opt-summary-count">{optSummary.counts.scaleUp}</span>
+                  <div className="polluxa-opt-summary-title">Summary</div>
+                  <div className="polluxa-opt-summary-grid">
+                    <div className="polluxa-opt-summary-item scaleup">
+                      <span className="polluxa-opt-summary-count">{optSummary.counts.scaleUp}</span>
                       <span>Scale Up</span>
                     </div>
-                    <div className="adsgo-opt-summary-item scaledown">
-                      <span className="adsgo-opt-summary-count">{optSummary.counts.scaleDown}</span>
+                    <div className="polluxa-opt-summary-item scaledown">
+                      <span className="polluxa-opt-summary-count">{optSummary.counts.scaleDown}</span>
                       <span>Scale Down</span>
                     </div>
-                    <div className="adsgo-opt-summary-item pause">
-                      <span className="adsgo-opt-summary-count">{optSummary.counts.pause}</span>
+                    <div className="polluxa-opt-summary-item pause">
+                      <span className="polluxa-opt-summary-count">{optSummary.counts.pause}</span>
                       <span>Pause</span>
                     </div>
-                    <div className="adsgo-opt-summary-item maintain">
-                      <span className="adsgo-opt-summary-count">{optSummary.counts.maintain}</span>
+                    <div className="polluxa-opt-summary-item maintain">
+                      <span className="polluxa-opt-summary-count">{optSummary.counts.maintain}</span>
                       <span>Maintain</span>
                     </div>
                   </div>
 
-                  <div className="adsgo-opt-budget-row">
+                  <div className="polluxa-opt-budget-row">
                     <div>
-                      <div className="adsgo-opt-budget-label">Current</div>
-                      <div className="adsgo-opt-budget-value">${(optSummary.currentCents / 100).toFixed(0)}</div>
+                      <div className="polluxa-opt-budget-label">Current</div>
+                      <div className="polluxa-opt-budget-value">${(optSummary.currentCents / 100).toFixed(0)}</div>
                     </div>
                     <div>
-                      <div className="adsgo-opt-budget-label">Recommend</div>
-                      <div className="adsgo-opt-budget-value accent">${(optSummary.recommendCents / 100).toFixed(0)}</div>
+                      <div className="polluxa-opt-budget-label">Recommend</div>
+                      <div className="polluxa-opt-budget-value accent">${(optSummary.recommendCents / 100).toFixed(0)}</div>
                     </div>
                     <div>
-                      <div className="adsgo-opt-budget-label">Adjustment</div>
-                      <div className={`adsgo-opt-budget-value ${optSummary.recommendCents >= optSummary.currentCents ? "up" : "down"}`}>
+                      <div className="polluxa-opt-budget-label">Adjustment</div>
+                      <div className={`polluxa-opt-budget-value ${optSummary.recommendCents >= optSummary.currentCents ? "up" : "down"}`}>
                         {optSummary.recommendCents >= optSummary.currentCents ? "↑" : "↓"} $
                         {Math.abs(optSummary.recommendCents - optSummary.currentCents) / 100}
                       </div>
                     </div>
                   </div>
 
-                  <div className="adsgo-opt-mode-grid">
+                  <div className="polluxa-opt-mode-grid">
                     <div
-                      className={`adsgo-opt-mode-card ${applyMode === "recommended" ? "selected" : ""}`}
+                      className={`polluxa-opt-mode-card ${applyMode === "recommended" ? "selected" : ""}`}
                       onClick={() => setApplyMode("recommended")}
                     >
-                      <span className="adsgo-opt-mode-icon">⟲</span>
+                      <span className="polluxa-opt-mode-icon">⟲</span>
                       <span>Recommended only</span>
-                      <span className="adsgo-opt-mode-status">{applyMode === "recommended" ? "Selected" : "Off"}</span>
+                      <span className="polluxa-opt-mode-status">{applyMode === "recommended" ? "Selected" : "Off"}</span>
                     </div>
                     <div
-                      className={`adsgo-opt-mode-card ${applyMode === "auto" ? "selected" : ""}`}
+                      className={`polluxa-opt-mode-card ${applyMode === "auto" ? "selected" : ""}`}
                       onClick={() => setApplyMode("auto")}
                     >
-                      {applyMode === "auto" && <span className="adsgo-best-choice-tag">Best choice</span>}
-                      <span className="adsgo-opt-mode-icon">∞</span>
+                      {applyMode === "auto" && <span className="polluxa-best-choice-tag">Best choice</span>}
+                      <span className="polluxa-opt-mode-icon">∞</span>
                       <span>Auto-apply</span>
-                      <span className="adsgo-opt-mode-status">{applyMode === "auto" ? "Selected" : "Off"}</span>
+                      <span className="polluxa-opt-mode-status">{applyMode === "auto" ? "Selected" : "Off"}</span>
                     </div>
                   </div>
 
-                  <div className="adsgo-opt-schedule-row">
+                  <div className="polluxa-opt-schedule-row">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
                       <line x1="16" y1="2" x2="16" y2="6" />
@@ -470,11 +470,11 @@ export default function AdsManager({ businessId }: { businessId: string }) {
             </div>
 
             {campaigns.length === 0 && !loading && (
-              <div className="adsgo-demo-banner">
-                <div className="adsgo-demo-banner-inner">
-                  <span className="adsgo-demo-banner-icon">ⓘ</span>
-                  <span className="adsgo-demo-banner-text">Demo data only. Create your first campaign to view performance data.</span>
-                  <Link to="/campaigns/new" className="btn btn-primary adsgo-demo-banner-btn">✨ Create campaign</Link>
+              <div className="polluxa-demo-banner">
+                <div className="polluxa-demo-banner-inner">
+                  <span className="polluxa-demo-banner-icon">ⓘ</span>
+                  <span className="polluxa-demo-banner-text">Demo data only. Create your first campaign to view performance data.</span>
+                  <Link to="/campaigns/new" className="btn btn-primary polluxa-demo-banner-btn">✨ Create campaign</Link>
                 </div>
               </div>
             )}
@@ -483,20 +483,20 @@ export default function AdsManager({ businessId }: { businessId: string }) {
       </div>
 
       {/* Table section */}
-      <div className="adsgo-table-section">
-        <div className="adsgo-table-tabs">
-          <button className={`adsgo-table-tab ${mode === "campaigns" ? "active" : ""}`} onClick={() => { setMode("campaigns"); setSelectedIds([]); }}>
+      <div className="polluxa-table-section">
+        <div className="polluxa-table-tabs">
+          <button className={`polluxa-table-tab ${mode === "campaigns" ? "active" : ""}`} onClick={() => { setMode("campaigns"); setSelectedIds([]); }}>
             📁 Campaign
           </button>
-          <button className={`adsgo-table-tab ${mode === "adsets" ? "active" : ""}`} onClick={() => { setMode("adsets"); setSelectedIds([]); }}>
+          <button className={`polluxa-table-tab ${mode === "adsets" ? "active" : ""}`} onClick={() => { setMode("adsets"); setSelectedIds([]); }}>
             ▦ Ad set
           </button>
-          <button className={`adsgo-table-tab ${mode === "ads" ? "active" : ""}`} onClick={() => { setMode("ads"); setSelectedIds([]); }}>
+          <button className={`polluxa-table-tab ${mode === "ads" ? "active" : ""}`} onClick={() => { setMode("ads"); setSelectedIds([]); }}>
             📄 Ad
           </button>
         </div>
 
-        <div className="adsgo-table-filter-row">
+        <div className="polluxa-table-filter-row">
           <input
             type="text"
             value={searchTerm}
@@ -505,12 +505,12 @@ export default function AdsManager({ businessId }: { businessId: string }) {
             className="search-input"
             style={{ maxWidth: 220 }}
           />
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="adsgo-account-select">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="polluxa-account-select">
             <option value="all">Ad account: All</option>
             <option value="active">Active Only</option>
             <option value="paused">Paused Only</option>
           </select>
-          <div className="adsgo-date-range-display">
+          <div className="polluxa-date-range-display">
             {today} <span>→</span> {today}
           </div>
         </div>
@@ -529,8 +529,8 @@ export default function AdsManager({ businessId }: { businessId: string }) {
           </div>
         ) : (
           <Reveal>
-            <div className="adsgo-manager-table-wrap">
-              <table className="adsgo-manager-table">
+            <div className="polluxa-manager-table-wrap">
+              <table className="polluxa-manager-table">
                 {mode === "campaigns" && (
                   <>
                     <thead>
@@ -558,12 +558,12 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr className="adsgo-total-row">
+                      <tr className="polluxa-total-row">
                         <td></td>
                         <td></td>
                         <td>
                           <strong>Total</strong>
-                          <div className="adsgo-total-sub">{activeCount}/{campaigns.length} Active</div>
+                          <div className="polluxa-total-sub">{activeCount}/{campaigns.length} Active</div>
                         </td>
                         <td>-</td>
                         <td>-</td>
@@ -596,19 +596,19 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                               <ToggleSwitch on={onIds.has(c.id)} onToggle={() => toggleOn(c.id)} />
                             </td>
                             <td>
-                              <div className="adsgo-campaign-cell">
+                              <div className="polluxa-campaign-cell">
                                 <strong>{c.name}</strong>
-                                <span className="adsgo-campaign-id">({c.id})</span>
+                                <span className="polluxa-campaign-id">({c.id})</span>
                               </div>
                             </td>
                             <td>
                               <StatusBadge status={c.status} />
                             </td>
                             <td>
-                              <span className="adsgo-pill location">US</span>
+                              <span className="polluxa-pill location">US</span>
                             </td>
                             <td>
-                              <span className="adsgo-pill goal">OUTCOME_SALES</span>
+                              <span className="polluxa-pill goal">OUTCOME_SALES</span>
                             </td>
                             <td>${(c.dailyBudgetCents / 100).toFixed(2)}</td>
                             <td>{li ? `$${(li.spendCents / 100).toFixed(2)}` : "—"}</td>
@@ -619,20 +619,20 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                             <td>{li?.roas != null ? `${li.roas.toFixed(2)}x` : "—"}</td>
                             <td>
                               {hasSuggestion ? (
-                                <div className="adsgo-recommend-cell">
-                                  <span className="adsgo-recommend-value">
+                                <div className="polluxa-recommend-cell">
+                                  <span className="polluxa-recommend-value">
                                     ${(c.dailyBudgetCents / 100).toFixed(0)} <span className="up">↗</span> ${(recommendedCents / 100).toFixed(0)}
                                   </span>
                                   <button
                                     type="button"
-                                    className="adsgo-accept-btn"
+                                    className="polluxa-accept-btn"
                                     onClick={() => setAcceptedIds((prev) => new Set(prev).add(c.id))}
                                   >
                                     Accept
                                   </button>
                                   <button
                                     type="button"
-                                    className="adsgo-reject-btn"
+                                    className="polluxa-reject-btn"
                                     aria-label="Dismiss suggestion"
                                     onClick={() => setDismissedIds((prev) => new Set(prev).add(c.id))}
                                   >
@@ -640,7 +640,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                                   </button>
                                 </div>
                               ) : (
-                                <span className="adsgo-recommend-empty">—</span>
+                                <span className="polluxa-recommend-empty">—</span>
                               )}
                             </td>
                           </tr>
@@ -649,7 +649,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                       {pagedCampaigns.length === 0 && (
                         <tr>
                           <td colSpan={14}>
-                            <div className="adsgo-table-empty">
+                            <div className="polluxa-table-empty">
                               <p>No campaigns match your filters.</p>
                             </div>
                           </td>
@@ -691,7 +691,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                       {pagedAdSets.length === 0 && (
                         <tr>
                           <td colSpan={5}>
-                            <div className="adsgo-table-empty">
+                            <div className="polluxa-table-empty">
                               <p>No ad sets yet. Ad sets you create for a campaign will appear here.</p>
                             </div>
                           </td>
@@ -736,7 +736,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                       {pagedAds.length === 0 && (
                         <tr>
                           <td colSpan={4}>
-                            <div className="adsgo-table-empty">
+                            <div className="polluxa-table-empty">
                               <p>No ads yet. Ads you create within an ad set will appear here.</p>
                             </div>
                           </td>
@@ -748,11 +748,11 @@ export default function AdsManager({ businessId }: { businessId: string }) {
               </table>
             </div>
 
-            <div className="adsgo-pagination">
+            <div className="polluxa-pagination">
               <span>Total {totalItems} items</span>
-              <div className="adsgo-pagination-controls">
+              <div className="polluxa-pagination-controls">
                 <button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>‹</button>
-                <span className="adsgo-page-box">{page}</span>
+                <span className="polluxa-page-box">{page}</span>
                 <button disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>›</button>
               </div>
               <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>

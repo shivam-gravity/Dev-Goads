@@ -25,6 +25,11 @@ const CONTEXT_FIELD_KEYS = [
   "website", "market", "technology", "competitors", "keywords", "audience", "company", "news",
   "socialMedia", "reviews", "funding", "hiringSignals", "contentMarketing", "backlinkAuthority",
   "appStore", "videoPresence", "localPresence", "partnerships", "legalRegulatory",
+  // Firecrawl-backed crawler batch (research/providers/{Product,Navigation,SearchRanking,
+  // AdLibrary,Autocomplete,GoogleSerpFeatures,Reddit}Provider.ts) — navigation/autocomplete
+  // aren't listed here since no agent consumes them (they're UI-only, see NavigationProvider/
+  // AutocompleteProvider's own doc comments).
+  "product", "searchRanking", "adLibrary", "serpFeatures", "communityDiscussion",
 ] as const;
 type ContextFieldKey = (typeof CONTEXT_FIELD_KEYS)[number];
 

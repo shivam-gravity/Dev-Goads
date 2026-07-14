@@ -42,7 +42,7 @@ export class ObjectionHandlingAgent implements AIAgent<ObjectionHandlingAgentOut
 
   async execute(context: ResearchContext): Promise<AgentResult<ObjectionHandlingAgentOutput>> {
     return runAgentStep(this.name, async () => {
-      const fields = ["audience", "reviews"] as const;
+      const fields = ["audience", "reviews", "partnerships", "serpFeatures", "communityDiscussion"] as const;
       const verifiedFacts = await loadVerifiedFacts(context);
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
@@ -50,6 +50,9 @@ export class ObjectionHandlingAgent implements AIAgent<ObjectionHandlingAgentOut
           verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
           audience: JSON.stringify(context.audience ?? {}),
           reviews: JSON.stringify(context.reviews ?? {}),
+          partnerships: JSON.stringify(context.partnerships ?? {}),
+          serpFeatures: JSON.stringify(context.serpFeatures ?? {}),
+          communityDiscussion: JSON.stringify(context.communityDiscussion ?? {}),
         },
         tool: OBJECTION_HANDLING_AGENT_TOOL,
         schema: objectionHandlingAgentSchema,

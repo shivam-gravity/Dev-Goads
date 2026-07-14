@@ -74,7 +74,7 @@ export class TechnologyProvider implements ResearchProvider<TechnologyData> {
       let headers: Headers;
       try {
         const res = await withTimeout(
-          fetch(url, { signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 (compatible; AdGoResearchBot/1.0)" } }),
+          fetch(url, { signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 (compatible; PolluxaResearchBot/1.0)" } }),
           FETCH_TIMEOUT_MS,
           "TechnologyProvider fetch"
         );

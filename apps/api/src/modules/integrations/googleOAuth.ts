@@ -44,7 +44,7 @@ async function mockConnectGoogle(workspaceId: string): Promise<void> {
     accessToken: "mock-access-token",
     expiresInSeconds: 60 * 60 * 24 * 60,
     customerId: "1234567890",
-    customerName: "AdGo Google Ads MCC (mock)",
+    customerName: "Polluxa Google Ads MCC (mock)",
     mock: true,
   });
 }
@@ -78,12 +78,12 @@ async function exchangeCodeForTokens(code: string): Promise<{ accessToken: strin
   const json = (await res.json()) as any;
   if (!res.ok || !json.access_token) throw new Error(`Google token exchange failed: ${json.error_description ?? res.status}`);
   if (!json.refresh_token) {
-    throw new Error("Google did not return a refresh token — remove AdGo's access at myaccount.google.com/permissions and reconnect (offline access is only granted on first consent)");
+    throw new Error("Google did not return a refresh token — remove Polluxa's access at myaccount.google.com/permissions and reconnect (offline access is only granted on first consent)");
   }
   return { accessToken: json.access_token, refreshToken: json.refresh_token, expiresIn: json.expires_in ?? 3600 };
 }
 
-/** clientId/clientSecret default to the global OAuth app's credentials, but a manually-connected integration can supply its own (see setGoogleManualConnection) — those take precedence since the refresh token was issued against that client, not necessarily AdGo's registered app. */
+/** clientId/clientSecret default to the global OAuth app's credentials, but a manually-connected integration can supply its own (see setGoogleManualConnection) — those take precedence since the refresh token was issued against that client, not necessarily Polluxa's registered app. */
 async function refreshAccessToken(refreshToken: string, clientId?: string, clientSecret?: string): Promise<{ accessToken: string; expiresIn: number }> {
   const res = await fetch(TOKEN_ENDPOINT, {
     method: "POST",
@@ -153,7 +153,7 @@ async function googleAdsSearch(customerId: string, accessToken: string, develope
 // Mock lists returned when there's no real Google OAuth connection — same "(mock)" naming
 // convention as mockConnectGoogle above, so the campaign builder always has something to
 // show in local/demo mode.
-const MOCK_CUSTOMERS = [{ id: "1234567890", name: "AdGo Google Ads MCC (mock)" }];
+const MOCK_CUSTOMERS = [{ id: "1234567890", name: "Polluxa Google Ads MCC (mock)" }];
 const MOCK_CONVERSION_ACTIONS = [
   { id: "1000000001", name: "Purchase (mock)", category: "PURCHASE" },
   { id: "1000000002", name: "Lead Form Submission (mock)", category: "SUBMIT_LEAD_FORM" },

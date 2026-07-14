@@ -39,12 +39,13 @@ export class SeasonalityTimingAgent implements AIAgent<SeasonalityTimingAgentOut
 
   async execute(context: ResearchContext): Promise<AgentResult<SeasonalityTimingAgentOutput>> {
     return runAgentStep(this.name, async () => {
-      const fields = ["market", "news"] as const;
+      const fields = ["market", "news", "hiringSignals"] as const;
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           market: JSON.stringify(context.market ?? {}),
           news: JSON.stringify(context.news ?? {}),
+          hiringSignals: JSON.stringify(context.hiringSignals ?? {}),
         },
         tool: SEASONALITY_TIMING_AGENT_TOOL,
         schema: seasonalityTimingAgentSchema,

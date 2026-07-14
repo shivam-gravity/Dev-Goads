@@ -54,12 +54,13 @@ export class ForecastingKPIAgent implements AIAgent<ForecastingKPIAgentOutput> {
 
   async execute(context: ResearchContext): Promise<AgentResult<ForecastingKPIAgentOutput>> {
     return runAgentStep(this.name, async () => {
-      const fields = ["market", "competitors"] as const;
+      const fields = ["market", "competitors", "hiringSignals"] as const;
       const { data, promptVersion, usedFallback } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           market: JSON.stringify(context.market ?? {}),
           competitors: JSON.stringify(context.competitors ?? {}),
+          hiringSignals: JSON.stringify(context.hiringSignals ?? {}),
         },
         tool: FORECASTING_KPI_AGENT_TOOL,
         schema: forecastingKPIAgentSchema,

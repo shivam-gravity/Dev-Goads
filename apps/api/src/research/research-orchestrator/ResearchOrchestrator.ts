@@ -41,10 +41,12 @@ export const defaultOrchestratorDeps: OrchestratorDeps = {
 export interface RunResearchOrchestratorOptions {
   providers?: ResearchProvider<unknown>[];
   deps?: OrchestratorDeps;
-  /** Called once per provider settlement (including retries) with (completedCount, totalCount) —
-   * the worker wires this to BullMQ's job.updateProgress so GET /research/:id/status callers
-   * (via the DB) and the BullMQ dashboard both reflect live progress. */
-  onProgress?: (completed: number, total: number) => void | Promise<void>;
+  /** Called once per provider settlement (including retries) with (completedCount, totalCount,
+   * providerName) — the worker wires this to BullMQ's job.updateProgress (the count) and to a
+   * live-progress Redis record (the name), so the UI can show real step names as they complete
+   * instead of a generic percentage. `providerName` is the just-settled provider's `name`, not a
+   * cumulative list — callers accumulate it themselves (see workers/researchOrchestratorWorker.ts). */
+  onProgress?: (completed: number, total: number, providerName?: string) => void | Promise<void>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -135,7 +137,7 @@ export async function runResearchOrchestrator(jobId: string, options: RunResearc
       providers.map(async (provider) => {
         const result = await runProviderWithRetry(provider, input, deps);
         completed += 1;
-        await options.onProgress?.(completed, providers.length);
+        await options.onProgress?.(completed, providers.length, provider.name);
         return result;
       })
     );

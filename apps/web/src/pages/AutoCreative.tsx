@@ -33,7 +33,7 @@ export default function AutoCreative() {
           Ad copy that <span className="highlight">writes itself</span>, then improves itself
         </h1>
         <p className="lead">
-          Every strategy ships with 2–4 creative variants. AdGo tracks which ones actually convert and biases the
+          Every strategy ships with 2–4 creative variants. Polluxa tracks which ones actually convert and biases the
           next round of generation toward that pattern.
         </p>
       </section>

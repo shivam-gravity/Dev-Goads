@@ -3,8 +3,8 @@ import Reveal from "../components/Reveal.js";
 import { api } from "../api/client.js";
 
 const FAQS = [
-  { q: "How does the AI optimize budgets?", a: "AdGo uses multi-armed bandit algorithms to analyze variants with high Click-Through Rates (CTR) and low Cost Per Acquisition (CPA). It automatically sets budgets toward Meta or Google variants to capture higher Return on Ad Spend (ROAS)." },
-  { q: "Is meta pixel installation automatic?", a: "Pixel conversion event tracking requires connecting your Meta Ads Manager. Once connected, AdGo syncs conversion payloads automatically via standard API conversion feeds." },
+  { q: "How does the AI optimize budgets?", a: "Polluxa uses multi-armed bandit algorithms to analyze variants with high Click-Through Rates (CTR) and low Cost Per Acquisition (CPA). It automatically sets budgets toward Meta or Google variants to capture higher Return on Ad Spend (ROAS)." },
+  { q: "Is meta pixel installation automatic?", a: "Pixel conversion event tracking requires connecting your Meta Ads Manager. Once connected, Polluxa syncs conversion payloads automatically via standard API conversion feeds." },
   { q: "Can I connect multiple ad accounts?", a: "Yes, you can connect multiple Meta/Google ad accounts and store profiles under Workspace settings. Navigate to Admin → Workspace to switch or invite owners." }
 ];
 
@@ -20,7 +20,7 @@ export default function HelpCenter() {
   async function handleSubmitTicket(e: React.FormEvent) {
     e.preventDefault();
     if (!ticketSubject.trim() || !ticketBody.trim()) return;
-    const workspaceId = localStorage.getItem("adgo_workspace_id") ?? "demo-workspace";
+    const workspaceId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
     setSubmitting(true);
     setTicketError(null);
     try {

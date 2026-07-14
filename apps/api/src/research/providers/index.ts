@@ -22,6 +22,13 @@ import { VideoPresenceProvider } from "./VideoPresenceProvider.js";
 import { LocalPresenceProvider } from "./LocalPresenceProvider.js";
 import { PartnershipProvider } from "./PartnershipProvider.js";
 import { LegalRegulatoryProvider } from "./LegalRegulatoryProvider.js";
+import { ProductProvider } from "./ProductProvider.js";
+import { NavigationProvider } from "./NavigationProvider.js";
+import { SearchRankingProvider } from "./SearchRankingProvider.js";
+import { AdLibraryProvider } from "./AdLibraryProvider.js";
+import { AutocompleteProvider } from "./AutocompleteProvider.js";
+import { GoogleSerpFeaturesProvider } from "./GoogleSerpFeaturesProvider.js";
+import { RedditProvider } from "./RedditProvider.js";
 
 export { WebsiteProvider } from "./WebsiteProvider.js";
 export { SearchProvider } from "./SearchProvider.js";
@@ -46,6 +53,13 @@ export { VideoPresenceProvider } from "./VideoPresenceProvider.js";
 export { LocalPresenceProvider } from "./LocalPresenceProvider.js";
 export { PartnershipProvider } from "./PartnershipProvider.js";
 export { LegalRegulatoryProvider } from "./LegalRegulatoryProvider.js";
+export { ProductProvider } from "./ProductProvider.js";
+export { NavigationProvider } from "./NavigationProvider.js";
+export { SearchRankingProvider } from "./SearchRankingProvider.js";
+export { AdLibraryProvider } from "./AdLibraryProvider.js";
+export { AutocompleteProvider } from "./AutocompleteProvider.js";
+export { GoogleSerpFeaturesProvider } from "./GoogleSerpFeaturesProvider.js";
+export { RedditProvider } from "./RedditProvider.js";
 
 /**
  * The full provider set the orchestrator runs, in one place — adding/removing a
@@ -65,6 +79,13 @@ export { LegalRegulatoryProvider } from "./LegalRegulatoryProvider.js";
  * research dimension feeding its own optional ResearchContext field (see
  * research/types/index.ts), following the exact same webSearchThenStructure pattern as
  * every original provider.
+ *
+ * The 7 providers below LegalRegulatoryProvider are the Firecrawl-backed crawler batch
+ * (Product, Navigation, Search-ranking, Ad Library, Autocomplete, Google SERP features,
+ * Reddit) — see infra/firecrawlClient.ts for the shared client + monthly credit budget
+ * guard every one of them calls through. WebsiteProvider, ReviewsProvider, and
+ * SocialMediaProvider (above) were also upgraded in this batch to try a real Firecrawl
+ * crawl first, same field/shape, falling back to their original behavior unchanged.
  */
 export function createResearchProviders(): ResearchProvider<unknown>[] {
   return [
@@ -88,5 +109,12 @@ export function createResearchProviders(): ResearchProvider<unknown>[] {
     new LocalPresenceProvider(),
     new PartnershipProvider(),
     new LegalRegulatoryProvider(),
+    new ProductProvider(),
+    new NavigationProvider(),
+    new SearchRankingProvider(),
+    new AdLibraryProvider(),
+    new AutocompleteProvider(),
+    new GoogleSerpFeaturesProvider(),
+    new RedditProvider(),
   ] as ResearchProvider<unknown>[];
 }

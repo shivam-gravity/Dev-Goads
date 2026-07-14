@@ -21,7 +21,7 @@ import { leadIngestionQueue } from "../infra/queue.js";
 import type { AdNetwork } from "../types/index.js";
 
 /**
- * Surfaces AdGo's ad automation data (insights/leads/lead forms/audiences) for
+ * Surfaces Polluxa's ad automation data (insights/leads/lead forms/audiences) for
  * sales_tech_frontend (the CRM). Response shapes deliberately mirror the CRM's
  * existing Google-Ads tab contracts (field_data, form_id, cost_micros, date_preset)
  * even for Meta-sourced rows, so the CRM's existing hooks/columns need minimal changes.
@@ -198,7 +198,7 @@ adsDataRoutes.get(
         byDate.set(m.date, acc);
       }
       for (const [date, acc] of byDate) {
-        // CRM/Google convention: cost in micros of the currency unit. AdGo stores spend in cents;
+        // CRM/Google convention: cost in micros of the currency unit. Polluxa stores spend in cents;
         // 1 cent = 10,000 micros (1 currency unit = 100 cents = 1,000,000 micros). reach/roas are
         // plain counts/ratios, same as impressions/clicks/conversions above — not currency, so no
         // micros conversion applies to them.

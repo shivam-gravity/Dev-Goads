@@ -12,7 +12,7 @@ function getBrowser(): Promise<Browser> {
 export async function withPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
   const browser = await getBrowser();
   const context = await browser.newContext({
-    userAgent: "Mozilla/5.0 (compatible; AdGoProductBot/1.0)",
+    userAgent: "Mozilla/5.0 (compatible; PolluxaProductBot/1.0)",
   });
   try {
     const page = await context.newPage();

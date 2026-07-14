@@ -96,7 +96,7 @@ async function fetchAndCleanPage(url: string): Promise<{ html: string; text: str
   let html: string;
   try {
     const res = await withTimeout(
-      fetch(normalized, { signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 (compatible; AdGoResearchBot/1.0)" } }),
+      fetch(normalized, { signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 (compatible; PolluxaResearchBot/1.0)" } }),
       FETCH_TIMEOUT_MS,
       "LandingPageIntelligence fetch"
     );
