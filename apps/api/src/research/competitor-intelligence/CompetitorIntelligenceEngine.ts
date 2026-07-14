@@ -3,6 +3,7 @@ import { getMetadataByDedupKey, writeMemory } from "../memory/MemoryCoordinator.
 import { fuseCompetitorProfiles, type CompetitorFusionEntry } from "../knowledge/KnowledgeFusionEngine.js";
 import { discoverCompetitors, type DiscoveryInput } from "./discovery.js";
 import { enrichCompetitor } from "./enrichment.js";
+import { persistCompetitorIntelligenceReport } from "./competitorPersistence.js";
 import type { CompetitorIntelligenceReport, CompetitorProfile } from "./types.js";
 
 // Cost/latency ceiling — each enriched competitor is one real web search + one structured
@@ -87,7 +88,7 @@ export async function runCompetitorIntelligence(input: CompetitorIntelligenceInp
 
   await Promise.all(finalProfiles.map((profile) => writeProfileToMemory(profile, input)));
 
-  return {
+  const report: CompetitorIntelligenceReport = {
     businessUrl: input.url,
     businessName: input.businessName,
     competitors: finalProfiles,
@@ -95,4 +96,12 @@ export async function runCompetitorIntelligence(input: CompetitorIntelligenceInp
     fusion: { conflicts: fusion.conflicts, overallConfidence: fusion.overallConfidence },
     generatedAt: new Date().toISOString(),
   };
+
+  // Additive relational persistence (Competitor/CompetitorProfile) alongside the Research
+  // Memory write above — only possible when this run is scoped to a real business.
+  if (input.businessId) {
+    await persistCompetitorIntelligenceReport(input.businessId, input.workspaceId, report);
+  }
+
+  return report;
 }

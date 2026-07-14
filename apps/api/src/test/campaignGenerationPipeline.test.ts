@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { runCampaignGenerationPipeline, type CampaignGenerationDeps } from "../modules/orchestrator/campaignGenerationPipeline.js";
+import { LockWaitTimeoutError } from "../infra/distributedLock.js";
 import type { CampaignGenerationJobRecord, CampaignGenerationStatus } from "../modules/orchestrator/campaignGenerationService.js";
 import type { ResearchJobRecord } from "../research/research-orchestrator/researchJobService.js";
 import type { ResearchContext } from "../research/types/index.js";
@@ -24,7 +25,9 @@ function fakeDecisionContext(): DecisionContext {
     recommendedPositioning: "n/a", recommendedAudiencePriority: "n/a", recommendedChannels: [],
     recommendedBudgetAllocation: {}, recommendedDailyBudgetCents: 0, budgetReasoning: [],
     recommendedCreativeDirection: "n/a", recommendedOffer: "n/a",
-    recommendedMessaging: "n/a", confidence: 0.5, evidence: [], tradeoffs: [],
+    recommendedMessaging: "n/a",
+    swot: { strengths: [], weaknesses: [], opportunities: [], threats: [] }, marketGaps: [], funnelStrategy: "n/a", mediaStrategy: "n/a",
+    confidence: 0.5, evidence: [], tradeoffs: [],
     recommendations: [], tradeoffAnalyses: [], explainability: [], strategies: [], simulations: [],
     generatedAt: "now",
   };
@@ -104,8 +107,10 @@ function fakeDeps(opts: {
       return fakeResearchContext();
     },
     async extractCrawlFacts() { return 0; },
+    async buildCompanyProfile() { return null; },
     async runDecisionEngine() { return fakeDecisionContext(); },
-    async runIntelligenceEnrichment() {},
+    async runIntelligenceEnrichment() { return { landingPage: null }; },
+    async generateCampaignRecommendations() { return 0; },
     async runAgentCoordinator(_context, options): Promise<AgentPipelineResult> {
       await options?.onProgress?.(10, 10);
       return { results: agentResults, order: Object.keys(agentResults) };
@@ -113,7 +118,7 @@ function fakeDeps(opts: {
     async createStrategyFromAgentResults() { return strategy; },
     async buildCampaignFromStrategy() { return campaign; },
     async getBusiness() { return opts.business ?? null; },
-    async withLock(_key, _ttlMs, fn) { return fn(); },
+    async withLock(_key, _ttlMs, _maxWaitMs, fn) { return fn(); },
   } as FakeDeps;
 }
 
@@ -127,8 +132,8 @@ test("campaignGenerationPipeline - runs research -> agents -> strategy -> campai
   assert.deepStrictEqual(result, { campaignId: "campaign-1", strategyId: "strategy-1", researchJobId: "research-1" });
   assert.deepStrictEqual(deps.statusHistory, ["researching", "aggregating", "running_agents", "building_campaign", "building_campaign"]);
   assert.ok(deps.persistedAgentResults && "campaign-agent" in deps.persistedAgentResults, "agent results must be persisted before the campaign is built");
-  // 20 research units + 20 agent units + 1 build unit = 41 total; final call must reach it.
-  assert.deepStrictEqual(progressCalls[progressCalls.length - 1], [41, 41]);
+  // 27 research units + 20 agent units + 1 build unit = 48 total; final call must reach it.
+  assert.deepStrictEqual(progressCalls[progressCalls.length - 1], [48, 48]);
 });
 
 test("campaignGenerationPipeline - passes pricing-offer/objection-handling/compliance agent results through to createStrategyFromAgentResults as extras", async () => {
@@ -299,9 +304,11 @@ test("campaignGenerationPipeline - acquires the lock keyed by the business id be
   const deps = fakeDeps({ job });
   let capturedKey: string | undefined;
   let capturedTtl: number | undefined;
-  deps.withLock = async (key, ttlMs, fn) => {
+  let capturedMaxWaitMs: number | undefined;
+  deps.withLock = async (key, ttlMs, maxWaitMs, fn) => {
     capturedKey = key;
     capturedTtl = ttlMs;
+    capturedMaxWaitMs = maxWaitMs;
     return fn();
   };
 
@@ -309,9 +316,10 @@ test("campaignGenerationPipeline - acquires the lock keyed by the business id be
 
   assert.strictEqual(capturedKey, "campaign-generation:biz-lock-test");
   assert.ok(capturedTtl && capturedTtl > 0);
+  assert.ok(capturedMaxWaitMs && capturedMaxWaitMs > 0);
 });
 
-test("campaignGenerationPipeline - a lock already held by a concurrent run marks the job failed and rejects, without running any phase", async () => {
+test("campaignGenerationPipeline - a lock wait that times out marks the job failed and rejects, without running any phase", async () => {
   const job = fakeGenerationJob();
   const deps = fakeDeps({ job });
   let researchStarted = false;
@@ -319,11 +327,30 @@ test("campaignGenerationPipeline - a lock already held by a concurrent run marks
     researchStarted = true;
     return { id: "research-1", workspaceId: args[0], businessId: args[2], url: args[1], status: "pending", context: null, createdAt: "now", updatedAt: "now" };
   };
-  deps.withLock = async () => {
-    throw new Error("Lock already held: campaign-generation:biz-1");
+  deps.withLock = async (key, _ttlMs, maxWaitMs) => {
+    throw new LockWaitTimeoutError(key, maxWaitMs);
   };
 
-  await assert.rejects(() => runCampaignGenerationPipeline(job.id, { deps }), /Lock already held/);
+  await assert.rejects(() => runCampaignGenerationPipeline(job.id, { deps }), /Timed out.*waiting for lock/);
   assert.strictEqual(deps.statusHistory.at(-1), "failed");
-  assert.strictEqual(researchStarted, false, "no phase should run when the lock can't be acquired");
+  assert.strictEqual(researchStarted, false, "no phase should run when the lock wait times out");
+});
+
+test("campaignGenerationPipeline - proceeds successfully even when the lock needed several internal poll attempts to acquire", async () => {
+  const job = fakeGenerationJob();
+  const deps = fakeDeps({ job });
+  let simulatedPollAttempts = 0;
+  deps.withLock = async (_key, _ttlMs, _maxWaitMs, fn) => {
+    // Stands in for withQueuedLock's real poll loop (covered directly, against real Redis,
+    // in distributedLock.test.ts) having to retry a few times before acquiring — from the
+    // pipeline's perspective, a lock that took several polls to acquire must be
+    // indistinguishable from one acquired immediately: fn() still runs, still succeeds.
+    simulatedPollAttempts = 3;
+    return fn();
+  };
+
+  const result = await runCampaignGenerationPipeline(job.id, { deps });
+
+  assert.deepStrictEqual(result, { campaignId: "campaign-1", strategyId: "strategy-1", researchJobId: "research-1" });
+  assert.strictEqual(simulatedPollAttempts, 3);
 });

@@ -6,6 +6,7 @@ import {
   requireAdAccess,
   requireDraftAccess,
   requireStrategyAccess,
+  requireCompetitorAccess,
 } from "../gateway/middleware/resourceOwnership.js";
 import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
 
@@ -83,6 +84,32 @@ test("resourceOwnership - an ad resolves its workspace up the Ad -> AdSet -> Cam
     await prisma.ad.delete({ where: { id: adId } }).catch(() => {});
     await prisma.adSet.delete({ where: { id: adSetId } }).catch(() => {});
     await prisma.campaign.delete({ where: { id: campaignId } }).catch(() => {});
+    await prisma.business.delete({ where: { id: businessId } }).catch(() => {});
+    await deleteTenant(tenantA);
+    await deleteTenant(tenantB);
+  }
+});
+
+test("resourceOwnership - a competitor (own workspaceId column) is 200 for its own tenant, 403 cross-tenant, 404 when missing", async () => {
+  const tenantA = await createTenant("competitorA");
+  const tenantB = await createTenant("competitorB");
+  const businessId = randomUUID();
+  const competitorId = randomUUID();
+  await prisma.business.create({ data: { id: businessId, workspaceId: tenantA.workspaceId, data: { id: businessId, name: "Competitor Owner Co" } as any } });
+  await prisma.competitor.create({ data: { id: competitorId, businessId, workspaceId: tenantA.workspaceId, name: "Rival Co", discoverySources: [] } });
+
+  try {
+    const owner = await invoke(requireCompetitorAccess, competitorId, tenantA.userId);
+    assert.strictEqual(owner.nextCalled, true, "the owning tenant's member must pass through");
+
+    const intruder = await invoke(requireCompetitorAccess, competitorId, tenantB.userId);
+    assert.strictEqual(intruder.statusCode, 403, "another tenant's member must be rejected");
+    assert.strictEqual(intruder.nextCalled, false);
+
+    const missing = await invoke(requireCompetitorAccess, randomUUID(), tenantA.userId);
+    assert.strictEqual(missing.statusCode, 404);
+  } finally {
+    await prisma.competitor.delete({ where: { id: competitorId } }).catch(() => {});
     await prisma.business.delete({ where: { id: businessId } }).catch(() => {});
     await deleteTenant(tenantA);
     await deleteTenant(tenantB);

@@ -5,13 +5,15 @@ import type { AgentResult, BudgetAgentOutput, CampaignAgentOutput, ComplianceAge
 import type { ResearchContext } from "../../research/types/index.js";
 import { createResearchJob, runResearchOrchestrator, type RunResearchOrchestratorOptions } from "../../research/research-orchestrator/index.js";
 import { extractAndPersistCrawlFacts } from "../../research/crawl/factExtraction.js";
+import { buildAndPersistCompanyProfile } from "../../research/company-knowledge/CompanyKnowledgeBuilder.js";
 import { runDecisionEngine } from "../../research/decision/decision-engine.js";
 import type { DecisionContext } from "../../research/decision/types.js";
-import { runIntelligenceEnrichment } from "../../research/intelligenceEnrichment.js";
+import { runIntelligenceEnrichment, type IntelligenceEnrichmentResult } from "../../research/intelligenceEnrichment.js";
+import { generateAndPersistCampaignRecommendations } from "../../research/campaign-recommendation/CampaignRecommendationEngine.js";
 import { createStrategyFromAgentResults } from "../strategy/strategyEngine.js";
 import { buildCampaignFromStrategy } from "./campaignOrchestrator.js";
 import { getBusiness } from "../business/businessService.js";
-import { withLock } from "../../infra/distributedLock.js";
+import { withQueuedLock } from "../../infra/distributedLock.js";
 import { withSpan } from "../../infra/telemetry.js";
 import {
   getCampaignGenerationJob,
@@ -35,13 +37,15 @@ export interface CampaignGenerationDeps {
   createResearchJob: typeof createResearchJob;
   runResearchOrchestrator: typeof runResearchOrchestrator;
   extractCrawlFacts: typeof extractAndPersistCrawlFacts;
+  buildCompanyProfile: typeof buildAndPersistCompanyProfile;
   runDecisionEngine: typeof runDecisionEngine;
   runIntelligenceEnrichment: typeof runIntelligenceEnrichment;
+  generateCampaignRecommendations: typeof generateAndPersistCampaignRecommendations;
   runAgentCoordinator: typeof runAgentCoordinator;
   createStrategyFromAgentResults: typeof createStrategyFromAgentResults;
   buildCampaignFromStrategy: typeof buildCampaignFromStrategy;
   getBusiness: typeof getBusiness;
-  withLock: typeof withLock;
+  withLock: typeof withQueuedLock;
 }
 
 export const defaultCampaignGenerationDeps: CampaignGenerationDeps = {
@@ -53,13 +57,15 @@ export const defaultCampaignGenerationDeps: CampaignGenerationDeps = {
   createResearchJob,
   runResearchOrchestrator,
   extractCrawlFacts: extractAndPersistCrawlFacts,
+  buildCompanyProfile: buildAndPersistCompanyProfile,
   runDecisionEngine,
   runIntelligenceEnrichment,
+  generateCampaignRecommendations: generateAndPersistCampaignRecommendations,
   runAgentCoordinator,
   createStrategyFromAgentResults,
   buildCampaignFromStrategy,
   getBusiness,
-  withLock,
+  withLock: withQueuedLock,
 };
 
 // Generous relative to the ~1 minute a full research+agents+build run has taken in live
@@ -82,10 +88,10 @@ export interface RunCampaignGenerationOptions {
 }
 
 // Fixed fan-out widths of the two sub-pipelines this orchestrates — see
-// research/providers/index.ts (20 providers) and agents/agents/index.ts (20 agents) —
+// research/providers/index.ts (27 providers) and agents/agents/index.ts (20 agents) —
 // plus one unit for the campaign-build step, so progress is one meaningful number
 // across all three phases rather than three separately-scaled ones.
-const RESEARCH_PROVIDER_COUNT = 20;
+const RESEARCH_PROVIDER_COUNT = 27;
 const AGENT_COUNT = 20;
 // Exported so the gateway's progress route (router.ts) can report a total alongside the
 // live step list without duplicating this arithmetic.
@@ -99,7 +105,7 @@ function defaultCampaignName(job: CampaignGenerationJobRecord, business: { name:
  * The full agent-pipeline's core entrypoint — called by the BullMQ worker (see
  * workers/campaignGenerationWorker.ts) with just a jobId, exactly like
  * runResearchOrchestrator. Sequences, in order: Research Orchestrator (which runs its
- * own 9 providers + Knowledge Aggregator internally), the AI Agent Coordinator (10
+ * own 27 providers + Knowledge Aggregator internally), the AI Agent Coordinator (20
  * agents), then the Campaign Builder (AdStrategy -> Campaign via the existing,
  * unmodified buildCampaignFromStrategy). No agent, provider, or prompt is touched here —
  * this file only sequences already-built, independently-tested pieces.
@@ -123,7 +129,7 @@ export async function runCampaignGenerationPipeline(
   };
 
   try {
-    return await deps.withLock(`campaign-generation:${job.businessId}`, CAMPAIGN_GENERATION_LOCK_TTL_MS, () => runPhases(job));
+    return await deps.withLock(`campaign-generation:${job.businessId}`, CAMPAIGN_GENERATION_LOCK_TTL_MS, CAMPAIGN_GENERATION_LOCK_TTL_MS, () => runPhases(job));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Campaign generation failed";
     await deps
@@ -166,6 +172,14 @@ export async function runCampaignGenerationPipeline(
         .catch((err) => logger.warn(`Crawl fact extraction failed for campaign generation job ${jobId} — agents run without verified facts`, err));
     }
 
+    // Company Knowledge Builder — pure assembly from the ResearchContext/CrawlFact rows
+    // already produced above, no new external calls, so it's cheap enough to await inline
+    // rather than run fire-and-forget. Best-effort: never fails campaign generation (the
+    // function itself never throws, but this stays defensive in case that contract changes).
+    await withSpan("campaign_generation.company_knowledge", () => deps.buildCompanyProfile(context)).catch((err) => {
+      logger.warn(`Company Knowledge Builder failed for campaign generation job ${jobId} — continuing without a persisted CompanyProfile`, err);
+    });
+
     // Decision Engine runs concurrently with the Agent Coordinator below (same input,
     // ResearchContext, independent output) so it adds no extra latency to the pipeline.
     // Best-effort: a Decision Engine failure never fails campaign generation, which already
@@ -176,13 +190,18 @@ export async function runCampaignGenerationPipeline(
       return null;
     });
 
-    // Fire-and-forget, same "enhancement, not hard dependency" posture as the Decision
-    // Engine above — this run doesn't wait on it or read its return value at all (its
-    // value is the Research Memory entries it writes for future runs, not this one's
-    // output), so it's deliberately not awaited alongside the rest of Phase 1/2.
-    withSpan("campaign_generation.intelligence_enrichment", () => deps.runIntelligenceEnrichment(context)).catch((err) => {
-      logger.warn(`Intelligence enrichment failed for campaign generation job ${jobId} — continuing without it`, err);
-    });
+    // Not awaited alongside the rest of Phase 1/2 (same "enhancement, not hard dependency"
+    // posture as the Decision Engine above) — but unlike before, the promise itself IS kept
+    // (not discarded), since its landingPage result feeds the Campaign Recommendation Engine
+    // in Phase 3 below. By the time Phase 3 needs it, the real agent calls in Phase 2 have
+    // almost always already given this promise enough time to settle; awaiting it there adds
+    // no meaningful latency in the common case.
+    const intelligenceEnrichmentPromise = withSpan("campaign_generation.intelligence_enrichment", () => deps.runIntelligenceEnrichment(context)).catch(
+      (err): IntelligenceEnrichmentResult => {
+        logger.warn(`Intelligence enrichment failed for campaign generation job ${jobId} — continuing without it`, err);
+        return { landingPage: null };
+      }
+    );
 
     // ── Phase 2: AI Agent Coordinator ──
     await markStatus("running_agents");
@@ -229,6 +248,17 @@ export async function runCampaignGenerationPipeline(
 
       const campaign = await deps.buildCampaignFromStrategy(strategy.id, name, dailyBudgetCents);
       return { campaign, strategyId: strategy.id };
+    });
+
+    // Campaign Recommendation Engine — additive alongside the single Campaign just built
+    // above (never replacing it). Best-effort: the function itself never throws, but this
+    // stays defensive in case that contract changes.
+    const { landingPage } = await intelligenceEnrichmentPromise;
+    const landingPageRecommendation = landingPage?.recommendations[0] ?? "No landing-page-specific recommendation available.";
+    await withSpan("campaign_generation.campaign_recommendations", () =>
+      deps.generateCampaignRecommendations(jobId, decisionContext, campaignAgentResult.data.creatives, landingPageRecommendation)
+    ).catch((err) => {
+      logger.warn(`Campaign Recommendation Engine failed for campaign generation job ${jobId} — continuing without persisted recommendations`, err);
     });
 
     completedUnits = TOTAL_PIPELINE_UNITS;

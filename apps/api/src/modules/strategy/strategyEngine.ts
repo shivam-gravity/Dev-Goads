@@ -10,6 +10,43 @@ function isAdNetwork(value: string): value is AdNetwork {
   return value === "meta" || value === "google" || value === "tiktok";
 }
 
+// Every strategy-generation path below (LLM-produced, research-derived, or Decision
+// Engine-derived) can independently land on a single network for a given business — the
+// LLM picks per-strategy platforms freely, and createStrategyFromResearch's marketLocation
+// analysis only ever names one recommended platform. Meta + Google are the two networks
+// this product actually launches campaigns on today (TikTok shows as "Coming soon" in the
+// builder — see generateCampaignSuggestions's own comment), so buildCampaignFromStrategy
+// should always have both to build variants for, not whichever single one a strategy
+// happened to name. Applied once here rather than duplicated at each call site.
+const CORE_NETWORKS: AdNetwork[] = ["meta", "google"];
+
+function ensureCoreNetworks(networks: AdNetwork[]): AdNetwork[] {
+  const withCore = new Set(networks);
+  for (const network of CORE_NETWORKS) withCore.add(network);
+  return [...withCore];
+}
+
+/** Fills in a 0 share for any of `networks` missing from `split`, then renormalizes
+ * everything to sum to 1 — a network a strategy already scored highly keeps most of its
+ * weight; a network only added here to guarantee coverage gets a fair remaining share
+ * rather than an arbitrary forced 50/50. */
+function ensureCoreBudgetSplit(split: Partial<Record<AdNetwork, number>>, networks: AdNetwork[]): Partial<Record<AdNetwork, number>> {
+  const result: Partial<Record<AdNetwork, number>> = { ...split };
+  const missing = networks.filter((n) => result[n] === undefined);
+  if (missing.length > 0) {
+    const alreadyAllocated = Object.values(result).reduce((sum: number, v) => sum + (v ?? 0), 0);
+    const remaining = Math.max(1 - alreadyAllocated, 0);
+    const perMissing = remaining > 0 ? remaining / missing.length : 1 / networks.length;
+    for (const network of missing) result[network] = perMissing;
+  }
+
+  const total = Object.values(result).reduce((sum: number, v) => sum + (v ?? 0), 0);
+  if (total > 0) {
+    for (const network of networks) result[network] = Math.round(((result[network] ?? 0) / total) * 1000) / 1000;
+  }
+  return result;
+}
+
 async function persistStrategy(strategy: AdStrategy): Promise<AdStrategy> {
   await prisma.strategy.create({
     data: { id: strategy.id, businessId: strategy.businessId, data: strategy as any, createdAt: new Date(strategy.createdAt) },
@@ -86,6 +123,8 @@ export async function generateStrategy(business: BusinessProfile): Promise<AdStr
     payload = fallbackStrategy(business);
   }
   payload.creatives = sanitizeCreatives(payload.creatives);
+  payload.recommendedNetworks = ensureCoreNetworks(payload.recommendedNetworks);
+  payload.budgetSplit = ensureCoreBudgetSplit(payload.budgetSplit, payload.recommendedNetworks);
 
   const strategy: AdStrategy = {
     id: randomUUID(),
@@ -187,13 +226,14 @@ export async function createStrategyFromResearch(businessId: string, input: Rese
   ]);
 
   const network: AdNetwork = marketLocation.recommendedPlatform;
+  const recommendedNetworks = ensureCoreNetworks([network]);
   const strategy: AdStrategy = {
     id: randomUUID(),
     businessId,
     createdAt: new Date().toISOString(),
     summary: `${product.summary} Recommended platform: ${network} in ${marketLocation.recommendedRegion}. ${marketLocation.placementRationale}`,
-    recommendedNetworks: [network],
-    budgetSplit: { [network]: 1 } as Partial<Record<AdNetwork, number>>,
+    recommendedNetworks,
+    budgetSplit: ensureCoreBudgetSplit({ [network]: 1 } as Partial<Record<AdNetwork, number>>, recommendedNetworks),
     audiences: personas.length > 0 ? personas.map((p) => p.name) : [audience.primaryAudience],
     creatives,
   };
@@ -293,7 +333,8 @@ export async function createStrategyFromAgentResults(
     }
   }
 
-  const recommendedNetworks = decisionNetworks.length > 0 ? decisionNetworks : output.recommendedNetworks;
+  const recommendedNetworks = ensureCoreNetworks(decisionNetworks.length > 0 ? decisionNetworks : output.recommendedNetworks);
+  const normalizedBudgetSplit = ensureCoreBudgetSplit(budgetSplit, recommendedNetworks);
 
   const audiences = decisionContext?.recommendedAudiencePriority
     ? [decisionContext.recommendedAudiencePriority, ...output.audiences.filter((a) => a !== decisionContext.recommendedAudiencePriority)]
@@ -313,7 +354,7 @@ export async function createStrategyFromAgentResults(
     createdAt: new Date().toISOString(),
     summary,
     recommendedNetworks,
-    budgetSplit,
+    budgetSplit: normalizedBudgetSplit,
     audiences,
     creatives: sanitizeCreatives([...output.creatives, ...extraCreatives]),
     ...(extras?.compliance ? { complianceWarning: complianceWarningFrom(businessId, extras.compliance) } : {}),

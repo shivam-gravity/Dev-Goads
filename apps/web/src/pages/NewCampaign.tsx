@@ -4,7 +4,6 @@ import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.js";
 import { TargetIcon, UserIcon, LightningIcon, GlobeIcon, SparkleIcon } from "../components/icons.js";
 import type {
-  AgentRunResult,
   AudiencePersonaCard,
   CampaignGenerationCitations,
   CampaignGenerationFacts,
@@ -14,7 +13,6 @@ import type {
   CompetitorAdsData,
   DecisionContext,
   RankedRecommendation,
-  SiteMapData,
   StrategySimulationResult,
 } from "../api/client.js";
 
@@ -632,148 +630,6 @@ function VerifiedFactsSection({ jobId }: { jobId: string }) {
   );
 }
 
-// Display labels for the 20 agents' internal `name` values (apps/api/src/agents/agents/*.ts) —
-// falls back to the raw name for any agent added on the backend before this map is updated.
-const AGENT_LABELS: Record<string, string> = {
-  "product-agent": "Product",
-  "audience-agent": "Audience",
-  "competitor-agent": "Competitor",
-  "market-agent": "Market",
-  "keyword-agent": "Keyword",
-  "creative-agent": "Creative",
-  "budget-agent": "Budget",
-  "persona-agent": "Persona",
-  "campaign-agent": "Campaign",
-  "landing-page-agent": "Landing Page",
-  "pricing-offer-agent": "Pricing & Offer",
-  "localization-agent": "Localization",
-  "seo-content-agent": "SEO Content",
-  "seasonality-timing-agent": "Seasonality & Timing",
-  "channel-placement-agent": "Channel Placement",
-  "funnel-retargeting-agent": "Funnel & Retargeting",
-  "objection-handling-agent": "Objection Handling",
-  "forecasting-kpi-agent": "Forecasting & KPI",
-  "critic-agent": "Critic (review)",
-  "compliance-agent": "Compliance (review)",
-};
-
-// Some evidence sources (Critic/Compliance in particular) legitimately aggregate citations
-// across many sub-checks — rendering all of them as inline [N] links reads as an unreadable
-// wall of brackets past a certain count. Capped, with the true remaining count always shown
-// (never silently dropped), same "show N, reveal the rest" convention as the page's other
-// evidence toggles (Data sources / Show all supporting evidence).
-const MAX_INLINE_CITATIONS = 8;
-
-function CitationLinks({ citations }: { citations: { url: string; title: string }[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const visible = expanded ? citations : citations.slice(0, MAX_INLINE_CITATIONS);
-  const hiddenCount = citations.length - visible.length;
-  return (
-    <span className="agent-reasoning-citations">
-      {visible.map((c, ci) => (
-        <a key={c.url} href={c.url} target="_blank" rel="noreferrer" title={c.title}>
-          [{ci + 1}]
-        </a>
-      ))}
-      {hiddenCount > 0 && (
-        <button type="button" className="agent-reasoning-citations-more" onClick={() => setExpanded(true)}>
-          +{hiddenCount} more
-        </button>
-      )}
-    </span>
-  );
-}
-
-function AgentReasoningRow({ result, citationsByField }: { result: AgentRunResult; citationsByField: Record<string, { url: string; title: string }[]> }) {
-  const confidencePct = Math.round(result.confidence * 100);
-  const label = AGENT_LABELS[result.agent] ?? result.agent;
-  return (
-    <div className="agent-reasoning-row">
-      <div className="agent-reasoning-row-head">
-        <span className="agent-reasoning-name">{label}</span>
-        <span className={`score-badge ${scoreTier(confidencePct)}`}>{confidencePct}%</span>
-        {result.usedFallback && (
-          <span
-            className="agent-reasoning-fallback-flag"
-            title="This agent couldn't reach a live model, or the research it needed was missing — it used a generic fallback instead of a researched conclusion."
-          >
-            ⚠ not grounded — used fallback
-          </span>
-        )}
-      </div>
-      {result.evidence.length > 0 && (
-        <details className="agent-reasoning-evidence">
-          <summary>Data sources ({result.evidence.length})</summary>
-          <ul>
-            {result.evidence.map((e, i) => {
-              const citations = citationsByField[e.source] ?? [];
-              return (
-                <li key={`${e.source}-${i}`}>
-                  <strong>{e.source}</strong>: {e.detail}
-                  {citations.length > 0 && <CitationLinks citations={citations} />}
-                </li>
-              );
-            })}
-          </ul>
-        </details>
-      )}
-    </div>
-  );
-}
-
-/** Surfaces the 20-agent pipeline's own reasoning — which real research each agent drew
- * from and whether it had to fall back to a generic guess — alongside the separate Decision
- * Engine panel above. `job.agentResults` was already computed and persisted server-side
- * (CampaignGenerationJob.agentResults) but never rendered anywhere before this.
- * `citationsByField` cross-references each evidence source against the real citation URLs
- * GET /campaigns/generate/:id/citations returns, so a source reads as a verifiable link
- * trail rather than just a descriptive label. */
-function AgentReasoningView({
-  agentResults,
-  citationsByField,
-}: {
-  agentResults: Record<string, AgentRunResult>;
-  citationsByField: Record<string, { url: string; title: string }[]>;
-}) {
-  const rows = Object.values(agentResults);
-  if (rows.length === 0) return null;
-  const fallbackCount = rows.filter((r) => r.usedFallback).length;
-
-  return (
-    <div className="decision-section agent-reasoning-section">
-      <p className="decision-section-title"><span className="icon-badge"><SparkleIcon /></span>Agent Reasoning — Data Sources &amp; Confidence</p>
-      <p className="agent-reasoning-subline">
-        Each of the {rows.length} AI agents below shows what real research it actually drew from
-        {fallbackCount > 0 ? ` — ${fallbackCount} couldn't and fell back to a generic guess (flagged below)` : ""}.
-      </p>
-      <div className="agent-reasoning-list">
-        {rows.map((r) => <AgentReasoningRow key={r.agent} result={r} citationsByField={citationsByField} />)}
-      </div>
-    </div>
-  );
-}
-
-/** Read-only list of what NavigationProvider actually discovered/crawled on the business's own
- * site — its whole value is showing the user what got crawled and why, not feeding an agent, so
- * it renders as its own small card rather than through the generic evidence display. */
-function SiteMapCard({ siteMap }: { siteMap: SiteMapData }) {
-  if (siteMap.pages.length === 0) return null;
-  return (
-    <div className="decision-section site-map-card">
-      <p className="decision-section-title"><span className="icon-badge"><GlobeIcon /></span>Site Map — {siteMap.totalDiscovered} pages discovered</p>
-      <ul className="site-map-list">
-        {siteMap.pages.slice(0, 20).map((p) => (
-          <li key={p.url} className="site-map-row">
-            <span className={`site-map-type-badge site-map-type-${p.pageType}`}>{p.pageType}</span>
-            <a href={p.url} target="_blank" rel="noreferrer" className="site-map-url">{p.title || p.url}</a>
-            {p.discovered && <span className="site-map-crawled-flag" title="Crawled">✓</span>}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 /** Real competitor ad creative (Meta Ad Library API + Google Ads Transparency Center) — the one
  * new field that doesn't fit the generic evidence-link display, since each entry is a
  * headline/body/preview object rather than a narrative string. */
@@ -797,12 +653,10 @@ function CompetitorAdsCard({ competitorAds }: { competitorAds: CompetitorAdsData
   );
 }
 
-/** Fetches real citation URLs (plus the Site Map / Competitor Ads raw data riding alongside
- * them) once (same one-shot pattern as VerifiedFactsSection above) and renders AgentReasoningView
- * plus the two dedicated cards — kept separate from that view so it stays a pure/presentational
- * component testable without a network fetch. A citations-fetch failure just means sources
- * render without links, never a broken page. */
-function AgentReasoningSection({ jobId, agentResults }: { jobId: string; agentResults: Record<string, AgentRunResult> }) {
+/** Fetches real citation data (same one-shot pattern as VerifiedFactsSection above) and
+ * renders the Competitor Ads card. A citations-fetch failure just means the card doesn't
+ * render, never a broken page. */
+function CompetitorAdsSection({ jobId }: { jobId: string }) {
   const [citations, setCitations] = useState<CampaignGenerationCitations | null>(null);
 
   useEffect(() => {
@@ -811,13 +665,7 @@ function AgentReasoningSection({ jobId, agentResults }: { jobId: string; agentRe
     return () => { cancelled = true; };
   }, [jobId]);
 
-  return (
-    <>
-      <AgentReasoningView agentResults={agentResults} citationsByField={citations?.citationsByField ?? {}} />
-      {citations?.siteMap && <SiteMapCard siteMap={citations.siteMap} />}
-      {citations?.competitorAds && <CompetitorAdsCard competitorAds={citations.competitorAds} />}
-    </>
-  );
+  return citations?.competitorAds ? <CompetitorAdsCard competitorAds={citations.competitorAds} /> : null;
 }
 
 export default function NewCampaign() {
@@ -1072,7 +920,7 @@ export default function NewCampaign() {
 
           {factsVisible && <VerifiedFactsSection jobId={job.id} />}
 
-          {job.agentResults && <AgentReasoningSection jobId={job.id} agentResults={job.agentResults} />}
+          {factsVisible && <CompetitorAdsSection jobId={job.id} />}
 
           {isDone && (
             <div className="all-set-banner">

@@ -1,5 +1,11 @@
+import TurndownService from "turndown";
 import { withPage } from "../scraping/browser.js";
 import type { ScrapedImageCandidate, ScrapedProduct } from "../types.js";
+
+// Constructing a TurndownService has non-trivial setup cost (rule registration) — one
+// shared instance, mirroring how browser.ts caches the Chromium instance rather than
+// launching one per call.
+const turndownService = new TurndownService();
 
 const NAV_TIMEOUT_MS = 20_000;
 const MAX_CANDIDATE_IMAGES = 20;
@@ -117,6 +123,16 @@ const EXTRACT_IMAGES_SCRIPT = `(() => {
 
 const EXTRACT_BODY_TEXT_SCRIPT = `document.body.innerText.replace(/\\s+/g, ' ').trim()`;
 
+const MAX_LINKS = 500;
+
+const EXTRACT_LINKS_SCRIPT = `(() => {
+  const found = new Set();
+  document.querySelectorAll('a[href]').forEach((a) => {
+    try { found.add(new URL(a.getAttribute('href'), document.baseURI).toString()); } catch {}
+  });
+  return [...found].slice(0, ${MAX_LINKS});
+})()`;
+
 interface PageMetadata {
   title: string;
   description?: string;
@@ -148,8 +164,10 @@ export async function scrapeProductUrl(input: string): Promise<ScrapedProduct> {
 
   return withPage(async (page) => {
     page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+    let statusCode: number | undefined;
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded" });
+      const response = await page.goto(url, { waitUntil: "domcontentloaded" });
+      statusCode = response?.status();
     } catch (err) {
       throw new Error(err instanceof Error ? `Couldn't load that URL: ${err.message}` : "Couldn't load that URL");
     }
@@ -163,6 +181,7 @@ export async function scrapeProductUrl(input: string): Promise<ScrapedProduct> {
     const metadata = await page.evaluate<PageMetadata>(EXTRACT_METADATA_SCRIPT);
     const images = await page.evaluate<ScrapedImageCandidate[]>(EXTRACT_IMAGES_SCRIPT);
     const bodyText = await page.evaluate<string>(EXTRACT_BODY_TEXT_SCRIPT);
+    const links = await page.evaluate<string[]>(EXTRACT_LINKS_SCRIPT);
 
     // Above-the-fold capture (not fullPage) — mirrors what a human reviewer
     // sees first, and keeps the payload bounded on very long product pages.
@@ -175,6 +194,7 @@ export async function scrapeProductUrl(input: string): Promise<ScrapedProduct> {
     const domSnapshot = (await page.locator("body").ariaSnapshot()).slice(0, MAX_DOM_SNAPSHOT_LENGTH);
 
     const html = (await page.content()).slice(0, MAX_HTML_LENGTH);
+    const markdown = turndownService.turndown(html);
 
     return {
       url,
@@ -184,11 +204,14 @@ export async function scrapeProductUrl(input: string): Promise<ScrapedProduct> {
       price: metadata.price,
       currency: metadata.currency,
       html,
+      markdown,
       domSnapshot,
       screenshot,
       jsonLd: metadata.jsonLd,
       images,
+      links,
       bodyText: bodyText.slice(0, MAX_BODY_TEXT_LENGTH),
+      statusCode,
     };
   });
 }

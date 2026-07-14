@@ -60,6 +60,7 @@ export class AudienceIntelligenceProvider implements ResearchProvider<AudienceDa
         budgetOwner: report.budgetOwner,
         procurementCycle: report.procurementCycle,
         buyingTriggers: report.buyingTriggers,
+        customerJourney: report.customerJourney.length > 0 ? report.customerJourney : undefined,
         dataSource,
       };
 

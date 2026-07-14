@@ -15,9 +15,6 @@ delete process.env.OPENAI_API_KEY;
 
 const INPUT: ResearchProviderInput = { jobId: "job-1", workspaceId: "ws-1", url: "https://example.com", businessName: "Example Co", industry: "widgets" };
 
-// These 6 all gate on FIRECRAWL_API_KEY (checked inside infra/firecrawlClient.ts before any
-// fetch) — with it unset, every one must degrade to a labeled partial with zero network calls,
-// same "no key -> honest partial, never throw" contract every other provider follows.
 const FIRECRAWL_GATED_PROVIDERS = [
   { name: "ProductProvider", instance: new ProductProvider() },
   { name: "NavigationProvider", instance: new NavigationProvider() },
@@ -28,7 +25,28 @@ const FIRECRAWL_GATED_PROVIDERS = [
 ];
 
 for (const { name, instance } of FIRECRAWL_GATED_PROVIDERS) {
-  test(`${name} - degrades to a partial, labeled fallback with zero network calls when FIRECRAWL_API_KEY is unset`, async () => {
+  test(`${name} - has a unique provider name and a priority above 200`, () => {
+    assert.ok(instance.name.length > 0);
+    assert.ok(instance.priority > 200, `expected priority > 200 (this batch runs after the original 20), got ${instance.priority}`);
+  });
+}
+
+function neverReachFirecrawl(url: string | URL | Request): void {
+  const urlStr = String(url instanceof Request ? url.url : url);
+  if (urlStr.includes("api.firecrawl.dev")) throw new Error(`must never reach Firecrawl's API host directly: ${urlStr}`);
+}
+
+// SearchRankingProvider and RedditProvider were NOT converted to try an in-house path first
+// (search has no in-house replacement — see scrapeFallback.ts's scope boundary; RedditProvider
+// tries OpenAI's own web search first, which itself makes zero network calls when
+// OPENAI_API_KEY is unset, same as before). Both still make zero network calls at all when
+// FIRECRAWL_API_KEY (and, for Reddit, OPENAI_API_KEY) are unset — this is the original,
+// still-valid contract for these two.
+for (const { name, instance } of [
+  { name: "SearchRankingProvider", instance: new SearchRankingProvider() },
+  { name: "RedditProvider", instance: new RedditProvider() },
+]) {
+  test(`${name} - degrades to a partial, labeled fallback with zero network calls when no credentials are configured`, async () => {
     const original = global.fetch;
     let fetchCalled = false;
     global.fetch = (async () => {
@@ -45,12 +63,78 @@ for (const { name, instance } of FIRECRAWL_GATED_PROVIDERS) {
       global.fetch = original;
     }
   });
+}
 
-  test(`${name} - has a unique provider name and a priority above 200`, () => {
-    assert.ok(instance.name.length > 0);
-    assert.ok(instance.priority > 200, `expected priority > 200 (this batch runs after the original 20), got ${instance.priority}`);
+// ProductProvider, NavigationProvider, AdLibraryProvider, and GoogleSerpFeaturesProvider were
+// converted to try an in-house (Playwright-backed scraper-service, or sitemap-based for map)
+// path FIRST via scrapeFallback.ts — regardless of FIRECRAWL_API_KEY. So "no Firecrawl key"
+// alone no longer means "zero network calls" for these; the real invariant now is "Firecrawl's
+// API host itself is never reached, whether the in-house attempt succeeds or fails."
+const FALLBACK_CONVERTED_PROVIDERS = [
+  { name: "ProductProvider", instance: new ProductProvider() },
+  { name: "NavigationProvider", instance: new NavigationProvider() },
+  { name: "AdLibraryProvider", instance: new AdLibraryProvider() },
+  { name: "GoogleSerpFeaturesProvider", instance: new GoogleSerpFeaturesProvider() },
+];
+
+for (const { name, instance } of FALLBACK_CONVERTED_PROVIDERS) {
+  test(`${name} - in-house attempt failing too still degrades to a partial result, never reaching Firecrawl's API host`, async () => {
+    const original = global.fetch;
+    global.fetch = (async (url) => {
+      neverReachFirecrawl(url);
+      throw new Error("in-house scraper-service unreachable (simulated)");
+    }) as typeof fetch;
+
+    try {
+      const result = await instance.execute(INPUT);
+      assert.strictEqual(result.status, "partial");
+      assert.ok(result.data, "expected a labeled fallback data object, not null");
+    } finally {
+      global.fetch = original;
+    }
   });
 }
+
+const SITEMAP_XML = `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://example.com/pricing</loc></url></urlset>`;
+
+test("NavigationProvider - a successful in-house sitemap discovery returns success with an in-house dataSource label, never reaching Firecrawl", async () => {
+  const original = global.fetch;
+  global.fetch = (async (url) => {
+    neverReachFirecrawl(url);
+    const urlStr = String(url instanceof Request ? url.url : url);
+    if (urlStr.includes("/sitemap.xml")) return new Response(SITEMAP_XML, { status: 200 });
+    return new Response("", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const result = await new NavigationProvider().execute(INPUT);
+    assert.strictEqual(result.status, "success");
+    assert.match(result.data?.dataSource ?? "", /^In-house/);
+    assert.ok(result.data?.pages.some((p) => p.url === "https://example.com/pricing"));
+  } finally {
+    global.fetch = original;
+  }
+});
+
+test("AdLibraryProvider - a successful in-house scrape returns an in-house-labeled source, never reaching Firecrawl", async () => {
+  const original = global.fetch;
+  global.fetch = (async (url) => {
+    neverReachFirecrawl(url);
+    const urlStr = String(url instanceof Request ? url.url : url);
+    if (urlStr.includes("/research/scrape")) {
+      return new Response(JSON.stringify({ links: ["https://adstransparency.google.com/advertiser/AR123"], markdown: "", html: "", metadata: {} }), { status: 200 });
+    }
+    return new Response("", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const result = await new AdLibraryProvider().execute(INPUT);
+    assert.strictEqual(result.status, "success");
+    assert.match(result.data?.dataSource ?? "", /in-house scrape/);
+  } finally {
+    global.fetch = original;
+  }
+});
 
 test("all 6 Firecrawl-gated providers plus Autocomplete have distinct names", () => {
   const names = [...FIRECRAWL_GATED_PROVIDERS.map((p) => p.instance.name), new AutocompleteProvider().name];

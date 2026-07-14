@@ -9,7 +9,7 @@ import { explainRecommendations } from "./explainability.js";
 import { generateStrategies } from "./strategy-engine.js";
 import { simulateStrategies } from "./simulation-engine.js";
 import { enrichBusinessContext } from "./enrichment-engine.js";
-import type { AudiencePersonaCard, CampaignStrategy, DecisionContext, RankedRecommendation, StrategySimulationResult } from "./types.js";
+import type { AudiencePersonaCard, CampaignStrategy, DecisionContext, RankedRecommendation, StrategySimulationResult, SwotAnalysis } from "./types.js";
 
 /**
  * Decision Intelligence Engine — the top-level orchestrator that turns a ResearchContext
@@ -39,8 +39,25 @@ const SUMMARY_TOOL = {
       recommendedCreativeDirection: { type: "string" },
       recommendedOffer: { type: "string" },
       recommendedMessaging: { type: "string" },
+      swot: {
+        type: "object",
+        description: "4-quadrant strategic read: strengths/weaknesses are about THIS business, opportunities/threats are about the market/competitive landscape around it",
+        properties: {
+          strengths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
+          weaknesses: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
+          opportunities: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
+          threats: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
+        },
+        required: ["strengths", "weaknesses", "opportunities", "threats"],
+      },
+      marketGaps: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6, description: "Underserved needs/segments/angles no competitor is credibly covering yet" },
+      funnelStrategy: { type: "string", description: "How prospects should be moved from first awareness through to conversion/retention" },
+      mediaStrategy: { type: "string", description: "Which channels/platforms to prioritize and why, given the research above" },
     },
-    required: ["businessSummary", "recommendedPositioning", "recommendedAudiencePriority", "recommendedCreativeDirection", "recommendedOffer", "recommendedMessaging"],
+    required: [
+      "businessSummary", "recommendedPositioning", "recommendedAudiencePriority", "recommendedCreativeDirection", "recommendedOffer", "recommendedMessaging",
+      "swot", "marketGaps", "funnelStrategy", "mediaStrategy",
+    ],
   },
 };
 
@@ -51,6 +68,10 @@ interface SummaryFields {
   recommendedCreativeDirection: string;
   recommendedOffer: string;
   recommendedMessaging: string;
+  swot: SwotAnalysis;
+  marketGaps: string[];
+  funnelStrategy: string;
+  mediaStrategy: string;
 }
 
 function fallbackSummary(businessLabel: string): SummaryFields {
@@ -61,6 +82,10 @@ function fallbackSummary(businessLabel: string): SummaryFields {
     recommendedCreativeDirection: "Not yet researched",
     recommendedOffer: "Not yet researched",
     recommendedMessaging: "Not yet researched",
+    swot: { strengths: ["Not yet researched"], weaknesses: ["Not yet researched"], opportunities: ["Not yet researched"], threats: ["Not yet researched"] },
+    marketGaps: ["Not yet researched"],
+    funnelStrategy: "Not yet researched",
+    mediaStrategy: "Not yet researched",
   };
 }
 
@@ -68,12 +93,12 @@ async function synthesizeSummary(context: ResearchContext, businessLabel: string
   if (!openai) return fallbackSummary(businessLabel);
 
   const structured = await runStructured<SummaryFields>({
-    maxTokens: 1024,
+    maxTokens: 1536,
     tool: SUMMARY_TOOL,
     messages: [
       {
         role: "user",
-        content: `Synthesize the business-level decision summary for "${businessLabel}".\n\nCompany: ${context.company?.summary ?? "unknown"}\nMarket: ${context.market?.competitionLevel ?? "unknown"} competition, trends: ${context.market?.trends.join(", ") ?? "none"}\nWinning strategy: ${winningStrategyLabel}\n\nTop-ranked recommendations:\n${topRecommendations.map((r) => `- [${r.category}, score ${r.finalScore}/100] ${r.title}: ${r.reason}`).join("\n")}`,
+        content: `Synthesize the business-level decision summary for "${businessLabel}", including a SWOT analysis, market gaps, funnel strategy, and media strategy.\n\nCompany: ${context.company?.summary ?? "unknown"}\nMarket: ${context.market?.competitionLevel ?? "unknown"} competition, trends: ${context.market?.trends.join(", ") ?? "none"}\nCompetitor differentiators (what THIS business could own): ${context.competitors?.differentiators.join(", ") ?? "none"}\nCompetition intensity: ${context.competitors?.competitionIntensity ?? "unknown"}\nWinning strategy: ${winningStrategyLabel}\n\nTop-ranked recommendations:\n${topRecommendations.map((r) => `- [${r.category}, score ${r.finalScore}/100] ${r.title}: ${r.reason}`).join("\n")}`,
       },
     ],
   });
@@ -194,6 +219,10 @@ export async function runDecisionEngine(context: ResearchContext): Promise<Decis
     recommendedCreativeDirection: summary.recommendedCreativeDirection,
     recommendedOffer: summary.recommendedOffer,
     recommendedMessaging: summary.recommendedMessaging,
+    swot: summary.swot,
+    marketGaps: summary.marketGaps,
+    funnelStrategy: summary.funnelStrategy,
+    mediaStrategy: summary.mediaStrategy,
     confidence,
     evidence,
     tradeoffs,

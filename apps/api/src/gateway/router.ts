@@ -10,7 +10,11 @@ import {
   requireNotificationAccess, requireAssetAccess, requireInsightAccess, requireSavedAudienceAccess,
   requireDraftAccess, requireDeveloperWebhookAccess, requireAutomationRuleAccess, requireGenerationJobAccess,
   requireStrategyAccess, requireCreativeAccess, requireCampaignAccess, requireAdSetAccess, requireAdAccess,
+  requireCompetitorAccess,
 } from "./middleware/resourceOwnership.js";
+import { competitorAdRefreshQueue } from "../infra/queue.js";
+import { getCompanyProfile } from "../research/company-knowledge/CompanyKnowledgeBuilder.js";
+import { getCampaignRecommendations } from "../research/campaign-recommendation/CampaignRecommendationEngine.js";
 
 import { logger } from "../modules/logger/logger.js";
 import { requireWorkspaceMember, requireBusinessAccess } from "./middleware/workspaceAccess.js";
@@ -693,6 +697,62 @@ router.post("/businesses/:id/strategies/from-research", requireBusinessAccess("p
 
 
 router.get("/businesses/:id/strategies", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => res.json(await listStrategiesForBusiness(req.params.id))));
+
+// The persisted Company Knowledge Builder output (research/company-knowledge/
+// CompanyKnowledgeBuilder.ts) — assembled once per successful research run rather than
+// reconstructed on every request. 404 when no research has completed for this business yet.
+router.get("/businesses/:id/company-profile", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
+  const profile = await getCompanyProfile(req.params.id);
+  if (!profile) return res.status(404).json({ error: "No company profile has been generated for this business yet" });
+  res.json(profile);
+}));
+
+// Every Competitor row for this business, with its latest CompetitorProfile (Competitor
+// Intelligence Engine's persisted output — research/competitor-intelligence/*) — the
+// relational, queryable/rankable form of what previously only lived in Research Memory.
+router.get("/businesses/:id/competitors", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
+  const competitors = await prisma.competitor.findMany({
+    where: { businessId: req.params.id },
+    orderBy: { createdAt: "desc" },
+    include: { profiles: { orderBy: { generatedAt: "desc" }, take: 1 } },
+  });
+  res.json(
+    competitors.map((c) => ({
+      id: c.id,
+      name: c.name,
+      domain: c.domain,
+      status: c.status,
+      refreshIntervalDays: c.refreshIntervalDays,
+      lastEnrichedAt: c.lastEnrichedAt,
+      latestProfile: c.profiles[0] ?? null,
+    }))
+  );
+}));
+
+// Manual, on-demand override of the daily competitor-ad-refresh schedule (infra/queue.js's
+// COMPETITOR_AD_REFRESH_QUEUE, competitorAdRefreshWorker.ts) — for a business owner who
+// doesn't want to wait for the next scheduled tick.
+router.post("/businesses/:id/competitors/:competitorId/refresh", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
+  const competitor = await prisma.competitor.findUnique({ where: { id: req.params.competitorId } });
+  if (!competitor || competitor.businessId !== req.params.id) {
+    return res.status(404).json({ error: "Competitor not found for this business" });
+  }
+  await competitorAdRefreshQueue.add("refresh-one-competitor", { competitorId: competitor.id });
+  res.status(202).json({ enqueued: true, competitorId: competitor.id });
+}));
+
+// A single competitor's discovered ads (Ad Intelligence Engine — research/ad-intelligence/
+// CompetitorAdDiscovery.ts) plus each ad's per-ad creative breakdown when analyzed
+// (research/creative-intelligence/AdCreativeAnalyzer.ts). Bare-id route (no business/
+// workspace context in the URL), so ownership is resolved via requireCompetitorAccess.
+router.get("/competitors/:id/ads", requireCompetitorAccess, asyncHandler(async (req, res) => {
+  const ads = await prisma.competitorAd.findMany({
+    where: { competitorId: req.params.id },
+    orderBy: [{ isActive: "desc" }, { lastSeenAt: "desc" }],
+    include: { creativeAnalysis: true },
+  });
+  res.json(ads);
+}));
 router.get("/strategies/:id", requireStrategyAccess, asyncHandler(async (req, res) => {
   const strategy = await getStrategy(req.params.id);
   if (!strategy) return res.status(404).json({ error: "Not found" });
@@ -1134,6 +1194,18 @@ router.get("/campaigns/generate/:id/facts", asyncHandler(async (req: AuthedReque
       sourcePageTitle: f.crawlPage?.title ?? null,
     })),
   });
+}));
+
+// The 6 ranked campaign packages the Campaign Recommendation Engine assembled (research/
+// campaign-recommendation/CampaignRecommendationEngine.ts) — same inline ownership check as
+// this route's /citations and /facts siblings above, for consistency within this route family.
+router.get("/campaigns/generate/:id/recommendations", asyncHandler(async (req: AuthedRequest, res) => {
+  const job = await getCampaignGenerationJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Campaign generation job not found" });
+  if (!(await getMembership(job.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this campaign generation job" });
+  }
+  res.json(await getCampaignRecommendations(job.id));
 }));
 
 /* ═══════════════════════════════════════════════

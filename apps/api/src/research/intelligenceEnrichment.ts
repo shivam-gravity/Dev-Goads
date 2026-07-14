@@ -1,8 +1,16 @@
 import { logger } from "../modules/logger/logger.js";
 import { runCreativeIntelligence } from "./creative-intelligence/CreativeIntelligenceEngine.js";
 import { runPricingIntelligence } from "./pricing-intelligence/PricingIntelligenceEngine.js";
-import { runLandingPageIntelligence } from "./landing-page-intelligence/LandingPageIntelligenceEngine.js";
+import { runLandingPageIntelligence, type LandingPageIntelligenceReport } from "./landing-page-intelligence/LandingPageIntelligenceEngine.js";
 import type { ResearchContext } from "./types/index.js";
+
+export interface IntelligenceEnrichmentResult {
+  /** The Landing Page Intelligence report for context.url — returned (not just written to
+   * Research Memory) so the Campaign Recommendation Engine can use its real
+   * recommendations[0] instead of a fresh call to the same engine. Null when the fetch/
+   * analysis failed (never blocks campaign generation either way). */
+  landingPage: LandingPageIntelligenceReport | null;
+}
 
 /**
  * Runs the 3 Intelligence Engines that were built and tested but never invoked outside
@@ -27,14 +35,15 @@ import type { ResearchContext } from "./types/index.js";
  * Never throws: a failure here is explicitly not allowed to affect campaign generation,
  * which doesn't depend on any of this.
  */
-export async function runIntelligenceEnrichment(context: ResearchContext): Promise<void> {
+export async function runIntelligenceEnrichment(context: ResearchContext): Promise<IntelligenceEnrichmentResult> {
   const competitors = (context.competitors?.competitors ?? []).map((c) => ({ name: c.name, url: c.url }));
 
   const base = { url: context.url, businessName: context.company?.name, workspaceId: context.workspaceId, businessId: context.businessId };
 
-  await Promise.all([
+  const [landingPage] = await Promise.all([
     runLandingPageIntelligence(base).catch((err) => {
       logger.warn(`Landing Page Intelligence enrichment failed for ${context.url} — continuing without it`, err);
+      return null;
     }),
     competitors.length > 0
       ? runCreativeIntelligence({ ...base, competitors }).catch((err) => {
@@ -47,4 +56,6 @@ export async function runIntelligenceEnrichment(context: ResearchContext): Promi
         })
       : Promise.resolve(),
   ]);
+
+  return { landingPage };
 }

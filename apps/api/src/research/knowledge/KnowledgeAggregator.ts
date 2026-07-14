@@ -2,9 +2,12 @@ import { logger } from "../../modules/logger/logger.js";
 import type { CompanyData, NewsData, ProviderResult, ResearchContext } from "../types/index.js";
 import { fuseKnowledge } from "./KnowledgeFusionEngine.js";
 import {
+  adLibrarySchema,
   appStoreSchema,
   audienceSchema,
+  autocompleteSchema,
   backlinkAuthoritySchema,
+  communityDiscussionSchema,
   companySchema,
   competitorSchema,
   contentMarketingSchema,
@@ -14,10 +17,14 @@ import {
   legalRegulatorySchema,
   localPresenceSchema,
   marketSchema,
+  navigationSchema,
   newsSchema,
   partnershipSchema,
+  productSchema,
   reviewsSchema,
+  searchRankingSchema,
   seoSchema,
+  serpFeaturesSchema,
   socialMediaSchema,
   technologySchema,
   videoPresenceSchema,
@@ -76,7 +83,7 @@ function reconcileCompanyFunding(company: CompanyData | null, news: NewsData | n
 }
 
 /**
- * Merges the 9 providers' independent ProviderResult objects into one strongly-typed
+ * Merges the 27 providers' independent ProviderResult objects into one strongly-typed
  * ResearchContext — the "Knowledge Aggregator" stage between the parallel provider fan-out
  * and the downstream AI Agents step (createStrategyFromResearch, via toStrategyInput.ts).
  * Never throws: a missing/invalid provider becomes a null field plus a metadata entry,
@@ -121,6 +128,13 @@ export function aggregateResearch(input: AggregateInput): ResearchContext {
   const localPresence = validate("local-presence", localPresenceSchema, byName.get("local-presence"));
   const partnerships = validate("partnerships", partnershipSchema, byName.get("partnerships"));
   const legalRegulatory = validate("legal-regulatory", legalRegulatorySchema, byName.get("legal-regulatory"));
+  const product = validate("product", productSchema, byName.get("product"));
+  const navigation = validate("navigation", navigationSchema, byName.get("navigation"));
+  const searchRanking = validate("search-ranking", searchRankingSchema, byName.get("search-ranking"));
+  const adLibrary = validate("ad-library", adLibrarySchema, byName.get("ad-library"));
+  const autocomplete = validate("autocomplete", autocompleteSchema, byName.get("autocomplete"));
+  const serpFeatures = validate("serp-features", serpFeaturesSchema, byName.get("serp-features"));
+  const communityDiscussion = validate("reddit", communityDiscussionSchema, byName.get("reddit"));
 
   const timestamps = input.results.flatMap((r) => [new Date(r.startedAt).getTime(), new Date(r.completedAt).getTime()]);
   const totalDurationMs = timestamps.length > 0 ? Math.max(...timestamps) - Math.min(...timestamps) : 0;
@@ -149,6 +163,13 @@ export function aggregateResearch(input: AggregateInput): ResearchContext {
     localPresence,
     partnerships,
     legalRegulatory,
+    product,
+    navigation,
+    searchRanking,
+    adLibrary,
+    autocomplete,
+    serpFeatures,
+    communityDiscussion,
     metadata: {
       jobId: input.jobId,
       generatedAt: new Date().toISOString(),

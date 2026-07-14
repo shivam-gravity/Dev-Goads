@@ -181,7 +181,7 @@ async function fetchText(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<str
   }
 }
 
-interface DiscoveredPage {
+export interface DiscoveredPage {
   url: string;
   /** Higher = more likely to be worth crawling. Sitemap <priority> (0-1) when available, else a hint-based guess. */
   score: number;
@@ -204,7 +204,7 @@ function extractSitemapEntries($: cheerio.CheerioAPI): DiscoveredPage[] {
  * real size instead of just "links visible on the homepage." Returns [] (never throws) if no
  * sitemap exists or it fails to parse, so the caller falls back to homepage-link discovery.
  */
-async function discoverSitemapPages(origin: string): Promise<DiscoveredPage[]> {
+export async function discoverSitemapPages(origin: string): Promise<DiscoveredPage[]> {
   let xml = await fetchText(`${origin}/sitemap.xml`);
   if (!xml) {
     const robots = await fetchText(`${origin}/robots.txt`);
@@ -309,7 +309,7 @@ function derivePageType(pageUrl: string, isEntry: boolean): string {
  * CRAWL_TIME_BUDGET_MS so a large site can't turn onboarding into a multi-minute wait; whatever
  * pages were fetched before the budget ran out are still used.
  */
-export async function scrapeUrl(input: string): Promise<ScrapedSite> {
+export async function scrapeUrl(input: string, opts?: { crawlCap?: number; timeBudgetMs?: number }): Promise<ScrapedSite> {
   const url = normalizeUrl(input);
   let parsed: URL;
   try {
@@ -321,11 +321,19 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
     throw new Error("Only http/https URLs are supported");
   }
 
+  // Defaults match onboarding's own tuning exactly (zero behavior change for its 7
+  // existing callers) — callers outside onboarding (e.g. the research/campaign-generation
+  // crawl-fallback in apps/api/src/infra/scrapeFallback.ts) pass their own values instead
+  // of silently inheriting onboarding's, since the two features' latency/quality tradeoffs
+  // are independently tuned, not coupled just because they happen to share this function.
+  const crawlCap = opts?.crawlCap ?? SMART_CRAWL_CAP;
+  const timeBudgetMs = opts?.timeBudgetMs ?? CRAWL_TIME_BUDGET_MS;
+
   // Screenshot capture (a separate service round-trip) runs alongside the cheerio crawl
   // below rather than after it, since the two are independent and Playwright cold-start
   // is the slower of the two — no reason to pay for them sequentially.
   const screenshotPromise = captureScreenshot(url);
-  const crawlDeadline = Date.now() + CRAWL_TIME_BUDGET_MS;
+  const crawlDeadline = Date.now() + timeBudgetMs;
 
   // robots.txt is honored for every page BEYOND the entry URL (the user explicitly asked
   // for the entry page, so that one is always fetched) — fetched alongside the entry page
@@ -359,7 +367,11 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
   ];
 
   const { toCrawl, totalDiscovered } = await discoverAndSelectPages(url, entry.$);
-  const crawlable = toCrawl.filter(({ url: link }) => {
+  // discoverAndSelectPages already caps at its own module-level SMART_CRAWL_CAP - 1; when
+  // an override crawlCap is smaller, re-slice down to it here rather than threading the
+  // override through discoverAndSelectPages itself (unexported callers of that function
+  // elsewhere keep today's fixed cap unchanged).
+  const crawlable = toCrawl.slice(0, crawlCap - 1).filter(({ url: link }) => {
     try {
       const allowed = isPathAllowed(robots, new URL(link).pathname);
       if (!allowed) logger.info(`scrapeUrl: skipping ${link} — disallowed by robots.txt`);
@@ -392,7 +404,7 @@ export async function scrapeUrl(input: string): Promise<ScrapedSite> {
 
   const title = entryText.title || parsed.hostname;
   const description = entryText.description;
-  const excerpt = excerptParts.filter(Boolean).join("\n").slice(0, MAX_EXCERPT_LENGTH * SMART_CRAWL_CAP);
+  const excerpt = excerptParts.filter(Boolean).join("\n").slice(0, MAX_EXCERPT_LENGTH * crawlCap);
 
   if (!excerpt) {
     throw new Error("Couldn't extract any readable text from that page");

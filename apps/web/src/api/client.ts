@@ -167,32 +167,10 @@ export interface DecisionContext {
 }
 export type CampaignGenerationPipelineStatus = "pending" | "researching" | "aggregating" | "running_agents" | "building_campaign" | "completed" | "failed";
 
-/** Which ResearchContext field an agent drew from, and that field's own dataSource label —
- * mirrors apps/api/src/agents/types/index.ts's AgentEvidenceItem exactly. */
-export interface AgentEvidenceItem {
-  source: string;
-  detail: string;
-}
-/** One of the 20 AI agents' raw output — mirrors apps/api/src/agents/types/index.ts's
- * AgentResult<T>. `data` is left loosely typed here since each agent's shape differs and
- * the reasoning panel only needs to render it generically (key: value pairs), not consume
- * specific fields the way the backend's own agents do. */
-export interface AgentRunResult {
-  agent: string;
-  promptId: string;
-  promptVersion: number;
-  data: Record<string, unknown>;
-  confidence: number;
-  evidence: AgentEvidenceItem[];
-  usedFallback: boolean;
-  generatedAt: string;
-  durationMs: number;
-  error?: string;
-}
 export interface CampaignGenerationJobStatus {
   id: string; status: CampaignGenerationPipelineStatus; researchJobId?: string; strategyId?: string;
   campaignId?: string; decisionContext: DecisionContext | null;
-  agentResults?: Record<string, AgentRunResult> | null; error?: string;
+  error?: string;
   startedAt?: string; completedAt?: string; updatedAt: string;
   url?: string;
   /** When the underlying research was last run, and how fresh it still is (14-day horizon —
@@ -226,19 +204,6 @@ export interface CampaignGenerationProgress {
   total: number;
 }
 
-export interface SiteMapPage {
-  url: string;
-  title?: string;
-  pageType: string;
-  discovered: boolean;
-}
-
-export interface SiteMapData {
-  pages: SiteMapPage[];
-  totalDiscovered: number;
-  dataSource: string;
-}
-
 export interface CompetitorAdEntry {
   platform: "meta" | "google";
   advertiserName: string;
@@ -253,15 +218,9 @@ export interface CompetitorAdsData {
   dataSource: string;
 }
 
-/** Real citation URLs behind the research, keyed by the same ResearchContext field names
- * AgentEvidenceItem.source already uses (e.g. "market", "competitors") — lets the Agent
- * Reasoning panel show actual clickable sources instead of just a dataSource label.
- * siteMap/competitorAds are each provider's raw structured output — NavigationProvider isn't
- * wired into any agent's evidence trail, and AdLibraryProvider's ad list needs more than a
- * citation label to render, so both ride alongside citationsByField rather than through it. */
+/** AdLibraryProvider's real competitor ad list — the one field of this response the UI
+ * still consumes (Competitor Ads card). */
 export interface CampaignGenerationCitations {
-  citationsByField: Record<string, { url: string; title: string }[]>;
-  siteMap: SiteMapData | null;
   competitorAds: CompetitorAdsData | null;
 }
 

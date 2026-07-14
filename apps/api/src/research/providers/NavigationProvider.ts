@@ -1,4 +1,5 @@
-import { firecrawlMap, outageDataSource } from "../../infra/firecrawlClient.js";
+import { outageDataSource } from "../../infra/firecrawlClient.js";
+import { mapUrlWithFallback, sourceLabel } from "../../infra/scrapeFallback.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { NavigationData, NavigationPage, ProviderResult, ResearchProviderInput } from "../types/index.js";
 import { normalizeUrl, runProviderStep } from "./support.js";
@@ -33,7 +34,7 @@ export class NavigationProvider implements ResearchProvider<NavigationData> {
   async execute(input: ResearchProviderInput): Promise<ProviderResult<NavigationData>> {
     return runProviderStep(this.name, 1, input, async () => {
       const url = normalizeUrl(input.url);
-      const mapped = await firecrawlMap(url, { limit: MAX_PAGES });
+      const mapped = await mapUrlWithFallback(url, { limit: MAX_PAGES });
       if (mapped.outage) {
         return { status: "partial", data: { pages: [], totalDiscovered: 0, dataSource: outageDataSource(mapped.outage) } };
       }
@@ -48,7 +49,7 @@ export class NavigationProvider implements ResearchProvider<NavigationData> {
       const data: NavigationData = {
         pages,
         totalDiscovered: mapped.links.length,
-        dataSource: "Firecrawl site map (sitemap + link discovery)",
+        dataSource: sourceLabel(mapped.source, "site map (sitemap + link discovery)"),
       };
       return { status: pages.length > 0 ? "success" : "partial", data };
     });

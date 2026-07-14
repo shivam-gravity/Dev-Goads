@@ -779,3 +779,161 @@ model CrawlFact {
   @@index([crawlPageId])
   @@map("crawl_facts")
 }
+
+// ── AI Advertising Intelligence Platform: persistent Intelligence Layer ──
+// Everything below is additive on top of the existing Research -> Agents -> Strategy ->
+// Campaign pipeline (none of the models above are touched). See
+// research/company-knowledge/, research/competitor-intelligence/, research/ad-intelligence/,
+// research/creative-intelligence/, research/campaign-recommendation/.
+
+// The Company Knowledge Builder's persisted output — one current row per business, built
+// from ResearchContext + CrawlFact rows (not a fresh research call). Upserted on each
+// successful research run rather than versioned: ResearchJob already keeps the underlying
+// research history this is assembled from, so a separate history table would just duplicate it.
+model CompanyProfile {
+  id                  String   @id
+  businessId          String   @unique
+  workspaceId         String
+  sourceResearchJobId String?
+  data                Json     // overview, products, services, features, pricing, industries,
+                                // targetAudience, icp, personas, technology, positioning,
+                                // messaging, socialProof, faqs
+  generatedAt         DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("company_profiles")
+}
+
+// A relational competitor entity — research/competitor-intelligence/CompetitorIntelligenceEngine.ts
+// already discovers and enriches these; this table makes a competitor a queryable, rankable,
+// refreshable thing instead of only a Research Memory embedding blob (kind: "competitor-profile").
+model Competitor {
+  id                  String    @id
+  businessId          String
+  workspaceId         String
+  name                String
+  domain              String?
+  discoverySources    Json      // mirrors DiscoveredCompetitor.mentionedBy
+  status              String    @default("active") // active | archived
+  refreshIntervalDays Int       @default(30)
+  lastEnrichedAt      DateTime?
+  createdAt           DateTime  @default(now())
+
+  profiles CompetitorProfile[]
+  ads      CompetitorAd[]
+
+  @@index([businessId])
+  @@index([workspaceId])
+  @@unique([businessId, name])
+  @@map("competitors")
+}
+
+// One row per enrichment run — history preserved (never overwritten) so drift/trend across
+// runs is visible; "current" profile for a competitor = latest row by generatedAt. Mirrors
+// exactly what research/competitor-intelligence/enrichment.ts's enrichCompetitor() computes.
+model CompetitorProfile {
+  id                          String     @id
+  competitorId                String
+  competitor                  Competitor @relation(fields: [competitorId], references: [id])
+  positioning                 String
+  pricing                     String
+  targetAudience              String
+  valueProposition            String
+  strengths                   Json
+  weaknesses                  Json
+  technologyStack             Json
+  estimatedMarketingStrategy  String
+  marketShare                 String
+  estimatedAdBudget           String
+  differentiation             String
+  confidence                  Float
+  mentionedBySourceCount      Int
+  citations                   Json
+  generatedAt                 DateTime   @default(now())
+
+  @@index([competitorId])
+  @@index([competitorId, generatedAt])
+  @@map("competitor_profiles")
+}
+
+// One row per discovered ad, upserted on every refresh pass (competitor-ad-refresh queue) so
+// firstSeenAt/lastSeenAt/isActive reflect real observation history, not a single scrape.
+model CompetitorAd {
+  id                 String    @id
+  competitorId       String
+  competitor         Competitor @relation(fields: [competitorId], references: [id])
+  platform           String    // meta | google | linkedin | youtube | other
+  externalAdId       String
+  headline           String?
+  description        String?
+  cta                String?
+  imageUrl           String?
+  videoUrl           String?
+  landingPageUrl     String?
+  estimatedCountries Json      @default("[]")
+  language           String?
+  firstSeenAt        DateTime  @default(now())
+  lastSeenAt         DateTime  @default(now())
+  isActive           Boolean   @default(true)
+  rawSourceData      Json
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  creativeAnalysis AdCreativeAnalysis?
+
+  @@index([competitorId])
+  @@index([competitorId, isActive])
+  @@unique([competitorId, platform, externalAdId])
+  @@map("competitor_ads")
+}
+
+// Per-ad structured creative breakdown (research/creative-intelligence/AdCreativeAnalyzer.ts)
+// — distinct from CreativeIntelligenceEngine's per-COMPETITOR aggregate messaging analysis;
+// this is one LLM extraction pass per individual ad's actual headline/body/image/CTA.
+model AdCreativeAnalysis {
+  id               String       @id
+  competitorAdId   String       @unique
+  competitorAd     CompetitorAd @relation(fields: [competitorAdId], references: [id])
+  hook             String
+  painPoint        String
+  offer            String
+  emotionalTrigger String
+  cta              String
+  funnelStage      String
+  persona          String
+  creativeStyle    String
+  messagingStyle   String
+  confidence       Float
+  generatedAt      DateTime     @default(now())
+
+  @@map("ad_creative_analyses")
+}
+
+// The 6 ranked, fully-specified campaign packages the Campaign Recommendation Engine
+// (research/campaign-recommendation/CampaignRecommendationEngine.ts) assembles from
+// already-computed strategies/simulations + real agent creatives + the landing-page
+// recommendation — additive alongside (never replacing) the single Campaign the existing
+// pipeline still builds via buildCampaignFromStrategy.
+model CampaignRecommendation {
+  id                        String   @id
+  campaignGenerationJobId   String
+  rank                      Int      // 1-6
+  objective                 String
+  platform                  String
+  audience                  String
+  dailyBudgetCents          Int
+  campaignStructure         Json
+  adSets                    Json
+  creatives                 Json
+  headlines                 Json
+  primaryText               String
+  cta                       String
+  landingPageRecommendation String
+  confidenceScore           Float
+  explanation               String
+  generatedAt               DateTime @default(now())
+
+  @@index([campaignGenerationJobId])
+  @@unique([campaignGenerationJobId, rank])
+  @@map("campaign_recommendations")
+}

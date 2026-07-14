@@ -28,6 +28,7 @@ test("runDecisionEngine - with no OPENAI_API_KEY, still returns a fully-shaped D
       "recommendedCreativeDirection", "recommendedOffer", "pricingTiers", "notableCustomers", "quantifiedProofPoints",
       "regionalMarketDepth", "recommendedMessaging", "confidence", "evidence", "tradeoffs", "recommendations",
       "tradeoffAnalyses", "explainability", "strategies", "simulations", "generatedAt",
+      "swot", "marketGaps", "funnelStrategy", "mediaStrategy",
     ]) {
       assert.ok(key in decision, `missing top-level field ${key}`);
     }
@@ -39,6 +40,17 @@ test("runDecisionEngine - with no OPENAI_API_KEY, still returns a fully-shaped D
   } finally {
     global.fetch = original;
   }
+});
+
+test("runDecisionEngine - with no OPENAI_API_KEY, SWOT/market-gaps/funnel/media strategy degrade to labeled placeholders rather than being empty/undefined", async () => {
+  const decision = await runDecisionEngine(fakeContext());
+  assert.deepStrictEqual(decision.swot.strengths, ["Not yet researched"]);
+  assert.deepStrictEqual(decision.swot.weaknesses, ["Not yet researched"]);
+  assert.deepStrictEqual(decision.swot.opportunities, ["Not yet researched"]);
+  assert.deepStrictEqual(decision.swot.threats, ["Not yet researched"]);
+  assert.deepStrictEqual(decision.marketGaps, ["Not yet researched"]);
+  assert.strictEqual(decision.funnelStrategy, "Not yet researched");
+  assert.strictEqual(decision.mediaStrategy, "Not yet researched");
 });
 
 test("runDecisionEngine - recommendations arrive pre-ranked (descending finalScore) and every simulation references a real strategy id", async () => {

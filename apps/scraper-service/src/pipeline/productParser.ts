@@ -5,7 +5,7 @@ function hasType(node: Record<string, unknown>, type: string): boolean {
   return t === type || (Array.isArray(t) && t.includes(type));
 }
 
-function findProductNode(jsonLd: unknown[]): Record<string, unknown> | undefined {
+export function findProductNode(jsonLd: unknown[]): Record<string, unknown> | undefined {
   for (const node of jsonLd) {
     if (typeof node !== "object" || node === null) continue;
     const record = node as Record<string, unknown>;
@@ -20,13 +20,13 @@ function findProductNode(jsonLd: unknown[]): Record<string, unknown> | undefined
   return undefined;
 }
 
-function toPriceCents(price: unknown): number | undefined {
+export function toPriceCents(price: unknown): number | undefined {
   const value = typeof price === "string" ? Number(price) : typeof price === "number" ? price : undefined;
   if (value === undefined || !Number.isFinite(value)) return undefined;
   return Math.round(value * 100);
 }
 
-function firstOffer(offers: unknown): Record<string, unknown> | undefined {
+export function firstOffer(offers: unknown): Record<string, unknown> | undefined {
   if (Array.isArray(offers)) return (offers[0] as Record<string, unknown>) ?? undefined;
   if (typeof offers === "object" && offers !== null) return offers as Record<string, unknown>;
   return undefined;

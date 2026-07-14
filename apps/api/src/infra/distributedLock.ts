@@ -94,3 +94,36 @@ export async function withLock<T>(key: string, ttlMs: number, fn: () => Promise<
     await lock.release();
   }
 }
+
+export class LockWaitTimeoutError extends Error {
+  constructor(key: string, waitedMs: number) {
+    super(`Timed out after ${waitedMs}ms waiting for lock: ${key}`);
+    this.name = "LockWaitTimeoutError";
+  }
+}
+
+const LOCK_POLL_INTERVAL_MS = 500;
+
+/**
+ * Like withLock, but waits/retries for the lock instead of failing fast — for callers
+ * where a second concurrent request should queue behind the first (e.g. two browser tabs
+ * generating for the same business) rather than surface an error. Polls every
+ * LOCK_POLL_INTERVAL_MS until acquired or maxWaitMs elapses, then throws
+ * LockWaitTimeoutError — distinct from LockAlreadyHeldError, since here it's the wait
+ * that failed, not the mere fact something else was running.
+ */
+export async function withQueuedLock<T>(key: string, ttlMs: number, maxWaitMs: number, fn: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + maxWaitMs;
+  let lock = await acquireLock(key, ttlMs);
+  if (!lock) logger.info(`Waiting for lock ${key} (held by another run)...`);
+  while (!lock) {
+    if (Date.now() >= deadline) throw new LockWaitTimeoutError(key, maxWaitMs);
+    await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));
+    lock = await acquireLock(key, ttlMs);
+  }
+  try {
+    return await fn();
+  } finally {
+    await lock.release();
+  }
+}

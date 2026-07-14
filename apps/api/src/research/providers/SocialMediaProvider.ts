@@ -2,7 +2,7 @@ import { firecrawlScrape, firecrawlSearch } from "../../infra/firecrawlClient.js
 import { runStructured } from "../../infra/openaiClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProviderResult, ResearchProviderInput, SocialMediaData } from "../types/index.js";
-import { citationsToEvidence, hostnameOf, runProviderStep, webSearchThenStructure } from "./support.js";
+import { citationsToEvidence, hostnameOf, NO_CITATIONS_DATA_SOURCE, NO_SEARCH_DATA_SOURCE, runProviderStep, webSearchThenStructure } from "./support.js";
 
 const SOCIAL_DOMAINS = ["linkedin.com", "x.com", "twitter.com", "instagram.com", "facebook.com", "tiktok.com", "youtube.com"];
 const MAX_PROFILES = 4;
@@ -36,11 +36,12 @@ const SOCIAL_MEDIA_TOOL = {
 };
 
 /**
- * Real profile crawl first (Firecrawl search scoped to the major platforms + scrape of the
- * business's actual profile page(s) for bio/caption text), falling back to the original pure-LLM
- * web-search behavior when no real profile is found or Firecrawl isn't configured. Realistic
- * expectation: Instagram/TikTok/LinkedIn gate most content behind login even for Firecrawl, so
- * this typically improves bio/meta-tag grounding rather than full feed history.
+ * OpenAI's own web search first (costs no Firecrawl credit), falling back to a real profile
+ * crawl (Firecrawl search scoped to the major platforms + scrape of the business's actual
+ * profile page(s) for bio/caption text) only when the web-search leg didn't produce
+ * grounded results. Realistic expectation: Instagram/TikTok/LinkedIn gate most content
+ * behind login even for Firecrawl, so this typically improves bio/meta-tag grounding rather
+ * than full feed history.
  */
 export class SocialMediaProvider implements ResearchProvider<SocialMediaData> {
   readonly name = "social-media";
@@ -49,8 +50,6 @@ export class SocialMediaProvider implements ResearchProvider<SocialMediaData> {
   async execute(input: ResearchProviderInput): Promise<ProviderResult<SocialMediaData>> {
     return runProviderStep(this.name, 1, input, async () => {
       const query = input.businessName ?? hostnameOf(input.url).replace(/^www\./i, "").split(".")[0];
-      const grounded = await this.fromRealProfiles(query);
-      if (grounded) return grounded;
 
       const { status, data, citations } = await webSearchThenStructure<SocialMediaData>({
         maxTokens: 768,
@@ -63,6 +62,13 @@ export class SocialMediaProvider implements ResearchProvider<SocialMediaData> {
           dataSource: "",
         }),
       });
+
+      const isFallback = data.dataSource === NO_SEARCH_DATA_SOURCE || data.dataSource === NO_CITATIONS_DATA_SOURCE;
+      if (isFallback) {
+        const grounded = await this.fromRealProfiles(query);
+        if (grounded) return grounded;
+      }
+
       return { status, data, citations, evidence: citationsToEvidence(citations) };
     });
   }

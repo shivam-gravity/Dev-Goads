@@ -9,6 +9,7 @@ import { closeBrowser } from "./scraping/browser.js";
 import { scrapeProductUrl } from "./pipeline/scrapeWorker.js";
 import { classifyImages } from "./pipeline/imageWorker.js";
 import { parseProduct } from "./pipeline/productParser.js";
+import { productFromJsonLd } from "./pipeline/researchProductShape.js";
 import { normalizeProduct } from "./pipeline/llmNormalizer.js";
 import { indexAndFindSimilar } from "./pipeline/vectorIndex.js";
 import { generateAdCopy } from "./pipeline/creativeGenerator.js";
@@ -45,6 +46,35 @@ app.post("/products/scrape", asyncHandler(async (req, res) => {
     res.json(await scrapeProductUrl(parsed.data.url));
   } catch (err) {
     sendError(res, err, 422, "Failed to scrape product URL");
+  }
+}));
+
+/* ═══════════════════════════════════════════════
+   RESEARCH FALLBACK
+   Firecrawl fallback for apps/api's research providers (see
+   apps/api/src/infra/scrapeFallback.ts) — reuses the Scrape Worker's generic render+extract
+   pipeline directly, NOT the full product-import pipeline (no image classification/LLM
+   normalization — that's import-specific and would add needless OpenAI cost here).
+   ═══════════════════════════════════════════════ */
+
+const researchScrapeSchema = z.object({ url: z.string().min(1), wantProduct: z.boolean().optional() });
+
+app.post("/research/scrape", asyncHandler(async (req, res) => {
+  const parsed = researchScrapeSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const scraped = await scrapeProductUrl(parsed.data.url);
+    const product = parsed.data.wantProduct ? productFromJsonLd(scraped.jsonLd) : undefined;
+    res.json({
+      markdown: scraped.markdown,
+      html: scraped.html,
+      links: scraped.links,
+      screenshot: scraped.screenshot,
+      product,
+      metadata: { title: scraped.title, description: scraped.description, sourceURL: scraped.url, statusCode: scraped.statusCode },
+    });
+  } catch (err) {
+    sendError(res, err, 422, "Failed to scrape URL");
   }
 }));
 

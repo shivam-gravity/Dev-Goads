@@ -101,3 +101,5 @@ export const requireAdAccess = requireOwned("Ad", async (id) => {
   const viaAdSet = await workspaceOfAdSet(ad.adSetId);
   return viaAdSet.found ? viaAdSet : { found: true, workspaceId: null };
 });
+
+export const requireCompetitorAccess = requireOwned("Competitor", byOwnWorkspaceColumn(prisma.competitor));

@@ -1,10 +1,10 @@
-import { firecrawlScrape, outageDataSource } from "../../infra/firecrawlClient.js";
+import { outageDataSource } from "../../infra/firecrawlClient.js";
+import { scrapeUrlWithFallback, sourceLabel } from "../../infra/scrapeFallback.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProviderResult, ResearchProviderInput, SerpFeaturesData } from "../types/index.js";
 import { hostnameOf, runProviderStep } from "./support.js";
 
 const MAX_ITEMS = 8;
-const DATA_SOURCE = "Firecrawl scrape of a live Google search results page (best-effort — not an officially licensed data source)";
 
 /** People Also Ask + Related Searches, from ONE Firecrawl scrape of a live Google SERP —
  * deliberately one provider, not two, since both sections live on the same page; fetching it
@@ -20,7 +20,7 @@ export class GoogleSerpFeaturesProvider implements ResearchProvider<SerpFeatures
   async execute(input: ResearchProviderInput): Promise<ProviderResult<SerpFeaturesData>> {
     return runProviderStep(this.name, 1, input, async () => {
       const query = input.businessName ?? hostnameOf(input.url).replace(/^www\./i, "").split(".")[0];
-      const scraped = await firecrawlScrape(`https://www.google.com/search?q=${encodeURIComponent(query)}`, ["markdown"]);
+      const scraped = await scrapeUrlWithFallback(`https://www.google.com/search?q=${encodeURIComponent(query)}`, ["markdown"]);
       if (scraped.outage) {
         return { status: "partial", data: { peopleAlsoAsk: [], relatedSearches: [], dataSource: outageDataSource(scraped.outage) } };
       }
@@ -29,7 +29,8 @@ export class GoogleSerpFeaturesProvider implements ResearchProvider<SerpFeatures
       const peopleAlsoAsk = extractSection(markdown, /people also ask/i).filter((line) => line.endsWith("?")).slice(0, MAX_ITEMS);
       const relatedSearches = extractSection(markdown, /related searches/i).slice(0, MAX_ITEMS);
 
-      const data: SerpFeaturesData = { peopleAlsoAsk, relatedSearches, dataSource: DATA_SOURCE };
+      const dataSource = sourceLabel(scraped.source, "scrape of a live Google search results page (best-effort — not an officially licensed data source)");
+      const data: SerpFeaturesData = { peopleAlsoAsk, relatedSearches, dataSource };
       return { status: peopleAlsoAsk.length > 0 || relatedSearches.length > 0 ? "success" : "partial", data };
     });
   }

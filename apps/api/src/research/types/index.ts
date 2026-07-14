@@ -172,6 +172,9 @@ export interface AudienceData {
   procurementCycle?: string;
   /** Events/situations that prompt someone to start looking for this kind of product. */
   buyingTriggers?: string[];
+  /** The typical stages a buyer moves through from first awareness to becoming a customer,
+   * each with what's actually happening/needed at that stage. */
+  customerJourney?: { stage: string; description: string }[];
   dataSource: string;
 }
 

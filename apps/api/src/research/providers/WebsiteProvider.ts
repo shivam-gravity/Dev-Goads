@@ -1,5 +1,6 @@
 import { normalizeUrl } from "../../modules/onboarding/scraper.js";
-import { firecrawlCrawl, firecrawlScrape, outageDataSource } from "../../infra/firecrawlClient.js";
+import { firecrawlScrape, outageDataSource } from "../../infra/firecrawlClient.js";
+import { crawlUrlWithFallback, sourceLabel } from "../../infra/scrapeFallback.js";
 import { logger } from "../../modules/logger/logger.js";
 import { createCrawlJob, markCrawlJobFailed, persistCrawlPages } from "../crawl/crawlPersistence.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
@@ -7,7 +8,6 @@ import type { ProviderResult, ResearchProviderInput, WebsiteData } from "../type
 import { runProviderStep } from "./support.js";
 import type { ScrapedPage, ScrapedSite } from "../../types/index.js";
 
-const DATA_SOURCE = "Firecrawl multi-page crawl";
 const CRAWL_PAGE_LIMIT = 15;
 const MAX_EXCERPT_LENGTH = 6000;
 
@@ -31,12 +31,13 @@ function classifyPage(pageUrl: string, isEntry: boolean): string {
 }
 
 /**
- * Firecrawl-backed rewrite — was a hand-rolled cheerio crawl (modules/onboarding/scraper.ts),
- * now delegates the actual fetching/rendering to Firecrawl's `/crawl` (sitemap+link discovery,
- * JS rendering, proxy/anti-bot handling) while keeping this provider's own output shape and
- * CrawlJob/CrawlPage persistence exactly as before, so nothing downstream needs to change.
- * `scraper.ts` itself is untouched — its 7 other callers (onboarding analysis, SEOProvider,
- * competitor-intelligence enrichment, etc.) keep working exactly as today.
+ * Tries an in-house crawl first (reusing onboarding/scraper.ts's scrapeUrl — sitemap+link
+ * discovery, robots.txt compliance, a Playwright screenshot — with its own crawlCap/
+ * timeBudgetMs so this feature's tuning stays independent of onboarding's), falling
+ * through to Firecrawl's `/crawl` only when the in-house attempt fails or looks blocked.
+ * See scrapeFallback.ts's crawlUrlWithFallback for the fallback logic itself. Keeps this
+ * provider's own output shape and CrawlJob/CrawlPage persistence exactly as before either
+ * way, so nothing downstream needs to change based on which backend served the crawl.
  */
 export class WebsiteProvider implements ResearchProvider<WebsiteData> {
   readonly name = "website";
@@ -55,22 +56,33 @@ export class WebsiteProvider implements ResearchProvider<WebsiteData> {
         }
       }
 
-      const crawled = await firecrawlCrawl(url, { limit: CRAWL_PAGE_LIMIT, formats: ["markdown", "links"] });
+      const crawled = await crawlUrlWithFallback(url, { limit: CRAWL_PAGE_LIMIT, formats: ["markdown", "links"] });
       if (crawled.outage) {
         if (crawlJobId) await markCrawlJobFailed(crawlJobId, outageDataSource(crawled.outage)).catch(() => {});
         const outageData: WebsiteData = { title: "", description: "", excerpt: "", images: [], crawledPages: [], pagesDiscovered: 0, dataSource: outageDataSource(crawled.outage), crawlJobId };
         return { status: "partial", data: outageData };
       }
       if (crawled.pages.length === 0) {
-        if (crawlJobId) await markCrawlJobFailed(crawlJobId, "Firecrawl crawl returned no pages").catch(() => {});
-        throw new Error("Couldn't crawl that URL — Firecrawl returned no pages");
+        if (crawlJobId) await markCrawlJobFailed(crawlJobId, "Crawl returned no pages").catch(() => {});
+        throw new Error("Couldn't crawl that URL — no pages were returned");
       }
 
-      const screenshotResult = await firecrawlScrape(url, ["screenshot"]);
-      const screenshot = screenshotResult.outage ? undefined : (screenshotResult.data?.screenshot ?? undefined);
+      // The in-house crawl already captured a screenshot and a deduped image list of its
+      // own (via scrapeUrl's internal captureScreenshot/extractImages) — reusing those
+      // avoids a second, redundant Firecrawl screenshot call and avoids trying to derive
+      // images from per-page `links`, which in-house crawl pages don't populate.
+      let screenshot: string | undefined;
+      let images: string[];
+      if (crawled.source === "inhouse") {
+        screenshot = crawled.screenshot;
+        images = crawled.images ?? [];
+      } else {
+        const screenshotResult = await firecrawlScrape(url, ["screenshot"]);
+        screenshot = screenshotResult.outage ? undefined : (screenshotResult.data?.screenshot ?? undefined);
+        images = (crawled.pages[0].links ?? []).filter((link) => /\.(png|jpe?g|webp|gif|avif)(\?|$)/i.test(link)).slice(0, 8);
+      }
 
       const entryUrl = crawled.pages[0].metadata?.sourceURL ?? url;
-      const images = (crawled.pages[0].links ?? []).filter((link) => /\.(png|jpe?g|webp|gif|avif)(\?|$)/i.test(link)).slice(0, 8);
       const pages: ScrapedPage[] = crawled.pages.map((page, index) => {
         const pageUrl = page.metadata?.sourceURL ?? entryUrl;
         return {
@@ -113,7 +125,7 @@ export class WebsiteProvider implements ResearchProvider<WebsiteData> {
         crawledPages: site.crawledPages,
         pagesDiscovered: site.pagesDiscovered,
         screenshot: site.screenshot,
-        dataSource: DATA_SOURCE,
+        dataSource: sourceLabel(crawled.source, "multi-page crawl"),
         crawlJobId,
       };
       return {

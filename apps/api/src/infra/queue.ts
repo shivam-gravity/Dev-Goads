@@ -145,3 +145,24 @@ export const campaignGenerationQueue = new Queue(CAMPAIGN_GENERATION_QUEUE, {
     removeOnFail: { age: 7 * 24 * 60 * 60 },
   },
 });
+
+/**
+ * Powers the Competitor Ad Discovery refresh cycle (research/ad-intelligence/
+ * CompetitorAdDiscovery.ts): a single repeatable job (registered once by
+ * competitorAdRefreshWorker.ts at startup) fans out one ad-discovery pass per Competitor
+ * row due for refresh, same "one repeatable tick, per-entity fan-out inside the handler"
+ * pattern as METRICS_INGESTION_QUEUE. attempts: 2 (not 1) since a single competitor's ad
+ * discovery failing is cheap to retry (unlike campaign-generation/research-orchestrator,
+ * this never spends a whole research pipeline's worth of paid LLM calls per attempt).
+ */
+export const COMPETITOR_AD_REFRESH_QUEUE = "competitor-ad-refresh";
+
+export const competitorAdRefreshQueue = new Queue(COMPETITOR_AD_REFRESH_QUEUE, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: { type: "exponential", delay: 5000 },
+    removeOnComplete: { age: 24 * 60 * 60 },
+    removeOnFail: { age: 7 * 24 * 60 * 60 },
+  },
+});

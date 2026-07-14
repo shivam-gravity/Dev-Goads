@@ -13041,144 +13041,13 @@ td {
   background: var(--surface-tint);
 }
 
-/* ─── Agent reasoning panel (NewCampaign) — which data sources each of the 20 agents drew from ─── */
+/* ─── Competitor ads card (AdLibraryProvider) ─── */
 
-.agent-reasoning-section {
-  max-width: 780px;
-  margin: 18px auto 0;
-}
-
-.agent-reasoning-subline {
-  font-size: 12.5px;
-  color: var(--muted);
-  margin: 0 0 12px;
-}
-
-.agent-reasoning-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.agent-reasoning-row {
-  padding: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-}
-
-.agent-reasoning-row-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.agent-reasoning-name {
-  font-size: 13.5px;
-  font-weight: 700;
-  color: var(--text);
-  flex: 1;
-  min-width: 0;
-}
-
-.agent-reasoning-fallback-flag {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: #fef3c7;
-  color: #b45309;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.agent-reasoning-evidence {
-  margin-top: 6px;
-  font-size: 12.5px;
-}
-
-.agent-reasoning-evidence summary {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--accent);
-  cursor: pointer;
-  list-style: none;
-}
-
-.agent-reasoning-evidence summary::-webkit-details-marker {
-  display: none;
-}
-
-.agent-reasoning-evidence summary::before {
-  content: "▸ ";
-}
-
-.agent-reasoning-evidence[open] summary::before {
-  content: "▾ ";
-}
-
-.agent-reasoning-evidence ul {
-  margin: 8px 0 0;
-  padding-left: 18px;
-  color: var(--muted);
-  line-height: 1.7;
-}
-
-.agent-reasoning-evidence li strong {
-  color: var(--text);
-}
-
-.agent-reasoning-citations {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-left: 6px;
-  vertical-align: middle;
-}
-
-.agent-reasoning-citations a {
-  color: var(--accent);
-  text-decoration: none;
-  font-weight: 700;
-  font-size: 11.5px;
-  background: var(--surface-tint);
-  border-radius: 5px;
-  padding: 1px 5px;
-}
-
-.agent-reasoning-citations a:hover {
-  text-decoration: underline;
-}
-
-.agent-reasoning-citations-more {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--muted);
-  background: none;
-  border: 1px dashed var(--border);
-  border-radius: 5px;
-  padding: 1px 6px;
-  cursor: pointer;
-  box-shadow: none;
-}
-
-.agent-reasoning-citations-more:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  transform: none;
-  box-shadow: none;
-}
-
-/* ─── Site map card (NavigationProvider) + Competitor ads card (AdLibraryProvider) ─── */
-
-.site-map-card,
 .competitor-ads-card {
   max-width: 780px;
   margin: 14px auto 0;
 }
 
-.site-map-list,
 .competitor-ads-list {
   display: flex;
   flex-direction: column;
@@ -13186,54 +13055,6 @@ td {
   margin: 0;
   padding: 0;
   list-style: none;
-}
-
-.site-map-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  font-size: 12.5px;
-}
-
-.site-map-type-badge {
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--border);
-  color: var(--muted);
-  flex-shrink: 0;
-}
-
-.site-map-type-pricing { background: #dbeafe; color: #1d4ed8; }
-.site-map-type-product { background: #dcfce7; color: #15803d; }
-.site-map-type-about { background: #fef3c7; color: #b45309; }
-.site-map-type-features { background: #ede9fe; color: #6d28d9; }
-
-.site-map-url {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.site-map-url:hover {
-  text-decoration: underline;
-}
-
-.site-map-crawled-flag {
-  color: #15803d;
-  font-weight: 700;
-  flex-shrink: 0;
 }
 
 .competitor-ad-row {

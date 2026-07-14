@@ -2,7 +2,7 @@ import { firecrawlScrape, firecrawlSearch } from "../../infra/firecrawlClient.js
 import { runStructured } from "../../infra/openaiClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProviderResult, ResearchProviderInput, ReviewsData } from "../types/index.js";
-import { citationsToEvidence, hostnameOf, runProviderStep, webSearchThenStructure } from "./support.js";
+import { citationsToEvidence, hostnameOf, NO_CITATIONS_DATA_SOURCE, NO_SEARCH_DATA_SOURCE, runProviderStep, webSearchThenStructure } from "./support.js";
 
 const REVIEW_SITES = ["g2.com", "capterra.com", "trustradius.com"];
 const MAX_PROFILES = 3;
@@ -25,10 +25,11 @@ const REVIEWS_TOOL = {
 };
 
 /**
- * Real review-site crawl first (Firecrawl search scoped to G2/Capterra/TrustRadius + scrape of
- * the business's actual profile page(s), so praise/complaints come from verbatim review text),
- * falling back to the original pure-LLM-web-search behavior when no real profile is found or
- * Firecrawl isn't configured — same field/shape either way, so nothing downstream changes.
+ * OpenAI's own web search first (costs no Firecrawl credit), falling back to a real
+ * review-site crawl (Firecrawl search scoped to G2/Capterra/TrustRadius + scrape of the
+ * business's actual profile page(s), so praise/complaints come from verbatim review text)
+ * only when the web-search leg didn't produce grounded results — same field/shape either
+ * way, so nothing downstream changes regardless of which leg served the result.
  */
 export class ReviewsProvider implements ResearchProvider<ReviewsData> {
   readonly name = "reviews";
@@ -37,8 +38,6 @@ export class ReviewsProvider implements ResearchProvider<ReviewsData> {
   async execute(input: ResearchProviderInput): Promise<ProviderResult<ReviewsData>> {
     return runProviderStep(this.name, 1, input, async () => {
       const query = input.businessName ?? hostnameOf(input.url).replace(/^www\./i, "").split(".")[0];
-      const grounded = await this.fromRealReviewSites(query);
-      if (grounded) return grounded;
 
       const { status, data, citations } = await webSearchThenStructure<ReviewsData>({
         maxTokens: 768,
@@ -52,6 +51,13 @@ export class ReviewsProvider implements ResearchProvider<ReviewsData> {
           dataSource: "",
         }),
       });
+
+      const isFallback = data.dataSource === NO_SEARCH_DATA_SOURCE || data.dataSource === NO_CITATIONS_DATA_SOURCE;
+      if (isFallback) {
+        const grounded = await this.fromRealReviewSites(query);
+        if (grounded) return grounded;
+      }
+
       return { status, data, citations, evidence: citationsToEvidence(citations) };
     });
   }

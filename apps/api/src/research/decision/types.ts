@@ -156,6 +156,17 @@ export interface EnrichmentData {
   regionalMarketDepth: RegionalMarketDepth | null;
 }
 
+/** Strengths/weaknesses are about THIS business; opportunities/threats are about the
+ * market/competitive landscape around it — the standard 4-quadrant framing, synthesized
+ * from the same ranked recommendations + market/competitor signals every other narrative
+ * field in DecisionContext already draws from (see decision-engine.ts's synthesizeSummary). */
+export interface SwotAnalysis {
+  strengths: string[];
+  weaknesses: string[];
+  opportunities: string[];
+  threats: string[];
+}
+
 export interface DecisionContext {
   businessSummary: string;
   /** Above-the-fold screenshot of the analyzed page, when the scraper-service was reachable
@@ -186,6 +197,14 @@ export interface DecisionContext {
   recommendedCreativeDirection: string;
   recommendedOffer: string;
   recommendedMessaging: string;
+  /** The 4-quadrant strategic read on this business relative to its market/competitors. */
+  swot: SwotAnalysis;
+  /** Underserved needs/segments/angles no competitor is credibly covering yet. */
+  marketGaps: string[];
+  /** How prospects should be moved from first awareness through to conversion/retention. */
+  funnelStrategy: string;
+  /** Which channels/platforms to prioritize and why, given the research above. */
+  mediaStrategy: string;
   /** 0-1 overall confidence in this DecisionContext. */
   confidence: number;
   evidence: string[];

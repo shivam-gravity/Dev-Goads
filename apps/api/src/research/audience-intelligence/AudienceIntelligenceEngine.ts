@@ -49,6 +49,12 @@ export interface BuyingCommitteeRole {
   influence: string;
 }
 
+/** One stage of the path from first awareness to becoming a customer. */
+export interface CustomerJourneyStage {
+  stage: string;
+  description: string;
+}
+
 export interface AudienceIntelligenceReport {
   icp: IdealCustomerProfile;
   decisionMakers: string[];
@@ -64,6 +70,8 @@ export interface AudienceIntelligenceReport {
   budgetOwner: string;
   /** Typical steps/duration from first evaluation to signed deal. */
   procurementCycle: string;
+  /** The stages a buyer moves through from first awareness to becoming a customer. */
+  customerJourney: CustomerJourneyStage[];
   evidence: string[];
   citations: Citation[];
   confidence: number;
@@ -131,8 +139,19 @@ const AUDIENCE_TOOL = {
       decisionHierarchy: { type: "string", description: "How the buying committee's roles relate/report to each other for this kind of purchase" },
       budgetOwner: { type: "string", description: "The role that actually controls/signs off on budget for this kind of purchase" },
       procurementCycle: { type: "string", description: "Typical steps/duration from first evaluation to signed deal" },
+      customerJourney: {
+        type: "array",
+        minItems: 3,
+        maxItems: 6,
+        items: {
+          type: "object",
+          properties: { stage: { type: "string", description: "e.g. \"Awareness\", \"Consideration\", \"Evaluation\", \"Decision\", \"Onboarding\"" }, description: { type: "string", description: "What's actually happening/needed at this stage for this audience" } },
+          required: ["stage", "description"],
+        },
+        description: "The stages a buyer moves through from first awareness to becoming a customer",
+      },
     },
-    required: ["icp", "decisionMakers", "buyingTriggers", "painPoints", "objections", "motivations", "channels", "buyingCommittee", "decisionHierarchy", "budgetOwner", "procurementCycle"],
+    required: ["icp", "decisionMakers", "buyingTriggers", "painPoints", "objections", "motivations", "channels", "buyingCommittee", "decisionHierarchy", "budgetOwner", "procurementCycle", "customerJourney"],
   },
 };
 
@@ -155,6 +174,7 @@ function fallbackFields(businessName: string): AudienceFields {
     decisionHierarchy: "Unknown — no live research performed.",
     budgetOwner: "Unknown — no live research performed.",
     procurementCycle: "Unknown — no live research performed.",
+    customerJourney: [],
   };
 }
 
@@ -172,7 +192,7 @@ function computeConfidence(usedFallback: boolean, citationCount: number, hadMemo
 async function searchAudienceSignals(input: AudienceIntelligenceInput): Promise<{ narrative: string; citations: Citation[] }> {
   const subject = input.businessName ?? hostnameOf(input.url);
   const research = await runWebSearch(
-    `Who is the target audience/ideal customer profile for the business at ${input.url}${input.businessName ? ` ("${input.businessName}")` : ""} in ${input.industry ?? "its category"}? Include likely decision-maker roles and their relative influence (buying committee), the decision-making hierarchy, who typically owns/controls budget, the typical procurement cycle, what triggers someone to buy, and how they'd typically be reached.`
+    `Who is the target audience/ideal customer profile for the business at ${input.url}${input.businessName ? ` ("${input.businessName}")` : ""} in ${input.industry ?? "its category"}? Include likely decision-maker roles and their relative influence (buying committee), the decision-making hierarchy, who typically owns/controls budget, the typical procurement cycle, what triggers someone to buy, how they'd typically be reached, and the stages a buyer typically moves through from first awareness to becoming a customer.`
   );
   return { narrative: research.narrative, citations: research.citations };
 }

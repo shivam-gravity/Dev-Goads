@@ -1,4 +1,5 @@
-import { firecrawlMap, firecrawlScrape, outageDataSource } from "../../infra/firecrawlClient.js";
+import { outageDataSource } from "../../infra/firecrawlClient.js";
+import { mapUrlWithFallback, scrapeUrlWithFallback, sourceLabel, type ScrapeSource } from "../../infra/scrapeFallback.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProductData, ProductEntry, ProviderResult, ResearchProviderInput } from "../types/index.js";
 import { normalizeUrl, runProviderStep } from "./support.js";
@@ -18,7 +19,7 @@ export class ProductProvider implements ResearchProvider<ProductData> {
   async execute(input: ResearchProviderInput): Promise<ProviderResult<ProductData>> {
     return runProviderStep(this.name, 1, input, async () => {
       const url = normalizeUrl(input.url);
-      const mapped = await firecrawlMap(url, { limit: 50 });
+      const mapped = await mapUrlWithFallback(url, { limit: 50 });
       if (mapped.outage) {
         return { status: "partial", data: { products: [], dataSource: outageDataSource(mapped.outage) } };
       }
@@ -27,9 +28,11 @@ export class ProductProvider implements ResearchProvider<ProductData> {
       const pagesToScrape = candidatePages.length > 0 ? candidatePages : [{ url }];
 
       const products: ProductEntry[] = [];
+      let lastSource: ScrapeSource = mapped.source;
       for (const page of pagesToScrape) {
-        const scraped = await firecrawlScrape(page.url, [{ type: "product" }]);
+        const scraped = await scrapeUrlWithFallback(page.url, [{ type: "product" }]);
         if (scraped.outage) break;
+        lastSource = scraped.source;
         const p = scraped.data?.product;
         if (!p) continue;
         for (const variant of p.variants ?? []) {
@@ -47,8 +50,8 @@ export class ProductProvider implements ResearchProvider<ProductData> {
 
       const dataSource =
         products.length > 0
-          ? `Firecrawl product extraction (${candidatePages.length > 0 ? "pricing/product pages" : "homepage"})`
-          : "Firecrawl found no structured product/pricing data on this site";
+          ? sourceLabel(lastSource, `product extraction (${candidatePages.length > 0 ? "pricing/product pages" : "homepage"})`)
+          : "No structured product/pricing data found on this site";
 
       return { status: products.length > 0 ? "success" : "partial", data: { products, dataSource } };
     });

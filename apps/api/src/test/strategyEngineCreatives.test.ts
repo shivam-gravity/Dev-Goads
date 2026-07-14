@@ -1,6 +1,6 @@
 import { test, after } from "node:test";
 import assert from "node:assert";
-import { createStrategyFromAgentResults } from "../modules/strategy/strategyEngine.js";
+import { createStrategyFromAgentResults, createStrategyFromResearch, type ResearchStrategyInput } from "../modules/strategy/strategyEngine.js";
 import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
 import type { CampaignAgentOutput, ComplianceAgentOutput, ObjectionHandlingAgentOutput, PricingOfferAgentOutput } from "../agents/types/index.js";
 import type { DecisionContext } from "../research/decision/types.js";
@@ -28,7 +28,9 @@ function fakeDecisionContext(overrides: Partial<DecisionContext> = {}): Decision
     recommendedPositioning: "n/a", recommendedAudiencePriority: "n/a", recommendedChannels: [],
     recommendedBudgetAllocation: {}, recommendedDailyBudgetCents: 0, budgetReasoning: [],
     recommendedCreativeDirection: "n/a", recommendedOffer: "n/a",
-    recommendedMessaging: "n/a", confidence: 0.5, evidence: [], tradeoffs: [],
+    recommendedMessaging: "n/a",
+    swot: { strengths: [], weaknesses: [], opportunities: [], threats: [] }, marketGaps: [], funnelStrategy: "n/a", mediaStrategy: "n/a",
+    confidence: 0.5, evidence: [], tradeoffs: [],
     recommendations: [], tradeoffAnalyses: [], explainability: [], strategies: [], simulations: [],
     generatedAt: "now",
     ...overrides,
@@ -61,7 +63,7 @@ test("createStrategyFromAgentResults - falls back to the agent's own budget/netw
   assert.deepStrictEqual(strategy.recommendedNetworks, ["meta", "google"]);
 });
 
-test("createStrategyFromAgentResults - the Decision Engine's ranked/simulated budget allocation overrides the agent's own budgetSplit and networks", async () => {
+test("createStrategyFromAgentResults - the Decision Engine's ranked/simulated budget allocation overrides the agent's own budgetSplit and networks, but Meta/Google are always both guaranteed present", async () => {
   const agentOutput = fakeAgentOutput(8);
   agentOutput.budgetSplit = { meta: 1 };
   agentOutput.recommendedNetworks = ["meta"];
@@ -73,15 +75,14 @@ test("createStrategyFromAgentResults - the Decision Engine's ranked/simulated bu
   const strategy = await createStrategyFromAgentResults(`biz_decision_${Date.now()}`, agentOutput, decisionContext);
 
   assert.deepStrictEqual(
-    strategy.budgetSplit,
-    { google: 0.6, tiktok: 0.4 },
-    "the Decision Engine's simulated allocation must win over the agent's own single-pass guess"
-  );
-  assert.deepStrictEqual(
     strategy.recommendedNetworks.slice().sort(),
-    ["google", "tiktok"],
-    "recommendedNetworks must match the Decision Engine's channels, not the agent's (meta)"
+    ["google", "meta", "tiktok"],
+    "the Decision Engine's channels (google/tiktok) win, but meta is always added — the campaign builder must never suggest only one network"
   );
+  // google/tiktok keep their 0.6/0.4 relative weighting from the Decision Engine; meta (added
+  // only to guarantee coverage) gets an even share of the remaining space, then everything
+  // renormalizes to sum to 1: google 0.45, tiktok 0.3, meta 0.25.
+  assert.deepStrictEqual(strategy.budgetSplit, { google: 0.45, tiktok: 0.3, meta: 0.25 });
 });
 
 test("createStrategyFromAgentResults - the Decision Engine's audience priority leads the audience list, without dropping the agent's own audiences", async () => {
@@ -105,6 +106,37 @@ test("createStrategyFromAgentResults - a decisionContext with an empty budget al
   const strategy = await createStrategyFromAgentResults(`biz_empty_decision_${Date.now()}`, agentOutput, decisionContext);
 
   assert.deepStrictEqual(strategy.budgetSplit, { meta: 0.5, google: 0.5 });
+});
+
+test("createStrategyFromAgentResults - Meta and Google are always both suggested, even when the agent and Decision Engine only ever named one network", async () => {
+  const agentOutput = fakeAgentOutput(8);
+  agentOutput.budgetSplit = { google: 1 };
+  agentOutput.recommendedNetworks = ["google"];
+
+  const strategy = await createStrategyFromAgentResults(`biz_google_only_${Date.now()}`, agentOutput);
+
+  assert.ok(strategy.recommendedNetworks.includes("meta"), "meta must always be suggested alongside whatever the agent picked");
+  assert.ok(strategy.recommendedNetworks.includes("google"));
+  assert.ok((strategy.budgetSplit.meta ?? 0) > 0, "meta must get a real, non-zero budget share, not just appear with 0");
+  const sum = Object.values(strategy.budgetSplit).reduce((s, v) => s + (v ?? 0), 0);
+  assert.ok(Math.abs(sum - 1) < 0.01, `budgetSplit must still sum to ~1, got ${sum}`);
+});
+
+test("createStrategyFromResearch - Meta and Google are always both suggested even though marketLocation only ever names one recommendedPlatform", async () => {
+  const input: ResearchStrategyInput = {
+    product: { productName: "Widget Pro", category: "Widgets", summary: "A widget.", valueProposition: "Fast widgets.", keyFeatures: ["Fast"] },
+    audience: { primaryAudience: "SMB owners", segments: [], painPoints: [], buyingMotivations: [] },
+    competitorBudget: { competitors: [], competitionIntensity: "Moderate", differentiators: [], budgetReasoning: [], recommendedDailyBudgetCents: 5000, dataSource: "test" },
+    marketLocation: { recommendedRegion: "US", alternativeRegions: [], marketTrends: "Growing", competitionLevel: "Moderate", recommendedPlatform: "google", placementRationale: "Search intent is high.", dataSource: "test" },
+    personas: [],
+  };
+
+  const strategy = await createStrategyFromResearch(`biz_research_google_${Date.now()}`, input);
+
+  assert.ok(strategy.recommendedNetworks.includes("meta"), "meta must be added even though recommendedPlatform was google-only");
+  assert.ok(strategy.recommendedNetworks.includes("google"));
+  const sum = Object.values(strategy.budgetSplit).reduce((s, v) => s + (v ?? 0), 0);
+  assert.ok(Math.abs(sum - 1) < 0.01, `budgetSplit must sum to ~1, got ${sum}`);
 });
 
 test("createStrategyFromAgentResults - without extras, behavior is identical to before (no compliance field, no extra creatives beyond the agent's own)", async () => {

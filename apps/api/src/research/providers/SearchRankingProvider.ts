@@ -20,13 +20,17 @@ export class SearchRankingProvider implements ResearchProvider<SearchRankingData
       for (const query of queries) {
         const result = await firecrawlSearch(query, { limit: 10, sources: ["web"] });
         if (result.outage) {
+          // Keep whatever rankings an earlier query in this loop already collected —
+          // an outage on the SECOND query shouldn't discard real results the FIRST query
+          // already returned. Only treated as a true outage below if nothing was collected
+          // at all across every query.
           outageSeen = outageDataSource(result.outage);
           break;
         }
         result.web.forEach((r, index) => rankings.push({ query, position: index + 1, title: r.title, url: r.url }));
       }
 
-      if (outageSeen) {
+      if (outageSeen && rankings.length === 0) {
         return { status: "partial", data: { rankings: [], dataSource: outageSeen } };
       }
 

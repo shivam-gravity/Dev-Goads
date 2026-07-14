@@ -26,6 +26,16 @@ export interface ScrapedProduct {
   domSnapshot: string;
   // base64 data URI of an above-the-fold viewport capture.
   screenshot: string;
+  // Same-origin + cross-origin anchor hrefs found on the rendered page, deduped —
+  // populated for every scrape; only the research-fallback consumer (apps/api's
+  // scrapeFallback.ts) reads it today, the product-import pipeline doesn't.
+  links: string[];
+  // `html` converted to Markdown via turndown — lets Firecrawl-fallback consumers
+  // that regex/LLM-prompt against a `.markdown` field keep their existing parsing
+  // logic unchanged regardless of which backend served the scrape.
+  markdown: string;
+  // HTTP status of the final navigation response, when available.
+  statusCode?: number;
 }
 
 // Output of the Image Worker — the Scrape Worker's raw candidates, validated

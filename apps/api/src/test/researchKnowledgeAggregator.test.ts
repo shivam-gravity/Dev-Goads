@@ -61,6 +61,61 @@ test("KnowledgeAggregator - maps each provider's valid data onto its ResearchCon
   assert.deepStrictEqual(context.metadata.fusion?.conflicts, []);
 });
 
+test("KnowledgeAggregator - maps all 7 Firecrawl-backed crawler-batch providers onto their ResearchContext fields", () => {
+  const context = aggregateResearch({
+    jobId: "job-crawler-batch",
+    workspaceId: "ws-1",
+    url: "https://example.com",
+    results: [
+      result("product", "success", { products: [{ name: "Widget Pro", features: ["fast"] }], dataSource: "firecrawl" }),
+      result("navigation", "success", { pages: [{ url: "https://example.com/pricing", pageType: "pricing", discovered: true }], totalDiscovered: 1, dataSource: "firecrawl" }),
+      result("search-ranking", "success", { rankings: [{ query: "widgets", position: 1, title: "Widget Pro", url: "https://example.com" }], dataSource: "firecrawl" }),
+      result("ad-library", "success", { ads: [{ platform: "meta", advertiserName: "Example Inc", sourceUrl: "https://facebook.com/ads/1" }], dataSource: "meta" }),
+      result("autocomplete", "success", { suggestions: ["widgets near me"], dataSource: "autocomplete" }),
+      result("serp-features", "success", { peopleAlsoAsk: ["what is a widget"], relatedSearches: ["gadgets"], dataSource: "serp" }),
+      result("reddit", "success", { threads: [{ title: "Anyone use Widget Pro?", url: "https://reddit.com/r/widgets/1", sentiment: "positive" }], summary: "Mostly positive", dataSource: "reddit" }),
+    ],
+  });
+
+  assert.strictEqual(context.product?.products[0]?.name, "Widget Pro");
+  assert.strictEqual(context.navigation?.pages[0]?.pageType, "pricing");
+  assert.strictEqual(context.searchRanking?.rankings[0]?.position, 1);
+  assert.strictEqual(context.adLibrary?.ads[0]?.advertiserName, "Example Inc");
+  assert.strictEqual(context.autocomplete?.suggestions[0], "widgets near me");
+  assert.strictEqual(context.serpFeatures?.peopleAlsoAsk[0], "what is a widget");
+  assert.strictEqual(context.communityDiscussion?.threads[0]?.sentiment, "positive");
+});
+
+test("KnowledgeAggregator - preserves audience's decision-maker/buying-committee/customer-journey fields instead of silently stripping them", () => {
+  const context = aggregateResearch({
+    jobId: "job-audience-fields",
+    workspaceId: "ws-1",
+    url: "https://example.com",
+    results: [
+      result("audience", "success", {
+        primaryAudience: "B2B SaaS buyers",
+        segments: [{ name: "IT Directors", description: "Evaluate tooling" }],
+        painPoints: ["Slow onboarding"],
+        interestTags: ["saas"],
+        buyingCommittee: [{ role: "IT Director", influence: "Final approver" }],
+        decisionHierarchy: "IT Director reports to VP Eng",
+        budgetOwner: "VP Engineering",
+        procurementCycle: "6-8 weeks",
+        buyingTriggers: ["New fiscal year budget"],
+        customerJourney: [{ stage: "Awareness", description: "Finds via search" }],
+        dataSource: "search",
+      }),
+    ],
+  });
+
+  assert.strictEqual(context.audience?.buyingCommittee?.[0]?.role, "IT Director");
+  assert.strictEqual(context.audience?.decisionHierarchy, "IT Director reports to VP Eng");
+  assert.strictEqual(context.audience?.budgetOwner, "VP Engineering");
+  assert.strictEqual(context.audience?.procurementCycle, "6-8 weeks");
+  assert.strictEqual(context.audience?.buyingTriggers?.[0], "New fiscal year budget");
+  assert.strictEqual(context.audience?.customerJourney?.[0]?.stage, "Awareness");
+});
+
 test("KnowledgeAggregator - a failed provider becomes a null field and lands in providersFailed", () => {
   const context = aggregateResearch({
     jobId: "job-2",
