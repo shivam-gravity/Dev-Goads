@@ -44,7 +44,7 @@ export class LandingPageAgent implements AIAgent<LandingPageAgentOutput> {
   async execute(context: ResearchContext): Promise<AgentResult<LandingPageAgentOutput>> {
     return runAgentStep(this.name, async () => {
       const fields = ["website", "audience"] as const;
-      const { data, promptVersion, usedFallback } = await callAgentModel({
+      const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           website: JSON.stringify(context.website ?? {}),
@@ -60,6 +60,7 @@ export class LandingPageAgent implements AIAgent<LandingPageAgentOutput> {
         promptId: this.promptId,
         promptVersion,
         usedFallback,
+        modelSource,
         confidence: computeConfidence(context, [...fields], usedFallback),
         evidence: collectEvidence(context, [...fields]),
       };

@@ -10,6 +10,7 @@ import { getMetaCredentials } from "../integrations/integrationService.js";
 import { getGoogleAdsCredentials } from "../integrations/googleOAuth.js";
 import type { AdNetwork, Campaign, CampaignSuggestion, CampaignVariant, CreativeAssetRef } from "../../types/index.js";
 import { getStrategy } from "../strategy/strategyEngine.js";
+import { applyCopyLimitsForNetwork } from "../strategy/platformCopyLimits.js";
 import { getBusiness } from "../business/businessService.js";
 import { eventBus } from "../../infra/eventBus.js";
 
@@ -61,6 +62,10 @@ export async function buildCampaignFromStrategy(strategyId: string, name: string
   const baseUrl = business?.website?.replace(/\/$/, "") ?? "https://example.com";
 
   let variantIndex = 0;
+  // Each creative is shared across every recommended network above — applying each
+  // network's real copy limits here (rather than reusing one Meta-shaped 40-char headline
+  // verbatim on Google/TikTok too) is what actually makes the final launched ad respect
+  // that network's real format instead of just its generation-time upper bound.
   const variants: CampaignVariant[] = strategy.creatives.flatMap((creative) =>
     strategy.recommendedNetworks.map((network) => {
       const audienceName = strategy.audiences[variantIndex % strategy.audiences.length] ?? "General Audience";
@@ -68,7 +73,7 @@ export async function buildCampaignFromStrategy(strategyId: string, name: string
       variantIndex++;
       return {
         id: randomUUID(),
-        creative,
+        creative: applyCopyLimitsForNetwork(creative, network),
         network,
         status: "draft" as const,
         audienceName,

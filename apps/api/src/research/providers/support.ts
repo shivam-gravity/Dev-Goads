@@ -1,7 +1,17 @@
-import { openai, runStructured, runWebSearch, type JsonSchemaTool } from "../../infra/openaiClient.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { openai, runWebSearch, type JsonSchemaTool } from "../../infra/openaiClient.js";
+import * as llmRouter from "../../infra/llmRouter.js";
+import { resolveTaskModel } from "../../infra/llmTaskConfig.js";
 import { withSpan } from "../../infra/telemetry.js";
 import type { Citation } from "../../types/index.js";
 import type { ProviderResult, ResearchEvidenceItem, ResearchProviderStatus } from "../types/index.js";
+
+// Carries the currently-executing provider's name across the async chain from
+// runProviderStep down into webSearchThenStructure, without threading a parameter through
+// every one of the ~27 providers that call it — runProviderStep (below) is already the one
+// wrapper every provider's execute() calls with its own name, so stamping it here once is
+// enough for the whole layer.
+const currentProviderName = new AsyncLocalStorage<string>();
 
 interface ProviderOutcome<T> {
   status: ResearchProviderStatus;
@@ -10,6 +20,10 @@ interface ProviderOutcome<T> {
   evidence?: ResearchEvidenceItem[];
   error?: string;
 }
+
+// Excluded from the word-level fallback in isRelevantCitation below — generic enough (legal
+// suffixes, filler words) that matching on them alone would call almost any citation "relevant."
+const CITATION_KEYWORD_FILLER_WORDS = new Set(["the", "demo", "inc", "llc", "ltd", "co", "corp", "corporation", "company"]);
 
 /**
  * A citation counts as "relevant" if it's actually traceable to the target business —
@@ -23,7 +37,7 @@ interface ProviderOutcome<T> {
  * count-only heuristic scored as if it were real grounding — see isRelevantCitation's
  * caller below for how that's now penalized rather than rewarded.
  */
-function isRelevantCitation(citation: { url?: string; title?: string }, target: { url: string; businessName?: string }): boolean {
+export function isRelevantCitation(citation: { url?: string; title?: string }, target: { url: string; businessName?: string }): boolean {
   const targetHost = hostnameOf(target.url).replace(/^www\./i, "").toLowerCase();
   const keyword = (target.businessName ?? targetHost.split(".")[0]).toLowerCase().trim();
   const citationHost = citation.url ? hostnameOf(citation.url).replace(/^www\./i, "").toLowerCase() : "";
@@ -31,6 +45,15 @@ function isRelevantCitation(citation: { url?: string; title?: string }, target: 
 
   if (citationHost && citationHost === targetHost) return true;
   if (keyword.length >= 3 && title.includes(keyword)) return true;
+
+  // Full-phrase match above is the strongest signal, but a multi-word businessName
+  // ("Polluxa Demo Business") rarely appears verbatim in a citation title ("Polluxa |
+  // LinkedIn") — fall back to matching any significant word from it, so a real business
+  // isn't scored as "no relevant citations" just for having a longer name than what
+  // sources actually call it.
+  const significantWords = keyword.split(/\s+/).filter((word) => word.length >= 3 && !CITATION_KEYWORD_FILLER_WORDS.has(word));
+  if (significantWords.some((word) => title.includes(word))) return true;
+
   return false;
 }
 
@@ -104,38 +127,40 @@ export async function runProviderStep<T>(
   target: { url: string; businessName?: string },
   fn: () => Promise<ProviderOutcome<T>>
 ): Promise<ProviderResult<T>> {
-  const startedAt = new Date().toISOString();
-  const start = Date.now();
-  try {
-    const outcome = await withSpan(`research.provider.${name}`, fn, { "research.provider.attempt": attempt });
-    return {
-      provider: name,
-      status: outcome.status,
-      data: outcome.data,
-      citations: outcome.citations ?? [],
-      evidence: outcome.evidence ?? [],
-      startedAt,
-      completedAt: new Date().toISOString(),
-      durationMs: Date.now() - start,
-      attempt,
-      error: outcome.error,
-      confidence: computeConfidence({ status: outcome.status, data: outcome.data, citations: outcome.citations, evidence: outcome.evidence, attempt }, target),
-    };
-  } catch (err) {
-    return {
-      provider: name,
-      status: "failed",
-      data: null,
-      citations: [],
-      evidence: [],
-      startedAt,
-      completedAt: new Date().toISOString(),
-      durationMs: Date.now() - start,
-      attempt,
-      error: err instanceof Error ? err.message : String(err),
-      confidence: 0,
-    };
-  }
+  return currentProviderName.run(name, async () => {
+    const startedAt = new Date().toISOString();
+    const start = Date.now();
+    try {
+      const outcome = await withSpan(`research.provider.${name}`, fn, { "research.provider.attempt": attempt });
+      return {
+        provider: name,
+        status: outcome.status,
+        data: outcome.data,
+        citations: outcome.citations ?? [],
+        evidence: outcome.evidence ?? [],
+        startedAt,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - start,
+        attempt,
+        error: outcome.error,
+        confidence: computeConfidence({ status: outcome.status, data: outcome.data, citations: outcome.citations, evidence: outcome.evidence, attempt }, target),
+      };
+    } catch (err) {
+      return {
+        provider: name,
+        status: "failed",
+        data: null,
+        citations: [],
+        evidence: [],
+        startedAt,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - start,
+        attempt,
+        error: err instanceof Error ? err.message : String(err),
+        confidence: 0,
+      };
+    }
+  });
 }
 
 /** Races a provider call against a hard deadline so one hung network call can't stall the
@@ -198,8 +223,13 @@ export async function webSearchThenStructure<T extends { dataSource?: string }>(
     return { status: "partial", data: { ...opts.fallback(), dataSource: NO_SEARCH_DATA_SOURCE }, citations: [] };
   }
 
+  // runWebSearch itself has no non-OpenAI equivalent (it's OpenAI's hosted server-side
+  // search, not a model capability) and stays OpenAI-only regardless of task assignment —
+  // only the structuring step below is routed per-task.
   const research = await runWebSearch(opts.searchPrompt);
-  const result = await runStructured<T>({
+  const taskName = currentProviderName.getStore() ?? "unknown-provider";
+  const assignment = resolveTaskModel(taskName);
+  const { data: result, source } = await llmRouter.runStructured<T>(assignment, {
     maxTokens: opts.maxTokens,
     tool: opts.tool,
     messages: [{ role: "user", content: opts.structurePrompt(research.narrative || "(no live web research available — reason from general category knowledge)") }],
@@ -208,6 +238,10 @@ export async function webSearchThenStructure<T extends { dataSource?: string }>(
     return { status: "partial", data: { ...opts.fallback(), dataSource: NO_SEARCH_DATA_SOURCE }, citations: [] };
   }
 
-  const dataSource = research.citations.length > 0 ? research.citations.map((c) => c.title).join(" + ") : NO_CITATIONS_DATA_SOURCE;
+  const citationLabel = research.citations.length > 0 ? research.citations.map((c) => c.title).join(" + ") : NO_CITATIONS_DATA_SOURCE;
+  // Only annotate the label when a non-default provider actually served the structuring
+  // step — keeps the default (openai) path's dataSource string byte-for-byte identical to
+  // today's, so nothing that asserts on it needs to change unless a task is reassigned.
+  const dataSource = source === "openai" ? citationLabel : `${citationLabel} (structured via ${source}:${assignment.model})`;
   return { status: "success", data: { ...result, dataSource }, citations: research.citations };
 }

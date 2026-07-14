@@ -1,4 +1,4 @@
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import { callDecisionModel } from "./support.js";
 import { hostnameOf } from "../providers/support.js";
 import { writeMemory } from "../memory/MemoryCoordinator.js";
 import type { ResearchContext } from "../types/index.js";
@@ -90,9 +90,8 @@ function fallbackSummary(businessLabel: string): SummaryFields {
 }
 
 async function synthesizeSummary(context: ResearchContext, businessLabel: string, topRecommendations: RankedRecommendation[], winningStrategyLabel: string): Promise<SummaryFields> {
-  if (!openai) return fallbackSummary(businessLabel);
-
-  const structured = await runStructured<SummaryFields>({
+  const structured = await callDecisionModel<SummaryFields>({
+    taskName: "decision-summary",
     maxTokens: 1536,
     tool: SUMMARY_TOOL,
     messages: [

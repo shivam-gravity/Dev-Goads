@@ -6,6 +6,9 @@ import cors from "cors";
 import { router, authEntryRouter } from "./gateway/router.js";
 import { metaOAuthRoutes } from "./gateway/metaOAuthRoutes.js";
 import { googleOAuthRoutes } from "./gateway/googleOAuthRoutes.js";
+import { tiktokOAuthRoutes } from "./gateway/tiktokOAuthRoutes.js";
+import { shopifyOAuthRoutes } from "./gateway/shopifyOAuthRoutes.js";
+import { shopifyWebhookRoutes } from "./gateway/shopifyWebhookRoutes.js";
 import { metaLeadWebhookRoutes } from "./gateway/metaLeadWebhookRoutes.js";
 import { adsDataRoutes } from "./gateway/adsDataRoutes.js";
 import { crmInternalAuth } from "./gateway/middleware/crmInternalAuth.js";
@@ -63,13 +66,17 @@ app.get("/health", async (_req, res) => {
 // S3/GCS/R2-backed implementation drops this static route in favor of signed URLs.
 app.use("/objects", express.static(path.resolve(__dirname, "../data/objects")));
 
-// Unauthenticated — Facebook's/Google's OAuth redirects carry no bearer token (see the respective routes files).
+// Unauthenticated — Facebook's/Google's/TikTok's OAuth redirects carry no bearer token (see the respective routes files).
 app.use("/api/integrations/meta/oauth", metaOAuthRoutes);
 app.use("/api/integrations/google/oauth", googleOAuthRoutes);
+app.use("/api/integrations/tiktok/oauth", tiktokOAuthRoutes);
+app.use("/api/integrations/shopify/oauth", shopifyOAuthRoutes);
 
-// Unauthenticated at the HTTP layer by necessity (Meta calls this directly) — authenticity
-// is instead verified per-request via the X-Hub-Signature-256 HMAC (see the route file).
+// Unauthenticated at the HTTP layer by necessity (Meta/Shopify call these directly) —
+// authenticity is instead verified per-request via each platform's own HMAC scheme (see
+// the respective route files).
 app.use("/api/webhooks/meta", metaLeadWebhookRoutes);
+app.use("/api/webhooks/shopify", shopifyWebhookRoutes);
 
 // Server-to-server only: sales_tech_backend (the CRM) proxies its browser requests here
 // with a shared secret (see crmInternalAuth) — never called directly from a browser.
@@ -91,7 +98,35 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
 
 const server = app.listen(PORT, () => {
   console.log(`Polluxa API gateway listening on http://localhost:${PORT}`);
+  warnIfRunningEveryAdNetworkInMockMode();
 });
+
+/**
+ * A workspace "connecting" Meta/Google/TikTok when no app credentials are registered
+ * completes a clearly-labeled mock connection (see metaOAuth.ts/googleOAuth.ts/
+ * tiktokOAuth.ts's own mock-connect fallbacks) rather than erroring — reasonable for local
+ * dev/demo, but a real production deployment running with every network unconfigured means
+ * no ad account a user "connects" is ever real, which is worth a loud operator-facing
+ * signal instead of only being discoverable by a confused user noticing "(mock)" in an
+ * account name. Not a hard error — an operator may genuinely intend a mock-only demo
+ * deployment — just a warning that can't be missed in the startup log.
+ */
+function warnIfRunningEveryAdNetworkInMockMode(): void {
+  if (process.env.NODE_ENV !== "production") return;
+  const hasAnyRealAdNetworkApp = Boolean(
+    (process.env.META_APP_ID && process.env.META_APP_SECRET) ||
+    (process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET) ||
+    (process.env.TIKTOK_APP_ID && process.env.TIKTOK_APP_SECRET)
+  );
+  if (!hasAnyRealAdNetworkApp) {
+    logger.warn(
+      "STARTUP WARNING: NODE_ENV=production but no Meta/Google/TikTok app credentials are configured — " +
+      "every workspace's ad-network 'Connect' button will complete a mock connection, not a real one. " +
+      "Set META_APP_ID/META_APP_SECRET, GOOGLE_OAUTH_CLIENT_ID/GOOGLE_OAUTH_CLIENT_SECRET, and/or " +
+      "TIKTOK_APP_ID/TIKTOK_APP_SECRET if real ad-account connections are expected in this deployment."
+    );
+  }
+}
 
 // Stop accepting new connections and let in-flight requests finish before exiting —
 // without this, a deploy/restart (SIGTERM) or Ctrl+C (SIGINT) kills requests mid-flight,

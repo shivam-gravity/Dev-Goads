@@ -1,4 +1,5 @@
 import type { ResearchContext } from "../../research/types/index.js";
+import type { LLMProvider } from "../../infra/llmRouter.js";
 
 /**
  * The AI Agent Framework's own type surface — an AI reasoning layer built ON TOP of the
@@ -35,6 +36,11 @@ export interface AgentResult<T> {
   generatedAt: string;
   durationMs: number;
   error?: string;
+  /** Which LLM provider actually produced `data` — including when an assigned
+   * non-OpenAI provider failed and llmRouter.ts fell back to OpenAI. Absent for agents
+   * whose data came entirely from a non-LLM fallback rather than any model call. Lets a
+   * task reassignment's real-world quality be inspected without log-spelunking. */
+  modelSource?: LLMProvider;
 }
 
 /** Extra input beyond ResearchContext that only CriticAgent uses (it reviews the other

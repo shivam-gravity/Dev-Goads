@@ -117,6 +117,48 @@ test("Campaign Orchestrator - Meta and Google variants launch through their hier
   assert.strictEqual(launched.status, "active", "Campaign is active overall since the TikTok variant is active");
 });
 
+test("Campaign Orchestrator - buildCampaignFromStrategy applies each network's real copy limits to its own variant, not one shared truncation", async () => {
+  const strategyId = `strat_test_${Date.now()}`;
+  const businessId = "biz_test_1";
+  const longHeadline = "This headline is written to be much longer than any single ad network's real character limit";
+  const longBody = "This is a deliberately long piece of ad body copy, written to run well past even Meta's 125-character primary-text allowance so every network's truncation can be verified independently of the others in this same test.";
+
+  await prisma.strategy.upsert({
+    where: { id: strategyId },
+    create: {
+      id: strategyId,
+      businessId,
+      data: {
+        id: strategyId,
+        businessId,
+        summary: "Test strategy overview",
+        recommendedNetworks: ["meta", "google", "tiktok"],
+        budgetSplit: { meta: 0.34, google: 0.33, tiktok: 0.33 },
+        audiences: ["Custom Lookalike"],
+        creatives: [{ headline: longHeadline, body: longBody, callToAction: "Learn More" }],
+        createdAt: new Date().toISOString(),
+      },
+      createdAt: new Date(),
+    },
+    update: {},
+  });
+
+  const campaign = await buildCampaignFromStrategy(strategyId, "Copy Limits Test Campaign", 10000);
+
+  const meta = campaign.variants.find((v) => v.network === "meta")!;
+  const google = campaign.variants.find((v) => v.network === "google")!;
+  const tiktok = campaign.variants.find((v) => v.network === "tiktok")!;
+
+  assert.ok(meta.creative.headline.length <= 40, `meta headline should be <= 40 chars, got ${meta.creative.headline.length}`);
+  assert.ok(google.creative.headline.length <= 30, `google headline should be <= 30 chars, got ${google.creative.headline.length}`);
+  assert.ok(tiktok.creative.headline.length <= 100, `tiktok headline should be <= 100 chars, got ${tiktok.creative.headline.length}`);
+  assert.notStrictEqual(meta.creative.headline, google.creative.headline, "the same source headline must be truncated differently per network, not shared verbatim");
+
+  assert.ok(meta.creative.body.length <= 125);
+  assert.ok(google.creative.body.length <= 90);
+  assert.ok(tiktok.creative.body.length <= 100);
+});
+
 test("Campaign Orchestrator - activateVariant flips a launched Meta variant to active", async () => {
   const strategyId = `strat_test_${Date.now()}`;
   const businessId = "biz_test_1";

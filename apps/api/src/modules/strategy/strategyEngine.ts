@@ -5,6 +5,7 @@ import type { AdCreative, AdNetwork, AdStrategy, AudienceAnalysis, AudiencePerso
 import type { CampaignAgentOutput, ComplianceAgentOutput, ObjectionHandlingAgentOutput, PricingOfferAgentOutput } from "../../agents/types/index.js";
 import type { DecisionContext } from "../../research/decision/types.js";
 import { logger } from "../logger/logger.js";
+import { truncateForPlatform, PLATFORM_COPY_LIMITS } from "./platformCopyLimits.js";
 
 function isAdNetwork(value: string): value is AdNetwork {
   return value === "meta" || value === "google" || value === "tiktok";
@@ -409,8 +410,8 @@ function fallbackCampaignSuggestions(input: ResearchStrategyInput): CampaignSugg
         description: `A ${angle.toLowerCase()} angle for ${product.productName}, targeting ${persona.name.toLowerCase()}.`,
         hashtags: [product.category, ...persona.interests.slice(0, 3)].filter(Boolean).map((t) => `#${t.replace(/\s+/g, "")}`),
         platform,
-        headline: truncateHeadline(`${product.productName}: ${angle}`),
-        body: product.summary,
+        headline: truncateForPlatform(`${product.productName}: ${angle}`, PLATFORM_COPY_LIMITS[platform].headline),
+        body: truncateForPlatform(product.summary, PLATFORM_COPY_LIMITS[platform].body),
         callToAction: "Learn More",
         imagePrompt: `A clean, scroll-stopping ad hero image for ${product.productName}, emphasizing ${angle.toLowerCase()}. No text or typography in the image.`,
       };
@@ -451,7 +452,8 @@ export async function generateCampaignSuggestions(input: ResearchStrategyInput):
       ...s,
       id: randomUUID(),
       platform,
-      headline: truncateHeadline(s.headline),
+      headline: truncateForPlatform(s.headline, PLATFORM_COPY_LIMITS[platform].headline),
+      body: truncateForPlatform(s.body, PLATFORM_COPY_LIMITS[platform].body),
       hashtags: s.hashtags.map((h) => (h.startsWith("#") ? h : `#${h}`)),
     }));
 

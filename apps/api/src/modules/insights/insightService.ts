@@ -76,18 +76,25 @@ export async function recordOptimizationInsights(workspaceId: string, decisions:
   const created: Insight[] = [];
   for (const d of decisions) {
     if (d.action === "hold") continue;
+    const isFatigueRefresh = d.action === "regenerate_creative";
     const i: Insight = {
       id: randomUUID(),
       workspaceId,
-      type: d.action === "pause" ? "anomaly" : "recommendation",
-      category: "budget",
+      type: d.action === "pause" ? "anomaly" : isFatigueRefresh ? "anomaly" : "recommendation",
+      category: isFatigueRefresh ? "creative" : "budget",
       source: "optimizer",
-      title: d.action === "pause" ? "Underperforming variant paused" : d.action === "increase_budget" ? "Budget shifted to top performer" : "Budget trimmed on a lagging variant",
+      title: d.action === "pause"
+        ? "Underperforming variant paused"
+        : isFatigueRefresh
+          ? "Creative fatigue detected — new variant generated"
+          : d.action === "increase_budget"
+            ? "Budget shifted to top performer"
+            : "Budget trimmed on a lagging variant",
       description: d.reason,
-      metric: "Budget",
-      severity: d.action === "pause" ? "medium" : "low",
-      actionLabel: "View Campaign",
-      actionUrl: `/campaigns/${d.campaignId}`,
+      metric: isFatigueRefresh ? "Fatigue" : "Budget",
+      severity: d.action === "pause" ? "medium" : isFatigueRefresh ? "medium" : "low",
+      actionLabel: isFatigueRefresh ? "Review New Creative" : "View Campaign",
+      actionUrl: isFatigueRefresh ? "/creatives" : `/campaigns/${d.campaignId}`,
       dismissed: false,
       createdAt: d.decidedAt,
     };

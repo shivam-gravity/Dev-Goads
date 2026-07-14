@@ -3,6 +3,7 @@ import { runStructured } from "../../infra/openaiClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProviderResult, ResearchProviderInput, SocialMediaData } from "../types/index.js";
 import { citationsToEvidence, hostnameOf, NO_CITATIONS_DATA_SOURCE, NO_SEARCH_DATA_SOURCE, runProviderStep, webSearchThenStructure } from "./support.js";
+import { buildSearchQuery } from "./searchQuery.js";
 
 const SOCIAL_DOMAINS = ["linkedin.com", "x.com", "twitter.com", "instagram.com", "facebook.com", "tiktok.com", "youtube.com"];
 const MAX_PROFILES = 4;
@@ -49,7 +50,7 @@ export class SocialMediaProvider implements ResearchProvider<SocialMediaData> {
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<SocialMediaData>> {
     return runProviderStep(this.name, 1, input, async () => {
-      const query = input.businessName ?? hostnameOf(input.url).replace(/^www\./i, "").split(".")[0];
+      const query = buildSearchQuery(input);
 
       const { status, data, citations } = await webSearchThenStructure<SocialMediaData>({
         maxTokens: 768,

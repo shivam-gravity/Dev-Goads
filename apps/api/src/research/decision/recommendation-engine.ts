@@ -1,4 +1,4 @@
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import { callDecisionModel } from "./support.js";
 import { hostnameOf } from "../providers/support.js";
 import type { ResearchContext } from "../types/index.js";
 import type { DifficultyLevel, ImpactLevel, Priority, Recommendation, RecommendationCategory } from "./types.js";
@@ -163,31 +163,27 @@ function fallbackCandidates(): RecommendationCandidate[] {
 export async function generateRecommendations(context: ResearchContext): Promise<Recommendation[]> {
   const businessLabel = context.company?.name ?? hostnameOf(context.url);
 
-  let candidates: RecommendationCandidate[];
-  if (!openai) {
-    candidates = fallbackCandidates();
-  } else {
-    const summaryParts: string[] = [];
-    if (context.company) summaryParts.push(`Company: ${context.company.summary}`);
-    if (context.website) summaryParts.push(`Website: ${context.website.title} — ${context.website.description}`);
-    if (context.market) summaryParts.push(`Market: competition=${context.market.competitionLevel}, trends: ${context.market.trends.join(", ")}`);
-    if (context.competitors) summaryParts.push(`Competitors: ${context.competitors.competitors.map((c) => c.name).join(", ")} (intensity: ${context.competitors.competitionIntensity})`);
-    if (context.audience) summaryParts.push(`Audience: ${context.audience.primaryAudience}; pain points: ${context.audience.painPoints.join(", ")}`);
-    if (context.keywords) summaryParts.push(`Keywords: ${context.keywords.primaryKeywords.join(", ")}`);
-    if (context.news) summaryParts.push(`Recent news: ${context.news.summary}`);
+  const summaryParts: string[] = [];
+  if (context.company) summaryParts.push(`Company: ${context.company.summary}`);
+  if (context.website) summaryParts.push(`Website: ${context.website.title} — ${context.website.description}`);
+  if (context.market) summaryParts.push(`Market: competition=${context.market.competitionLevel}, trends: ${context.market.trends.join(", ")}`);
+  if (context.competitors) summaryParts.push(`Competitors: ${context.competitors.competitors.map((c) => c.name).join(", ")} (intensity: ${context.competitors.competitionIntensity})`);
+  if (context.audience) summaryParts.push(`Audience: ${context.audience.primaryAudience}; pain points: ${context.audience.painPoints.join(", ")}`);
+  if (context.keywords) summaryParts.push(`Keywords: ${context.keywords.primaryKeywords.join(", ")}`);
+  if (context.news) summaryParts.push(`Recent news: ${context.news.summary}`);
 
-    const structured = await runStructured<{ recommendations: RecommendationCandidate[] }>({
-      maxTokens: 2048,
-      tool: RECOMMENDATION_TOOL,
-      messages: [
-        {
-          role: "user",
-          content: `Based on this research for "${businessLabel}", propose 5-10 specific, actionable marketing recommendations spanning positioning, audience, channel, budget, creative, offer, and messaging.\n\n${summaryParts.join("\n")}`,
-        },
-      ],
-    });
-    candidates = structured?.recommendations ?? fallbackCandidates();
-  }
+  const structured = await callDecisionModel<{ recommendations: RecommendationCandidate[] }>({
+    taskName: "recommendation-generation",
+    maxTokens: 2048,
+    tool: RECOMMENDATION_TOOL,
+    messages: [
+      {
+        role: "user",
+        content: `Based on this research for "${businessLabel}", propose 5-10 specific, actionable marketing recommendations spanning positioning, audience, channel, budget, creative, offer, and messaging.\n\n${summaryParts.join("\n")}`,
+      },
+    ],
+  });
+  const candidates: RecommendationCandidate[] = structured?.recommendations ?? fallbackCandidates();
 
   return candidates.map((candidate, index) => {
     const fields = CATEGORY_FIELDS[candidate.category] ?? [];

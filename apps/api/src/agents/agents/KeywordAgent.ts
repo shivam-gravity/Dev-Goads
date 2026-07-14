@@ -40,7 +40,7 @@ export class KeywordAgent implements AIAgent<KeywordAgentOutput> {
   async execute(context: ResearchContext): Promise<AgentResult<KeywordAgentOutput>> {
     return runAgentStep(this.name, async () => {
       const fields = ["keywords", "website", "contentMarketing", "backlinkAuthority", "searchRanking"] as const;
-      const { data, promptVersion, usedFallback } = await callAgentModel({
+      const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           keywords: JSON.stringify(context.keywords ?? {}),
@@ -59,6 +59,7 @@ export class KeywordAgent implements AIAgent<KeywordAgentOutput> {
         promptId: this.promptId,
         promptVersion,
         usedFallback,
+        modelSource,
         confidence: computeConfidence(context, [...fields], usedFallback),
         evidence: collectEvidence(context, [...fields]),
       };

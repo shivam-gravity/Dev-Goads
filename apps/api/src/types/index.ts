@@ -288,7 +288,7 @@ export interface NormalizedPerformance {
 export interface OptimizationDecision {
   campaignId: string;
   chosenVariantId: string;
-  action: "increase_budget" | "decrease_budget" | "pause" | "hold";
+  action: "increase_budget" | "decrease_budget" | "pause" | "hold" | "regenerate_creative";
   reason: string;
   decidedAt: string;
 }

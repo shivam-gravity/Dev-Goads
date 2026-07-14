@@ -44,7 +44,7 @@ export class SEOContentAgent implements AIAgent<SEOContentAgentOutput> {
   async execute(context: ResearchContext): Promise<AgentResult<SEOContentAgentOutput>> {
     return runAgentStep(this.name, async () => {
       const fields = ["keywords", "website", "contentMarketing", "backlinkAuthority", "searchRanking", "serpFeatures"] as const;
-      const { data, promptVersion, usedFallback } = await callAgentModel({
+      const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           keywords: JSON.stringify(context.keywords ?? {}),
@@ -64,6 +64,7 @@ export class SEOContentAgent implements AIAgent<SEOContentAgentOutput> {
         promptId: this.promptId,
         promptVersion,
         usedFallback,
+        modelSource,
         confidence: computeConfidence(context, [...fields], usedFallback),
         evidence: collectEvidence(context, [...fields]),
       };

@@ -5,7 +5,12 @@ import { ALLOW_ALL, isPathAllowed, parseRobots, type RobotsRules } from "./robot
 
 const MAX_EXCERPT_LENGTH = 6000;
 const FETCH_TIMEOUT_MS = 8000;
-const SCREENSHOT_TIMEOUT_MS = 12000; // Playwright cold-starting a browser is slower than a plain fetch
+// Playwright cold-starting a browser is slower than a plain fetch — 12s clipped real sites
+// short (stripe.com measured ~15s end-to-end for a full render+screenshot), silently
+// dropping the screenshot since captureScreenshot is best-effort. Exported so
+// scrapeFallback.ts's crawl race can give scrapeUrl's trailing screenshot await the same
+// headroom instead of timing out the whole crawl a moment before this settles.
+export const SCREENSHOT_TIMEOUT_MS = 20000;
 const MAX_IMAGES = 8;
 const SMART_CRAWL_CAP = 15; // the entry page + up to 14 same-site pages worth following
 const DISCOVERY_CAP = 200; // ceiling on how many URLs we bother scoring, not how many we fetch

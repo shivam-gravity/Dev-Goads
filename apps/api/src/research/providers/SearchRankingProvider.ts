@@ -1,7 +1,8 @@
 import { firecrawlSearch, outageDataSource } from "../../infra/firecrawlClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProviderResult, ResearchProviderInput, SearchRankingData, SearchRankingEntry } from "../types/index.js";
-import { hostnameOf, runProviderStep } from "./support.js";
+import { runProviderStep } from "./support.js";
+import { buildSearchQuery } from "./searchQuery.js";
 
 /** Real SERP rank data via Firecrawl's `/search` — position/title/url for whatever actually
  * ranks today, not an LLM's guess. Derives its own query terms from the business name/hostname
@@ -12,8 +13,8 @@ export class SearchRankingProvider implements ResearchProvider<SearchRankingData
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<SearchRankingData>> {
     return runProviderStep(this.name, 1, input, async () => {
-      const businessName = input.businessName ?? hostnameOf(input.url).replace(/^www\./i, "").split(".")[0];
-      const queries = [businessName, input.industry ? `${businessName} ${input.industry}` : undefined].filter((q): q is string => Boolean(q));
+      const query = buildSearchQuery(input);
+      const queries = [query, input.industry ? `${query} ${input.industry}` : undefined].filter((q): q is string => Boolean(q));
 
       const rankings: SearchRankingEntry[] = [];
       let outageSeen: string | null = null;

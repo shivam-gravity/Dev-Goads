@@ -1,10 +1,26 @@
-import { normalizePerformance } from "../pipeline/performancePipeline.js";
+import { normalizePerformance, getRawMetrics } from "../pipeline/performancePipeline.js";
 import { getCampaign, pauseVariant, reallocateBudget } from "../orchestrator/campaignOrchestrator.js";
+import { computeFatigueScore } from "./creativeFatigueDetector.js";
+import { createGenerationJob, hasRecentFatigueRefresh } from "../generation/generationJobService.js";
+import { creativeGenerationQueue } from "../../infra/queue.js";
 import type { NormalizedPerformance, OptimizationDecision } from "../../types/index.js";
 
 const EPSILON = 0.1; // exploration rate for epsilon-greedy allocation
 const MIN_CONVERSIONS_FOR_CONFIDENCE = 5;
 const MAX_CPA_MULTIPLIER = 2.5; // pause a variant once its CPA exceeds this multiple of the cohort's best CPA
+// Don't re-trigger a fatigue refresh for the same variant on every 15-minute tick while it
+// stays fatigued — give the creative-generation pipeline (and a human reviewing the result)
+// a full day before considering that variant for another automatic refresh.
+const FATIGUE_REFRESH_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Builds a generation prompt from a live variant's own creative — reused when a fatigue
+ * refresh triggers, since there's no guarantee a landingPageUrl is set (creativeGenerationService's
+ * resolveContext needs either a productUrl or a prompt).
+ */
+function fatigueRefreshPrompt(creative: { headline: string; body: string }): string {
+  return `Generate a fresh ad variation for a product/business currently advertised with the headline "${creative.headline}" and body copy "${creative.body}". Keep the same underlying product/offer, but produce a genuinely different creative angle and image — the current one has been running long enough that the audience is tuning it out.`;
+}
 
 function score(v: NormalizedPerformance): number {
   // Reward = conversion rate weighted by CTR, so we don't overfit to cheap clicks with no downstream conversions.
@@ -34,7 +50,40 @@ export async function runOptimizationPass(campaignId: string): Promise<Optimizat
   const activeVariants = campaign.variants.filter((v) => v.status === "active");
   const perVariantBudget = Math.floor(campaign.dailyBudgetCents / Math.max(activeVariants.length, 1));
 
+  // Fatigue and budget/pause decisions are orthogonal — a variant can be converting fine
+  // (no CPA/budget action warranted) while still showing a real fatigue signal, so this
+  // check runs independently of the pause/budget branches below rather than being folded
+  // into either.
+  const dailyMetrics = await getRawMetrics(campaignId);
+
   for (const variant of activeVariants) {
+    if (campaign.workspaceId) {
+      const fatigue = computeFatigueScore(variant.id, dailyMetrics);
+      if (fatigue.isFatigued) {
+        const cooldownSince = new Date(Date.now() - FATIGUE_REFRESH_COOLDOWN_MS).toISOString();
+        const alreadyTriggered = await hasRecentFatigueRefresh(campaign.businessId, variant.id, cooldownSince);
+        if (!alreadyTriggered) {
+          const job = await createGenerationJob(campaign.workspaceId, {
+            businessId: campaign.businessId,
+            prompt: variant.landingPageUrl ? undefined : fatigueRefreshPrompt(variant.creative),
+            productUrl: variant.landingPageUrl,
+            wantVideo: false,
+            campaignId,
+            variantId: variant.id,
+            reason: "fatigue-refresh",
+          });
+          await creativeGenerationQueue.add("generate", { jobId: job.id });
+          decisions.push({
+            campaignId,
+            chosenVariantId: variant.id,
+            action: "regenerate_creative",
+            reason: `Fatigue detected (${fatigue.reason}) — queued a fresh creative for review`,
+            decidedAt,
+          });
+        }
+      }
+    }
+
     const stat = stats.find((s) => s.variantId === variant.id);
     if (!stat) {
       decisions.push({ campaignId, chosenVariantId: variant.id, action: "hold", reason: "No performance data yet", decidedAt });

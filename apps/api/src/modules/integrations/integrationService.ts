@@ -361,6 +361,138 @@ export async function updateGoogleAccessToken(workspaceId: string, accessToken: 
   await save(updated);
 }
 
+export interface TikTokOAuthConnectionInput {
+  accessToken: string;
+  expiresInSeconds: number;
+  advertiserId: string;
+  advertiserName: string;
+  /** Set by tiktokOAuth.ts's mockConnectTikTok — see MetaOAuthConnectionInput.mock for why a
+   * mock connection must not store an encrypted (fake) token. */
+  mock?: boolean;
+}
+
+/** Persists a real TikTok OAuth connection (encrypted token) after tiktokOAuth.ts completes the handshake. */
+export async function setTikTokOAuthConnection(workspaceId: string, input: TikTokOAuthConnectionInput): Promise<Integration> {
+  const row = await prisma.integration.findFirst({ where: { workspaceId, platform: "tiktok" } });
+  const existing = row ? (row.data as unknown as Integration) : DEFAULT_INTEGRATIONS.find((d) => d.platform === "tiktok")!;
+
+  const updated: Integration = {
+    ...existing,
+    id: row?.id ?? randomUUID(),
+    workspaceId,
+    platform: "tiktok",
+    status: "connected",
+    accountName: input.advertiserName,
+    accountId: input.advertiserId,
+    connectedAt: new Date().toISOString(),
+    errorMessage: undefined,
+    settings: {
+      ...existing.settings,
+      ...(input.mock
+        ? { accessTokenEncrypted: undefined, tokenExpiresAt: undefined }
+        : { accessTokenEncrypted: encryptToken(input.accessToken), tokenExpiresAt: new Date(Date.now() + input.expiresInSeconds * 1000).toISOString() }),
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  await save(updated);
+  return updated;
+}
+
+export interface TikTokCredentials {
+  accessToken: string;
+  advertiserId: string;
+}
+
+/** Decrypts and returns the connected TikTok ad account's live token, or null if not connected via real OAuth. */
+export async function getTikTokCredentials(workspaceId: string): Promise<TikTokCredentials | null> {
+  const row = await prisma.integration.findFirst({ where: { workspaceId, platform: "tiktok" } });
+  if (!row) return null;
+  const integration = row.data as unknown as Integration;
+  const tokenEncrypted = integration.settings?.accessTokenEncrypted as string | undefined;
+  if (integration.status !== "connected" || !tokenEncrypted || !integration.accountId) return null;
+  return { accessToken: decryptToken(tokenEncrypted), advertiserId: integration.accountId };
+}
+
+export interface ShopifyOAuthConnectionInput {
+  shopDomain: string;
+  accessToken: string;
+  expiresInSeconds: number;
+  /** Present when Shopify issued an expiring token (the 2026-required default) — absent
+   * would mean a legacy permanent token, which getShopifyCredentials treats as never needing
+   * a refresh. */
+  refreshToken?: string;
+  refreshTokenExpiresInSeconds?: number;
+}
+
+/** Persists a real Shopify app-install connection (encrypted tokens) after shopifyOAuth.ts completes the handshake. */
+export async function setShopifyOAuthConnection(workspaceId: string, input: ShopifyOAuthConnectionInput): Promise<Integration> {
+  const row = await prisma.integration.findFirst({ where: { workspaceId, platform: "shopify" } });
+  const existing = row ? (row.data as unknown as Integration) : DEFAULT_INTEGRATIONS.find((d) => d.platform === "shopify")!;
+
+  const updated: Integration = {
+    ...existing,
+    id: row?.id ?? randomUUID(),
+    workspaceId,
+    platform: "shopify",
+    status: "connected",
+    accountName: input.shopDomain,
+    accountId: input.shopDomain,
+    connectedAt: new Date().toISOString(),
+    errorMessage: undefined,
+    settings: {
+      ...existing.settings,
+      accessTokenEncrypted: encryptToken(input.accessToken),
+      refreshTokenEncrypted: input.refreshToken ? encryptToken(input.refreshToken) : undefined,
+      tokenExpiresAt: new Date(Date.now() + input.expiresInSeconds * 1000).toISOString(),
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  await save(updated);
+  return updated;
+}
+
+export interface RawShopifyTokenData {
+  shopDomain: string;
+  accessToken: string;
+  /** Empty when connected via a legacy non-expiring token — callers must treat "" as "cannot refresh, use accessToken as-is." */
+  refreshToken: string;
+  tokenExpiresAt: string;
+}
+
+/** Raw (still-encrypted-until-here) token read, no refresh logic — see shopifyOAuth.getShopifyCredentials for the refresh-aware wrapper callers should actually use (same split as googleOAuth.ts/getRawGoogleTokenData, to avoid a circular import between this file and shopifyOAuth.ts). */
+export async function getRawShopifyTokenData(workspaceId: string): Promise<RawShopifyTokenData | null> {
+  const row = await prisma.integration.findFirst({ where: { workspaceId, platform: "shopify" } });
+  if (!row) return null;
+  const integration = row.data as unknown as Integration;
+  const accessTokenEncrypted = integration.settings?.accessTokenEncrypted as string | undefined;
+  if (integration.status !== "connected" || !accessTokenEncrypted || !integration.accountId) return null;
+  const refreshTokenEncrypted = integration.settings?.refreshTokenEncrypted as string | undefined;
+  return {
+    shopDomain: integration.accountId,
+    accessToken: decryptToken(accessTokenEncrypted),
+    refreshToken: refreshTokenEncrypted ? decryptToken(refreshTokenEncrypted) : "",
+    tokenExpiresAt: integration.settings?.tokenExpiresAt as string,
+  };
+}
+
+/** Updates the access token (+ refresh token, since Shopify rotates it on every refresh — unlike Google, which reuses the same refresh token) after a refresh. */
+export async function updateShopifyAccessToken(workspaceId: string, accessToken: string, expiresInSeconds: number, refreshToken?: string): Promise<void> {
+  const row = await prisma.integration.findFirst({ where: { workspaceId, platform: "shopify" } });
+  if (!row) throw new Error("Shopify integration not found");
+  const existing = row.data as unknown as Integration;
+  const updated: Integration = {
+    ...existing,
+    settings: {
+      ...existing.settings,
+      accessTokenEncrypted: encryptToken(accessToken),
+      ...(refreshToken ? { refreshTokenEncrypted: encryptToken(refreshToken) } : {}),
+      tokenExpiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  await save(updated);
+}
+
 const SECRET_SETTINGS_KEYS = ["accessTokenEncrypted", "refreshTokenEncrypted", "pageAccessTokenEncrypted", "developerTokenEncrypted", "clientSecretEncrypted"] as const;
 
 /**

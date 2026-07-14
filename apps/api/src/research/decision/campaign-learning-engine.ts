@@ -1,6 +1,7 @@
 import { normalizePerformance } from "../../modules/pipeline/performancePipeline.js";
 import { getCampaignGenerationJobByCampaignId } from "../../modules/orchestrator/campaignGenerationService.js";
 import { writeMemory } from "../memory/MemoryCoordinator.js";
+import { recordRecommendationOutcomeAndPattern } from "./campaign-intelligence-store.js";
 import type { NormalizedPerformance } from "../../types/index.js";
 
 /**
@@ -115,6 +116,12 @@ export async function recordCampaignOutcome(campaignId: string): Promise<Campaig
       });
     })
   );
+
+  // Campaign Intelligence: advances the recommendations that fed this campaign from
+  // "accepted" to "implemented" with a real effectiveness score, and — for whichever
+  // networks are actually winning — strengthens a recurring SuccessPattern. Same
+  // enhancement-only posture as the Research Memory writes above.
+  await recordRecommendationOutcomeAndPattern({ campaignId, job, outcome }).catch(() => {});
 
   return outcome;
 }

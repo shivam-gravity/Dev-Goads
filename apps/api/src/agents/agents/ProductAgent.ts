@@ -46,7 +46,7 @@ export class ProductAgent implements AIAgent<ProductAgentOutput> {
   async execute(context: ResearchContext): Promise<AgentResult<ProductAgentOutput>> {
     return runAgentStep(this.name, async () => {
       const fields = ["website", "company", "keywords", "appStore", "product"] as const;
-      const { data, promptVersion, usedFallback } = await callAgentModel({
+      const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           website: JSON.stringify(context.website ?? {}),
@@ -65,6 +65,7 @@ export class ProductAgent implements AIAgent<ProductAgentOutput> {
         promptId: this.promptId,
         promptVersion,
         usedFallback,
+        modelSource,
         confidence: computeConfidence(context, [...fields], usedFallback),
         evidence: collectEvidence(context, [...fields]),
       };

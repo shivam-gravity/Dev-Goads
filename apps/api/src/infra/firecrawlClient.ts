@@ -136,8 +136,9 @@ export async function firecrawlScrape(url: string, formats: FirecrawlScrapeForma
 
   const isStructured = formats.some((f) => typeof f === "object");
   const result = await post<{ success: boolean; data: FirecrawlScrapeData }>("/scrape", { url, formats });
-  await recordCredits(isStructured ? ESTIMATED_CREDITS.scrapeStructured : ESTIMATED_CREDITS.scrape);
   if (!result?.success) return { data: null, outage: null };
+
+  await recordCredits(isStructured ? ESTIMATED_CREDITS.scrapeStructured : ESTIMATED_CREDITS.scrape);
   return { data: result.data, outage: null };
 }
 
@@ -154,8 +155,9 @@ export async function firecrawlMap(url: string, opts?: { limit?: number }): Prom
   if (outage) return { links: [], outage };
 
   const result = await post<{ success: boolean; links: FirecrawlMapLink[] }>("/map", { url, limit: opts?.limit ?? 100 });
-  await recordCredits(ESTIMATED_CREDITS.map);
   if (!result?.success) return { links: [], outage: null };
+
+  await recordCredits(ESTIMATED_CREDITS.map);
   return { links: result.links ?? [], outage: null };
 }
 
@@ -189,8 +191,9 @@ export async function firecrawlSearch(
     sources: (opts?.sources ?? ["web"]).map((type) => ({ type })),
     ...(opts?.includeDomains ? { includeDomains: opts.includeDomains } : {}),
   });
-  await recordCredits(result?.creditsUsed ?? ESTIMATED_CREDITS.scrape);
   if (!result?.success) return { web: [], news: [], outage: null };
+
+  await recordCredits(result.creditsUsed ?? ESTIMATED_CREDITS.scrape);
   return { web: result.data.web ?? [], news: result.data.news ?? [], outage: null };
 }
 

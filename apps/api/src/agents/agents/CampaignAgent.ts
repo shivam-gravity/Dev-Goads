@@ -76,7 +76,7 @@ export class CampaignAgent implements AIAgent<CampaignAgentOutput> {
       const fields = ["website", "company", "audience", "market", "competitors"] as const;
       const verifiedFacts = await loadVerifiedFacts(context);
       const generalSearch = context.metadata.generalSearch;
-      const { data, promptVersion, usedFallback } = await callAgentModel({
+      const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
@@ -97,6 +97,7 @@ export class CampaignAgent implements AIAgent<CampaignAgentOutput> {
         promptId: this.promptId,
         promptVersion,
         usedFallback,
+        modelSource,
         confidence: computeConfidence(context, [...fields], usedFallback),
         evidence: [
           ...collectEvidence(context, [...fields]),

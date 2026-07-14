@@ -12,6 +12,14 @@ export interface GenerationJobInput {
   aspectRatio?: "square" | "portrait" | "landscape";
   language?: string;
   quality?: "standard" | "high";
+  /** Set when this job was triggered automatically for a specific live campaign variant
+   * (e.g. a fatigue-triggered refresh) rather than a standalone "generate a creative"
+   * request — lets callers trace the new creative back to what it's meant to replace. */
+  campaignId?: string;
+  variantId?: string;
+  /** "fatigue-refresh" distinguishes an automated regeneration from a normal user-initiated
+   * "initial" generation — see creativeFatigueDetector.ts, the only current writer of this. */
+  reason?: "initial" | "fatigue-refresh";
 }
 
 export interface GenerationJobResult {
@@ -70,6 +78,25 @@ export async function createGenerationJob(workspaceId: string, input: Generation
 export async function getGenerationJob(id: string): Promise<GenerationJob | null> {
   const row = await prisma.generationJob.findUnique({ where: { id } });
   return row ? fromRow(row) : null;
+}
+
+/**
+ * Used by creativeFatigueDetector.ts as a cooldown check — before enqueuing a new
+ * fatigue-triggered refresh for a variant, confirm one wasn't already triggered recently, so
+ * a variant that stays fatigued across several 15-minute optimization ticks doesn't get a
+ * new regeneration job every tick. `input` is stored as an opaque JSON blob (same convention
+ * as every other JSON-backed model in this codebase — see Integration/Campaign), so the
+ * variantId/reason filter happens in application code after a narrower businessId+date scan,
+ * not as a database-level JSON query.
+ */
+export async function hasRecentFatigueRefresh(businessId: string, variantId: string, sinceIso: string): Promise<boolean> {
+  const rows = await prisma.generationJob.findMany({
+    where: { businessId, createdAt: { gte: new Date(sinceIso) } },
+  });
+  return rows.some((r) => {
+    const input = r.input as unknown as GenerationJobInput;
+    return input.variantId === variantId && input.reason === "fatigue-refresh";
+  });
 }
 
 export async function markGenerationJobRunning(id: string): Promise<void> {

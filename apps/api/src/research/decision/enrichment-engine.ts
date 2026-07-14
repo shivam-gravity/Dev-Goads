@@ -1,4 +1,5 @@
-import { openai, runStructured, runWebSearch } from "../../infra/openaiClient.js";
+import { openai, runWebSearch } from "../../infra/openaiClient.js";
+import { callDecisionModel } from "./support.js";
 import { hostnameOf } from "../providers/support.js";
 import type { ResearchContext } from "../types/index.js";
 import type { EnrichmentData, PricingTier, RegionalMarketDepth } from "./types.js";
@@ -75,7 +76,8 @@ async function researchPricingAndProof(context: ResearchContext, businessLabel: 
       `Only report what you actually find — leave a category empty rather than guessing.`
   );
 
-  const structured = await runStructured<Pick<EnrichmentData, "pricingTiers" | "notableCustomers" | "quantifiedProofPoints">>({
+  const structured = await callDecisionModel<Pick<EnrichmentData, "pricingTiers" | "notableCustomers" | "quantifiedProofPoints">>({
+    taskName: "enrichment-proof-points",
     maxTokens: 1024,
     tool: PROOF_POINTS_TOOL,
     messages: [
@@ -99,7 +101,8 @@ async function researchRegionalDepth(context: ResearchContext, businessLabel: st
       `policy, regulatory, or infrastructure drivers specific to ${region} (not global trends).`
   );
 
-  const structured = await runStructured<{ marketSize?: string; growthRate?: string; policyDrivers: string[] }>({
+  const structured = await callDecisionModel<{ marketSize?: string; growthRate?: string; policyDrivers: string[] }>({
+    taskName: "enrichment-regional-depth",
     maxTokens: 512,
     tool: REGIONAL_DEPTH_TOOL,
     messages: [

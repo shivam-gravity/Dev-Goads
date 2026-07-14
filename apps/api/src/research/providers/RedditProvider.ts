@@ -1,8 +1,9 @@
 import { openai, runStructured } from "../../infra/openaiClient.js";
-import { firecrawlScrape, firecrawlSearch } from "../../infra/firecrawlClient.js";
+import { searchRedditThreads } from "../../infra/pullpushClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { CommunityDiscussionData, CommunityDiscussionThread, ProviderResult, ResearchProviderInput } from "../types/index.js";
-import { citationsToEvidence, hostnameOf, NO_CITATIONS_DATA_SOURCE, NO_SEARCH_DATA_SOURCE, runProviderStep, webSearchThenStructure } from "./support.js";
+import { citationsToEvidence, NO_CITATIONS_DATA_SOURCE, NO_SEARCH_DATA_SOURCE, runProviderStep, webSearchThenStructure } from "./support.js";
+import { buildSearchQuery } from "./searchQuery.js";
 
 const MAX_THREADS = 3;
 const MAX_EXCERPT_LENGTH = 2000;
@@ -33,12 +34,13 @@ const COMMUNITY_TOOL = {
 };
 
 /**
- * OpenAI's own web search first (costs no Firecrawl credit), falling back to real Reddit
- * threads via firecrawlSearch (includeDomains-scoped) + firecrawlScrape of the top matches
- * only when the web-search leg didn't produce grounded results — mirrors the same
- * fallback-ordering pattern ReviewsProvider/SocialMediaProvider already use. The one LLM
- * call in the grounded path is justified the same way it is there: turning raw thread text
- * into a sentiment label/summary isn't a frequency heuristic.
+ * OpenAI's own web search first, falling back to real Reddit threads via PullPush's
+ * submission-search archive (infra/pullpushClient.ts) — used instead of Firecrawl, since
+ * Reddit blocks Firecrawl's scrape of individual threads (and its own anonymous JSON
+ * endpoints) far more often than not — only when the web-search leg didn't produce grounded
+ * results, mirroring the same fallback-ordering pattern ReviewsProvider/SocialMediaProvider
+ * already use. The one LLM call in the grounded path is justified the same way it is there:
+ * turning raw thread text into a sentiment label/summary isn't a frequency heuristic.
  */
 export class RedditProvider implements ResearchProvider<CommunityDiscussionData> {
   readonly name = "reddit";
@@ -46,7 +48,7 @@ export class RedditProvider implements ResearchProvider<CommunityDiscussionData>
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<CommunityDiscussionData>> {
     return runProviderStep(this.name, 1, input, async () => {
-      const query = input.businessName ?? hostnameOf(input.url).replace(/^www\./i, "").split(".")[0];
+      const query = buildSearchQuery(input);
 
       const { status, data, citations } = await webSearchThenStructure<CommunityDiscussionData>({
         maxTokens: 640,
@@ -67,21 +69,19 @@ export class RedditProvider implements ResearchProvider<CommunityDiscussionData>
   }
 
   private async fromRealThreads(query: string): Promise<{ status: "success" | "partial"; data: CommunityDiscussionData } | null> {
-    const searchResult = await firecrawlSearch(query, { includeDomains: ["reddit.com"], limit: MAX_THREADS });
-    if (searchResult.outage || searchResult.web.length === 0) return null;
+    const threads = await searchRedditThreads(query, MAX_THREADS);
+    if (!threads || threads.length === 0) return null;
 
-    const excerpts: string[] = [];
-    for (const thread of searchResult.web.slice(0, MAX_THREADS)) {
-      const scraped = await firecrawlScrape(thread.url, ["markdown"]);
-      if (scraped.outage) break;
-      if (scraped.data?.markdown) excerpts.push(`### ${thread.title}\n${thread.url}\n${scraped.data.markdown.slice(0, MAX_EXCERPT_LENGTH)}`);
-    }
+    // PullPush already returns each post's full selftext in the same call that found it — no
+    // separate per-thread scrape step needed. Posts with no selftext (link posts, not
+    // self-posts) just don't contribute an excerpt, same as an empty scrape used to mean.
+    const excerpts = threads.filter((t) => t.selftext.length > 0).map((t) => `### ${t.title}\n${t.url}\n${t.selftext.slice(0, MAX_EXCERPT_LENGTH)}`);
 
     if (!openai || excerpts.length === 0) {
-      const threads: CommunityDiscussionThread[] = searchResult.web.slice(0, MAX_THREADS).map((t) => ({ title: t.title, url: t.url, sentiment: "unknown — not analyzed" }));
+      const fallbackThreads: CommunityDiscussionThread[] = threads.map((t) => ({ title: t.title, url: t.url, sentiment: "unknown — not analyzed" }));
       return {
         status: "partial",
-        data: { threads, summary: "Found relevant threads but couldn't analyze sentiment (no OPENAI_API_KEY or no page text)", dataSource: "Firecrawl search (reddit.com), unanalyzed" },
+        data: { threads: fallbackThreads, summary: "Found relevant threads but couldn't analyze sentiment (no OPENAI_API_KEY or no page text)", dataSource: "PullPush search (reddit.com), unanalyzed" },
       };
     }
 
@@ -92,11 +92,11 @@ export class RedditProvider implements ResearchProvider<CommunityDiscussionData>
     });
 
     if (!structured) {
-      const threads: CommunityDiscussionThread[] = searchResult.web.slice(0, MAX_THREADS).map((t) => ({ title: t.title, url: t.url, sentiment: "unknown" }));
-      return { status: "partial", data: { threads, summary: "Found threads but sentiment analysis failed", dataSource: "Firecrawl search (reddit.com)" } };
+      const fallbackThreads: CommunityDiscussionThread[] = threads.map((t) => ({ title: t.title, url: t.url, sentiment: "unknown" }));
+      return { status: "partial", data: { threads: fallbackThreads, summary: "Found threads but sentiment analysis failed", dataSource: "PullPush search (reddit.com)" } };
     }
 
-    const data: CommunityDiscussionData = { ...structured, dataSource: "Firecrawl search + scrape (reddit.com), analyzed" };
+    const data: CommunityDiscussionData = { ...structured, dataSource: "PullPush search (reddit.com), analyzed" };
     return { status: "success", data };
   }
 }

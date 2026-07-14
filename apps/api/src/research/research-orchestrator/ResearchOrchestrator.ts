@@ -1,5 +1,6 @@
 import { logger } from "../../modules/logger/logger.js";
 import { aggregateResearch } from "../knowledge/KnowledgeAggregator.js";
+import { getBusiness } from "../../modules/business/businessService.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import { ResearchJobStateMachine } from "../state-machine/ResearchJobStateMachine.js";
 import { createResearchProviders } from "../providers/index.js";
@@ -28,6 +29,24 @@ export interface OrchestratorDeps {
   recordExecution(jobId: string, result: ProviderResult<unknown>): Promise<void>;
   persistSnapshot(jobId: string, context: ResearchContext): Promise<void>;
   persistCompleted(jobId: string, context: ResearchContext): Promise<void>;
+  /** Resolves the Business record's real name for `ResearchProviderInput.businessName` —
+   * optional so existing test fakes that don't provide it keep compiling; omission just
+   * means every provider falls back to its current hostname-derived query, same as today. */
+  loadBusinessName?(businessId: string): Promise<string | undefined>;
+}
+
+/** Never throws — a Business lookup failure (bad id, transient DB blip) degrades to
+ * `undefined`, which every provider already treats as "derive a name from the hostname
+ * instead", the same fail-soft contract every other provider-facing lookup in this file
+ * follows (see recordExecution's `.catch` below). */
+async function loadBusinessName(businessId: string): Promise<string | undefined> {
+  try {
+    const business = await getBusiness(businessId);
+    return business?.name;
+  } catch (err) {
+    logger.warn(`Failed to load Business ${businessId} for research context — providers will fall back to hostname-derived name`, err);
+    return undefined;
+  }
 }
 
 export const defaultOrchestratorDeps: OrchestratorDeps = {
@@ -36,6 +55,7 @@ export const defaultOrchestratorDeps: OrchestratorDeps = {
   recordExecution: recordProviderExecution,
   persistSnapshot: createResearchSnapshot,
   persistCompleted: markResearchJobCompleted,
+  loadBusinessName,
 };
 
 export interface RunResearchOrchestratorOptions {
@@ -125,11 +145,14 @@ export async function runResearchOrchestrator(jobId: string, options: RunResearc
     state.transition("running");
     await deps.markStatus(jobId, state.state, { startedAt: true });
 
+    const businessName = job.businessId ? await deps.loadBusinessName?.(job.businessId) : undefined;
+
     const input: ResearchProviderInput = {
       jobId,
       workspaceId: job.workspaceId,
       businessId: job.businessId,
       url: job.url,
+      businessName,
     };
 
     let completed = 0;

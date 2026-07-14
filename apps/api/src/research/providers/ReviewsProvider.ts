@@ -3,6 +3,7 @@ import { runStructured } from "../../infra/openaiClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProviderResult, ResearchProviderInput, ReviewsData } from "../types/index.js";
 import { citationsToEvidence, hostnameOf, NO_CITATIONS_DATA_SOURCE, NO_SEARCH_DATA_SOURCE, runProviderStep, webSearchThenStructure } from "./support.js";
+import { buildSearchQuery } from "./searchQuery.js";
 
 const REVIEW_SITES = ["g2.com", "capterra.com", "trustradius.com"];
 const MAX_PROFILES = 3;
@@ -37,7 +38,7 @@ export class ReviewsProvider implements ResearchProvider<ReviewsData> {
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<ReviewsData>> {
     return runProviderStep(this.name, 1, input, async () => {
-      const query = input.businessName ?? hostnameOf(input.url).replace(/^www\./i, "").split(".")[0];
+      const query = buildSearchQuery(input);
 
       const { status, data, citations } = await webSearchThenStructure<ReviewsData>({
         maxTokens: 768,

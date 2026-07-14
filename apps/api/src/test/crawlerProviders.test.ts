@@ -36,34 +36,65 @@ function neverReachFirecrawl(url: string | URL | Request): void {
   if (urlStr.includes("api.firecrawl.dev")) throw new Error(`must never reach Firecrawl's API host directly: ${urlStr}`);
 }
 
-// SearchRankingProvider and RedditProvider were NOT converted to try an in-house path first
-// (search has no in-house replacement — see scrapeFallback.ts's scope boundary; RedditProvider
-// tries OpenAI's own web search first, which itself makes zero network calls when
-// OPENAI_API_KEY is unset, same as before). Both still make zero network calls at all when
-// FIRECRAWL_API_KEY (and, for Reddit, OPENAI_API_KEY) are unset — this is the original,
-// still-valid contract for these two.
-for (const { name, instance } of [
-  { name: "SearchRankingProvider", instance: new SearchRankingProvider() },
-  { name: "RedditProvider", instance: new RedditProvider() },
-]) {
-  test(`${name} - degrades to a partial, labeled fallback with zero network calls when no credentials are configured`, async () => {
-    const original = global.fetch;
-    let fetchCalled = false;
-    global.fetch = (async () => {
-      fetchCalled = true;
-      throw new Error("should not be called");
-    }) as typeof fetch;
+// SearchRankingProvider was NOT converted to try an in-house path first (search has no
+// in-house replacement — see scrapeFallback.ts's scope boundary). It still makes zero network
+// calls at all when FIRECRAWL_API_KEY is unset — this is the original, still-valid contract.
+test("SearchRankingProvider - degrades to a partial, labeled fallback with zero network calls when no credentials are configured", async () => {
+  const original = global.fetch;
+  let fetchCalled = false;
+  global.fetch = (async () => {
+    fetchCalled = true;
+    throw new Error("should not be called");
+  }) as typeof fetch;
 
-    try {
-      const result = await instance.execute(INPUT);
-      assert.strictEqual(result.status, "partial");
-      assert.strictEqual(fetchCalled, false);
-      assert.ok(result.data, "expected a labeled fallback data object, not null");
-    } finally {
-      global.fetch = original;
+  try {
+    const result = await new SearchRankingProvider().execute(INPUT);
+    assert.strictEqual(result.status, "partial");
+    assert.strictEqual(fetchCalled, false);
+    assert.ok(result.data, "expected a labeled fallback data object, not null");
+  } finally {
+    global.fetch = original;
+  }
+});
+
+// RedditProvider tries OpenAI's own web search first (zero network calls when OPENAI_API_KEY
+// is unset, same as every other provider on this fallback pattern), then falls back to
+// PullPush.io (infra/pullpushClient.ts) for real threads — unlike Firecrawl, PullPush needs
+// no API key, so it's always reached regardless of which credentials are configured. The
+// "zero network calls with no credentials" contract above no longer applies to Reddit
+// specifically; what still holds is "no OPENAI_API_KEY means no sentiment analysis," which
+// this test verifies against a mocked PullPush response instead of a mocked Firecrawl one.
+test("RedditProvider - degrades to a partial, labeled fallback when OPENAI_API_KEY is unset (PullPush search still runs — it needs no credential)", async () => {
+  const original = global.fetch;
+  global.fetch = (async (url) => {
+    const urlStr = String(url instanceof Request ? url.url : url);
+    if (urlStr.includes("api.pullpush.io/reddit/search/submission")) {
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              title: "Anyone tried Example Co?",
+              permalink: "/r/test/comments/abc123/anyone_tried_example_co/",
+              selftext: "Just wondering if this widget company is any good.",
+              created_utc: 1700000000,
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
     }
-  });
-}
+    throw new Error(`unexpected fetch: ${urlStr}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await new RedditProvider().execute(INPUT);
+    assert.strictEqual(result.status, "partial");
+    assert.ok(result.data, "expected a labeled fallback data object, not null");
+    assert.match(result.data?.dataSource ?? "", /PullPush/);
+  } finally {
+    global.fetch = original;
+  }
+});
 
 // ProductProvider, NavigationProvider, AdLibraryProvider, and GoogleSerpFeaturesProvider were
 // converted to try an in-house (Playwright-backed scraper-service, or sitemap-based for map)

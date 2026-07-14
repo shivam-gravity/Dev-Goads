@@ -6,6 +6,7 @@ import { ingestCampaignMetrics } from "../modules/pipeline/performancePipeline.j
 import { runOptimizationPass } from "../modules/optimization/optimizationEngine.js";
 import { recordOptimizationInsights } from "../modules/insights/insightService.js";
 import { recordCampaignOutcome } from "../research/decision/campaign-learning-engine.js";
+import { recordPerformanceSnapshot } from "../research/decision/campaign-intelligence-store.js";
 import { isFinalFailure, sendToDeadLetter } from "../infra/deadLetterQueue.js";
 import { registerGracefulShutdown } from "../infra/gracefulShutdown.js";
 import { logger } from "../modules/logger/logger.js";
@@ -40,6 +41,10 @@ const worker = new Worker(
         await ingestCampaignMetrics(campaignId);
         const decisions = await runOptimizationPass(campaignId);
         await recordOptimizationInsights(workspaceId, decisions);
+        // Campaign Intelligence: a real point-in-time performance snapshot every tick,
+        // independent of whether there's enough data for a reliable "outcome" yet — feeds
+        // the Benchmark Engine's future industry/platform aggregations.
+        await recordPerformanceSnapshot(campaignId);
         // Cross-campaign learning: attributes this campaign's real performance back to the
         // recommendations that produced it, so the NEXT campaign-generation run (this
         // workspace or any other) ranks similar recommendations using what actually

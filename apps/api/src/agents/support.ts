@@ -1,5 +1,7 @@
 import type { z } from "zod";
-import { openai, runStructured, type JsonSchemaTool } from "../infra/openaiClient.js";
+import type { JsonSchemaTool } from "../infra/openaiClient.js";
+import * as llmRouter from "../infra/llmRouter.js";
+import { resolveTaskModel } from "../infra/llmTaskConfig.js";
 import { logger } from "../modules/logger/logger.js";
 import { withSpan } from "../infra/telemetry.js";
 import { promptRegistry } from "./prompts/PromptRegistry.js";
@@ -74,6 +76,7 @@ export interface CallAgentModelResult<T> {
   data: T;
   promptVersion: number;
   usedFallback: boolean;
+  modelSource?: llmRouter.LLMProvider;
 }
 
 /**
@@ -82,31 +85,41 @@ export interface CallAgentModelResult<T> {
  * output against the agent's zod schema before trusting it, and always degrades to a
  * labeled fallback (no API key, no tool call, or a schema mismatch) rather than throwing,
  * so a single flaky agent can't take down a caller running several of them.
+ *
+ * Which model actually runs this agent is resolved per-call via llmTaskConfig.ts's
+ * registry (keyed by promptId, 1:1 with agent name) — every agent defaults to OpenAI
+ * (today's exact behavior) until deliberately reassigned. llmRouter.ts itself never
+ * throws (it normalizes OpenAI's throw-on-missing-key into a null result), so the
+ * try/catch here is a defensive backstop, not the primary "not configured" path.
  */
 export async function callAgentModel<T>(opts: CallAgentModelOptions<T>): Promise<CallAgentModelResult<T>> {
   const rendered = promptRegistry.render(opts.promptId, opts.vars);
+  const assignment = resolveTaskModel(opts.promptId);
 
-  if (!openai) {
+  let result: llmRouter.RunResult<unknown>;
+  try {
+    result = await llmRouter.runStructured<unknown>(assignment, {
+      maxTokens: opts.maxTokens,
+      tool: opts.tool,
+      system: rendered.system,
+      messages: [{ role: "user", content: rendered.prompt }],
+    });
+  } catch (err) {
+    logger.warn(`Agent prompt "${opts.promptId}" v${rendered.meta.version}: model call failed — using fallback`, err);
     return { data: opts.fallback(), promptVersion: rendered.meta.version, usedFallback: true };
   }
 
-  const result = await runStructured<unknown>({
-    maxTokens: opts.maxTokens,
-    tool: opts.tool,
-    system: rendered.system,
-    messages: [{ role: "user", content: rendered.prompt }],
-  });
-  if (!result) {
-    return { data: opts.fallback(), promptVersion: rendered.meta.version, usedFallback: true };
+  if (!result.data) {
+    return { data: opts.fallback(), promptVersion: rendered.meta.version, usedFallback: true, modelSource: result.source };
   }
 
-  const parsed = opts.schema.safeParse(result);
+  const parsed = opts.schema.safeParse(result.data);
   if (!parsed.success) {
     logger.warn(`Agent prompt "${opts.promptId}" v${rendered.meta.version}: model output failed schema validation — using fallback`, parsed.error);
-    return { data: opts.fallback(), promptVersion: rendered.meta.version, usedFallback: true };
+    return { data: opts.fallback(), promptVersion: rendered.meta.version, usedFallback: true, modelSource: result.source };
   }
 
-  return { data: parsed.data, promptVersion: rendered.meta.version, usedFallback: false };
+  return { data: parsed.data, promptVersion: rendered.meta.version, usedFallback: false, modelSource: result.source };
 }
 
 interface AgentStepOutcome<T> {
@@ -116,6 +129,7 @@ interface AgentStepOutcome<T> {
   promptId: string;
   promptVersion: number;
   usedFallback: boolean;
+  modelSource?: llmRouter.LLMProvider;
 }
 
 /** Timing/error envelope shared by all 10 agents — mirrors research/providers/support.ts's
@@ -135,6 +149,7 @@ export async function runAgentStep<T>(name: string, fn: () => Promise<AgentStepO
       usedFallback: outcome.usedFallback,
       generatedAt: new Date().toISOString(),
       durationMs: Date.now() - start,
+      modelSource: outcome.modelSource,
     };
   } catch (err) {
     throw Object.assign(err instanceof Error ? err : new Error(String(err)), { agent: name });

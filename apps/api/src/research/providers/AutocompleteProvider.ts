@@ -1,7 +1,8 @@
 import { logger } from "../../modules/logger/logger.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { AutocompleteData, ProviderResult, ResearchProviderInput } from "../types/index.js";
-import { hostnameOf, runProviderStep, withTimeout } from "./support.js";
+import { runProviderStep, withTimeout } from "./support.js";
+import { buildSearchQuery } from "./searchQuery.js";
 
 const FETCH_TIMEOUT_MS = 6000;
 const DATA_SOURCE = "Google Autocomplete (unofficial public suggest endpoint, best-effort)";
@@ -16,7 +17,7 @@ export class AutocompleteProvider implements ResearchProvider<AutocompleteData> 
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<AutocompleteData>> {
     return runProviderStep(this.name, 1, input, async () => {
-      const query = input.businessName ?? hostnameOf(input.url).replace(/^www\./i, "").split(".")[0];
+      const query = buildSearchQuery(input);
       const suggestions = await fetchSuggestions(query);
       const data: AutocompleteData = { suggestions, dataSource: DATA_SOURCE };
       return { status: suggestions.length > 0 ? "success" : "partial", data };

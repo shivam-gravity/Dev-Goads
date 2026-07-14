@@ -57,12 +57,20 @@ export interface CatalogSourceResult {
   items: ProductCatalogItem[];
 }
 
-async function fetchItems(source: ProductCatalogSource): Promise<Omit<ProductCatalogItem, "id" | "source">[]> {
+/**
+ * Live-fetch eligibility is the OR of two independent things: a global env-var-configured
+ * store (`adapter.hasLiveCredentials`, the pre-OAuth fallback every adapter still supports)
+ * or a real per-workspace OAuth connection (`connected`, computed by the caller from this
+ * workspace's own Integration row) — checking only the former would mean a workspace that
+ * genuinely connected its own Shopify store via OAuth still silently got the demo catalog,
+ * because the *global* env vars happen to be unset.
+ */
+async function fetchItems(workspaceId: string, source: ProductCatalogSource, connected: boolean): Promise<Omit<ProductCatalogItem, "id" | "source">[]> {
   const adapter = CATALOG_ADAPTERS[source];
-  if (!adapter?.hasLiveCredentials) return MOCK_CATALOGS[source];
+  if (!adapter || (!adapter.hasLiveCredentials && !connected)) return MOCK_CATALOGS[source];
 
   try {
-    return await adapter.fetchCatalog();
+    return await adapter.fetchCatalog(workspaceId);
   } catch (err) {
     logger.error(`Falling back to mock catalog for ${source} after live fetch failed`, err);
     return MOCK_CATALOGS[source];
@@ -74,7 +82,7 @@ async function catalogForSource(workspaceId: string, source: ProductCatalogSourc
   const integrations = await getOrCreateIntegrations(workspaceId);
   const integration = integrations.find((i) => i.platform === platform);
   const connected = integration?.status === "connected";
-  const items = connected ? await fetchItems(source) : [];
+  const items = connected ? await fetchItems(workspaceId, source, connected) : [];
   return {
     source,
     connected,

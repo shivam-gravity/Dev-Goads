@@ -44,7 +44,7 @@ export class ObjectionHandlingAgent implements AIAgent<ObjectionHandlingAgentOut
     return runAgentStep(this.name, async () => {
       const fields = ["audience", "reviews", "partnerships", "serpFeatures", "communityDiscussion"] as const;
       const verifiedFacts = await loadVerifiedFacts(context);
-      const { data, promptVersion, usedFallback } = await callAgentModel({
+      const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
@@ -64,6 +64,7 @@ export class ObjectionHandlingAgent implements AIAgent<ObjectionHandlingAgentOut
         promptId: this.promptId,
         promptVersion,
         usedFallback,
+        modelSource,
         confidence: computeConfidence(context, [...fields], usedFallback),
         evidence: [
           ...collectEvidence(context, [...fields]),

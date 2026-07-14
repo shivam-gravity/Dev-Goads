@@ -79,7 +79,7 @@ export class CriticAgent implements AIAgent<CriticAgentOutput> {
       const contextSummary = Object.fromEntries(ALL_CONTEXT_FIELDS.map((f) => [f, context[f] != null]));
       const verifiedFacts = await loadVerifiedFacts(context);
 
-      const { data, promptVersion, usedFallback } = await callAgentModel({
+      const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           context: JSON.stringify(contextSummary),
@@ -105,6 +105,7 @@ export class CriticAgent implements AIAgent<CriticAgentOutput> {
         promptId: this.promptId,
         promptVersion,
         usedFallback,
+        modelSource,
         confidence: Object.keys(proposals).length === 0 ? 0.1 : computeConfidence(context, [...ALL_CONTEXT_FIELDS], usedFallback),
         evidence,
       };

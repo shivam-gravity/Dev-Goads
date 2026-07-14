@@ -78,7 +78,7 @@ export class ComplianceAgent implements AIAgent<ComplianceAgentOutput> {
     return runAgentStep(this.name, async () => {
       const proposals = Object.fromEntries(Object.entries(input?.priorResults ?? {}).map(([name, result]) => [name, result.data]));
 
-      const { data, promptVersion, usedFallback } = await callAgentModel({
+      const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           company: JSON.stringify(context.company ?? {}),
@@ -102,6 +102,7 @@ export class ComplianceAgent implements AIAgent<ComplianceAgentOutput> {
         promptId: this.promptId,
         promptVersion,
         usedFallback,
+        modelSource,
         confidence: Object.keys(proposals).length === 0 ? 0.1 : computeConfidence(context, [...ALL_CONTEXT_FIELDS], usedFallback),
         evidence,
       };

@@ -13,6 +13,7 @@ import { generateAndPersistCampaignRecommendations } from "../../research/campai
 import { createStrategyFromAgentResults } from "../strategy/strategyEngine.js";
 import { buildCampaignFromStrategy } from "./campaignOrchestrator.js";
 import { getBusiness } from "../business/businessService.js";
+import { recordRecommendationDecisions } from "../../research/decision/campaign-intelligence-store.js";
 import { withQueuedLock } from "../../infra/distributedLock.js";
 import { withSpan } from "../../infra/telemetry.js";
 import {
@@ -264,6 +265,20 @@ export async function runCampaignGenerationPipeline(
     completedUnits = TOTAL_PIPELINE_UNITS;
     await reportOverall("campaign-built");
     await deps.markCompleted(jobId, campaign.id);
+
+    // Campaign Intelligence: records which of the Decision Engine's ranked recommendations
+    // actually fed this campaign vs. which were ranked but not used — best-effort, same
+    // "enhancement, not hard dependency" posture as the Decision Engine call itself above.
+    if (decisionContext) {
+      await recordRecommendationDecisions({
+        workspaceId: job.workspaceId,
+        businessId: job.businessId,
+        campaignId: campaign.id,
+        decisionContext,
+      }).catch((err) => {
+        logger.warn(`recordRecommendationDecisions failed for campaign generation job ${jobId} — continuing`, err);
+      });
+    }
 
     return { campaignId: campaign.id, strategyId, researchJobId: researchJob.id };
   }

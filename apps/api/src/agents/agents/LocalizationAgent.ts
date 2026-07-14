@@ -45,7 +45,7 @@ export class LocalizationAgent implements AIAgent<LocalizationAgentOutput> {
   async execute(context: ResearchContext): Promise<AgentResult<LocalizationAgentOutput>> {
     return runAgentStep(this.name, async () => {
       const fields = ["market", "company", "audience", "localPresence"] as const;
-      const { data, promptVersion, usedFallback } = await callAgentModel({
+      const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           market: JSON.stringify(context.market ?? {}),
@@ -63,6 +63,7 @@ export class LocalizationAgent implements AIAgent<LocalizationAgentOutput> {
         promptId: this.promptId,
         promptVersion,
         usedFallback,
+        modelSource,
         confidence: computeConfidence(context, [...fields], usedFallback),
         evidence: collectEvidence(context, [...fields]),
       };

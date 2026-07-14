@@ -1,4 +1,4 @@
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import { callDecisionModel } from "./support.js";
 import { hostnameOf } from "../providers/support.js";
 import type { ResearchContext } from "../types/index.js";
 import type { CampaignStrategy, Platform, RankedRecommendation } from "./types.js";
@@ -174,24 +174,20 @@ export async function generateStrategies(context: ResearchContext, recommendatio
   const businessLabel = context.company?.name ?? hostnameOf(context.url);
   const topRecommendations = recommendations.slice(0, 5);
 
-  let fields: StrategyFields[];
-  if (!openai) {
-    fields = fallbackStrategies(businessLabel);
-  } else {
-    const structured = await runStructured<{ strategies: StrategyFields[] }>({
-      maxTokens: 2048,
-      tool: STRATEGY_TOOL,
-      messages: [
-        {
-          role: "user",
-          content: `For "${businessLabel}", propose exactly 3 distinct, competing campaign strategies (Strategy A, B, C) — each a genuinely different bet (e.g. narrow vs. broad audience, premium vs. value positioning, awareness vs. conversion), grounded in these top-ranked recommendations:\n\n${topRecommendations
-            .map((r) => `- [${r.category}] ${r.title} (score ${r.finalScore}/100): ${r.reason}`)
-            .join("\n")}\n\nAudience research: ${context.audience?.primaryAudience ?? "unknown"}. Market: ${context.market?.competitionLevel ?? "unknown"} competition.`,
-        },
-      ],
-    });
-    fields = structured?.strategies?.length === 3 ? structured.strategies : fallbackStrategies(businessLabel);
-  }
+  const structured = await callDecisionModel<{ strategies: StrategyFields[] }>({
+    taskName: "strategy-synthesis",
+    maxTokens: 2048,
+    tool: STRATEGY_TOOL,
+    messages: [
+      {
+        role: "user",
+        content: `For "${businessLabel}", propose exactly 3 distinct, competing campaign strategies (Strategy A, B, C) — each a genuinely different bet (e.g. narrow vs. broad audience, premium vs. value positioning, awareness vs. conversion), grounded in these top-ranked recommendations:\n\n${topRecommendations
+          .map((r) => `- [${r.category}] ${r.title} (score ${r.finalScore}/100): ${r.reason}`)
+          .join("\n")}\n\nAudience research: ${context.audience?.primaryAudience ?? "unknown"}. Market: ${context.market?.competitionLevel ?? "unknown"} competition.`,
+      },
+    ],
+  });
+  const fields: StrategyFields[] = structured?.strategies?.length === 3 ? structured.strategies : fallbackStrategies(businessLabel);
 
   const confidence = computeStrategyConfidence(context, topRecommendations);
 

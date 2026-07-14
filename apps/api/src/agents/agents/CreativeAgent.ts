@@ -46,7 +46,7 @@ export class CreativeAgent implements AIAgent<CreativeAgentOutput> {
     return runAgentStep(this.name, async () => {
       const fields = ["website", "audience", "company", "videoPresence", "adLibrary"] as const;
       const verifiedFacts = await loadVerifiedFacts(context);
-      const { data, promptVersion, usedFallback } = await callAgentModel({
+      const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
@@ -66,6 +66,7 @@ export class CreativeAgent implements AIAgent<CreativeAgentOutput> {
         promptId: this.promptId,
         promptVersion,
         usedFallback,
+        modelSource,
         confidence: computeConfidence(context, [...fields], usedFallback),
         evidence: [
           ...collectEvidence(context, [...fields]),

@@ -2,7 +2,8 @@ import { outageDataSource } from "../../infra/firecrawlClient.js";
 import { scrapeUrlWithFallback, sourceLabel } from "../../infra/scrapeFallback.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProviderResult, ResearchProviderInput, SerpFeaturesData } from "../types/index.js";
-import { hostnameOf, runProviderStep } from "./support.js";
+import { runProviderStep } from "./support.js";
+import { buildSearchQuery } from "./searchQuery.js";
 
 const MAX_ITEMS = 8;
 
@@ -19,7 +20,7 @@ export class GoogleSerpFeaturesProvider implements ResearchProvider<SerpFeatures
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<SerpFeaturesData>> {
     return runProviderStep(this.name, 1, input, async () => {
-      const query = input.businessName ?? hostnameOf(input.url).replace(/^www\./i, "").split(".")[0];
+      const query = buildSearchQuery(input);
       const scraped = await scrapeUrlWithFallback(`https://www.google.com/search?q=${encodeURIComponent(query)}`, ["markdown"]);
       if (scraped.outage) {
         return { status: "partial", data: { peopleAlsoAsk: [], relatedSearches: [], dataSource: outageDataSource(scraped.outage) } };

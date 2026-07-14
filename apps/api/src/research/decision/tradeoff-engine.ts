@@ -1,4 +1,4 @@
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import { callDecisionModel } from "./support.js";
 import type { DifficultyLevel, Recommendation, TradeoffAnalysis } from "./types.js";
 
 /**
@@ -55,24 +55,20 @@ function fallbackTradeoff(recommendation: Recommendation): TradeoffFields {
 export async function analyzeTradeoffs(recommendations: Recommendation[]): Promise<TradeoffAnalysis[]> {
   if (recommendations.length === 0) return [];
 
-  let fields: TradeoffFields[];
-  if (!openai) {
-    fields = recommendations.map(fallbackTradeoff);
-  } else {
-    const structured = await runStructured<{ tradeoffs: TradeoffFields[] }>({
-      maxTokens: 2048,
-      tool: TRADEOFF_TOOL,
-      messages: [
-        {
-          role: "user",
-          content: `For each of these ${recommendations.length} marketing recommendations, analyze the trade-offs. Return exactly ${recommendations.length} items in the same order.\n\n${recommendations
-            .map((r, i) => `${i + 1}. [${r.category}] ${r.title} — ${r.reason} (expected outcome: ${r.expectedOutcome})`)
-            .join("\n")}`,
-        },
-      ],
-    });
-    fields = structured?.tradeoffs?.length === recommendations.length ? structured.tradeoffs : recommendations.map(fallbackTradeoff);
-  }
+  const structured = await callDecisionModel<{ tradeoffs: TradeoffFields[] }>({
+    taskName: "tradeoff-analysis",
+    maxTokens: 2048,
+    tool: TRADEOFF_TOOL,
+    messages: [
+      {
+        role: "user",
+        content: `For each of these ${recommendations.length} marketing recommendations, analyze the trade-offs. Return exactly ${recommendations.length} items in the same order.\n\n${recommendations
+          .map((r, i) => `${i + 1}. [${r.category}] ${r.title} — ${r.reason} (expected outcome: ${r.expectedOutcome})`)
+          .join("\n")}`,
+      },
+    ],
+  });
+  const fields: TradeoffFields[] = structured?.tradeoffs?.length === recommendations.length ? structured.tradeoffs : recommendations.map(fallbackTradeoff);
 
   return recommendations.map((recommendation, index) => ({
     recommendationId: recommendation.id,

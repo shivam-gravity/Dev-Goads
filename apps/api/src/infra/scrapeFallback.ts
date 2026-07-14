@@ -9,7 +9,7 @@ import {
   type FirecrawlScrapeData,
   type FirecrawlScrapeFormat,
 } from "./firecrawlClient.js";
-import { discoverSitemapPages, scrapeUrl } from "../modules/onboarding/scraper.js";
+import { discoverSitemapPages, scrapeUrl, SCREENSHOT_TIMEOUT_MS } from "../modules/onboarding/scraper.js";
 
 /**
  * In-house-first fallback for Firecrawl's map/scrape/crawl capabilities — tries a
@@ -215,9 +215,14 @@ export interface CrawlFallbackResult {
 export async function crawlUrlWithFallback(url: string, opts: { limit?: number; formats?: FirecrawlScrapeFormat[] }): Promise<CrawlFallbackResult> {
   if (FALLBACK_ENABLED) {
     try {
+      // scrapeUrl's crawl loop respects timeBudgetMs on its own, but it then awaits its
+      // trailing screenshot capture (up to SCREENSHOT_TIMEOUT_MS) before returning — the
+      // outer race needs that same headroom added on top, or a screenshot that's still
+      // legitimately in flight gets the whole crawl result (pages, images, everything)
+      // discarded a moment before it would have succeeded.
       const site = await raceWithTimeout(
         scrapeUrl(url, { crawlCap: opts.limit, timeBudgetMs: INHOUSE_ATTEMPT_TIMEOUT_MS }),
-        INHOUSE_ATTEMPT_TIMEOUT_MS
+        INHOUSE_ATTEMPT_TIMEOUT_MS + SCREENSHOT_TIMEOUT_MS
       );
       if (site.pages && site.pages.length > 0 && !looksBlocked(undefined, site.excerpt)) {
         const pages: FirecrawlCrawlPage[] = site.pages.map((page) => ({

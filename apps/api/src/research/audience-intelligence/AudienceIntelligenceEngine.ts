@@ -1,6 +1,11 @@
 import { openai, runStructured, runWebSearch } from "../../infra/openaiClient.js";
 import { hostnameOf } from "../providers/support.js";
 import { readMemory, writeMemory } from "../memory/MemoryCoordinator.js";
+import { computeLtvProxy, type LtvProxyResult } from "./ltvProxy.js";
+import { getProductCatalog } from "../../modules/integrations/productCatalogService.js";
+import { listCampaignsForBusiness } from "../../modules/orchestrator/campaignOrchestrator.js";
+import { normalizePerformance } from "../../modules/pipeline/performancePipeline.js";
+import { logger } from "../../modules/logger/logger.js";
 import type { Citation } from "../../types/index.js";
 
 /**
@@ -72,6 +77,11 @@ export interface AudienceIntelligenceReport {
   procurementCycle: string;
   /** The stages a buyer moves through from first awareness to becoming a customer. */
   customerJourney: CustomerJourneyStage[];
+  /** Deterministic estimated-commercial-value proxy (real catalog price + real historical
+   * conversion rate, never an LLM guess) — see ltvProxy.ts's own doc comment for exactly
+   * what this is and, importantly, is not (a genuine lifetime-value computation, which
+   * would need repeat-purchase data this platform doesn't track). */
+  estimatedLtvProxy: LtvProxyResult;
   evidence: string[];
   citations: Citation[];
   confidence: number;
@@ -155,7 +165,7 @@ const AUDIENCE_TOOL = {
   },
 };
 
-type AudienceFields = Omit<AudienceIntelligenceReport, "evidence" | "citations" | "confidence" | "generatedAt">;
+type AudienceFields = Omit<AudienceIntelligenceReport, "evidence" | "citations" | "confidence" | "generatedAt" | "estimatedLtvProxy">;
 
 function fallbackFields(businessName: string): AudienceFields {
   return {
@@ -189,6 +199,59 @@ function computeConfidence(usedFallback: boolean, citationCount: number, hadMemo
   return Math.round(Math.min(base + (hadMemoryCorroboration ? 0.05 : 0), 1) * 100) / 100;
 }
 
+/** Real average order value across every connected e-commerce catalog (Shopify/WooCommerce)
+ * for this workspace — null if none is connected or the catalog came back empty. Never
+ * touches mock/demo catalog data (getProductCatalog's own "connected" gate already ensures
+ * that — see productCatalogService.ts). */
+async function catalogAverageOrderValueCents(workspaceId: string): Promise<number | null> {
+  try {
+    const results = await getProductCatalog(workspaceId, "all");
+    const prices = results
+      .filter((r) => r.connected)
+      .flatMap((r) => r.items)
+      .map((item) => item.priceCents)
+      .filter((p): p is number => typeof p === "number" && p > 0);
+    if (prices.length === 0) return null;
+    return prices.reduce((sum, p) => sum + p, 0) / prices.length;
+  } catch (err) {
+    logger.warn(`AudienceIntelligenceEngine: failed to compute catalog average order value for workspace ${workspaceId}`, err);
+    return null;
+  }
+}
+
+/** Gathers both real-data inputs for computeLtvProxy, guarding on businessId being present
+ * (an audience-intelligence run triggered before onboarding has a businessId, e.g. very
+ * early in a fresh research session, has no campaigns/catalog to look up yet — that's a
+ * genuine "insufficient data" case, not a bug). */
+async function computeLtvProxyForInput(input: AudienceIntelligenceInput): Promise<LtvProxyResult> {
+  if (!input.businessId) return computeLtvProxy({});
+  const [orderValue, conversionRate] = await Promise.all([
+    catalogAverageOrderValueCents(input.workspaceId),
+    historicalConversionRate(input.businessId),
+  ]);
+  return computeLtvProxy({ catalogAverageOrderValueCents: orderValue, historicalConversionRate: conversionRate });
+}
+
+/** Real historical conversion rate across this business's own past launched campaigns —
+ * null if it has none yet, or none has accumulated enough clicks to compute a meaningful
+ * rate from. Mirrors campaign-learning-engine.ts's own aggregation shape (real ad
+ * performance, never an LLM self-report), just rolled up across every campaign rather than
+ * one at a time. */
+async function historicalConversionRate(businessId: string): Promise<number | null> {
+  try {
+    const campaigns = await listCampaignsForBusiness(businessId);
+    if (campaigns.length === 0) return null;
+    const perCampaignStats = (await Promise.all(campaigns.map((c) => normalizePerformance(c.id)))).flat();
+    const totalClicks = perCampaignStats.reduce((sum, s) => sum + s.clicks, 0);
+    const totalConversions = perCampaignStats.reduce((sum, s) => sum + s.conversions, 0);
+    if (totalClicks === 0) return null;
+    return totalConversions / totalClicks;
+  } catch (err) {
+    logger.warn(`AudienceIntelligenceEngine: failed to compute historical conversion rate for business ${businessId}`, err);
+    return null;
+  }
+}
+
 async function searchAudienceSignals(input: AudienceIntelligenceInput): Promise<{ narrative: string; citations: Citation[] }> {
   const subject = input.businessName ?? hostnameOf(input.url);
   const research = await runWebSearch(
@@ -218,9 +281,15 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
   const businessLabel = input.businessName ?? hostnameOf(input.url);
   const dedupKey = input.businessId ?? input.url;
 
+  // Independent of the LLM/OpenAI path below — this is deterministic, code-computed from
+  // this workspace/business's own real catalog and campaign data, not a research synthesis
+  // step, so it still runs (and can still succeed) even when there's no OPENAI_API_KEY.
+  const estimatedLtvProxy = await computeLtvProxyForInput(input);
+
   if (!openai) {
     return {
       ...fallbackFields(businessLabel),
+      estimatedLtvProxy,
       evidence: [],
       citations: [],
       confidence: computeConfidence(true, 0, false),
@@ -257,6 +326,7 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
 
   const report: AudienceIntelligenceReport = {
     ...fields,
+    estimatedLtvProxy,
     evidence: citations.map((c) => `${c.title} (${c.url})`),
     citations,
     confidence: computeConfidence(usedFallback, citations.length, priorMatches.length > 0),

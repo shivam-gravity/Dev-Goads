@@ -487,13 +487,11 @@ export default function CampaignBuilder() {
           >
             <option value="meta">Meta ({networkCounts.meta})</option>
             <option value="google">Google ({networkCounts.google})</option>
-            <option value="tiktok">TikTok — Coming soon</option>
+            <option value="tiktok">TikTok ({networkCounts.tiktok})</option>
           </select>
 
-          {newAdNetwork === "tiktok" ? (
-            <p className="muted-text campaign-builder-tiktok-note">TikTok campaigns aren't available yet — check back soon.</p>
-          ) : visibleVariants.length === 0 ? (
-            <p className="muted-text campaign-builder-tiktok-note">No {newAdNetwork === "meta" ? "Meta" : "Google"} ads yet — add one below.</p>
+          {visibleVariants.length === 0 ? (
+            <p className="muted-text campaign-builder-tiktok-note">No {newAdNetwork === "meta" ? "Meta" : newAdNetwork === "google" ? "Google" : "TikTok"} ads yet — add one below.</p>
           ) : (
             visibleVariants.map((v, i) => (
               <div key={v.id} className={`campaign-builder-variant-item ${v.id === activeVariant?.id ? "active" : ""}`}>
@@ -504,9 +502,7 @@ export default function CampaignBuilder() {
               </div>
             ))
           )}
-          {newAdNetwork !== "tiktok" && (
-            <button type="button" className="btn btn-secondary btn-sm btn-full mt-2" onClick={addVariant}>+ Add Ad</button>
-          )}
+          <button type="button" className="btn btn-secondary btn-sm btn-full mt-2" onClick={addVariant}>+ Add Ad</button>
         </aside>
 
         <div className="campaign-builder-columns">

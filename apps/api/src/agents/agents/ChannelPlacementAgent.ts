@@ -52,7 +52,7 @@ export class ChannelPlacementAgent implements AIAgent<ChannelPlacementAgentOutpu
   async execute(context: ResearchContext): Promise<AgentResult<ChannelPlacementAgentOutput>> {
     return runAgentStep(this.name, async () => {
       const fields = ["audience", "technology", "socialMedia", "localPresence", "appStore", "videoPresence"] as const;
-      const { data, promptVersion, usedFallback } = await callAgentModel({
+      const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
           audience: JSON.stringify(context.audience ?? {}),
@@ -72,6 +72,7 @@ export class ChannelPlacementAgent implements AIAgent<ChannelPlacementAgentOutpu
         promptId: this.promptId,
         promptVersion,
         usedFallback,
+        modelSource,
         confidence: computeConfidence(context, [...fields], usedFallback),
         evidence: collectEvidence(context, [...fields]),
       };
