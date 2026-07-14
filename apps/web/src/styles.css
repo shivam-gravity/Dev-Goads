@@ -8826,26 +8826,6 @@ td {
   margin-top: 10px;
 }
 
-.persona-carousel-nav {
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: #ffffff;
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.persona-carousel-nav:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 .persona-carousel-track {
   display: flex;
   gap: 16px;

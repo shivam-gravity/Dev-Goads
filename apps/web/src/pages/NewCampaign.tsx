@@ -280,22 +280,11 @@ const PERSONA_AVATAR_COLORS = [
 ];
 
 function PersonaCarousel({ personas }: { personas: AudiencePersonaCard[] }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  function scrollByCard(direction: 1 | -1) {
-    const el = scrollRef.current;
-    if (!el) return;
-    const card = el.querySelector<HTMLElement>(".persona-card");
-    const step = (card?.offsetWidth ?? 260) + 16;
-    el.scrollBy({ left: direction * step, behavior: "smooth" });
-  }
-
   return (
     <div className="crawler-block-content">
       <p>Who's actually going to see this — {personas.length} audience persona{personas.length === 1 ? "" : "s"} built from the research:</p>
       <div className="persona-carousel">
-        <button type="button" className="persona-carousel-nav" onClick={() => scrollByCard(-1)} aria-label="Previous personas">‹</button>
-        <div className="persona-carousel-track" ref={scrollRef}>
+        <div className="persona-carousel-track">
           {personas.map((p, i) => {
             const avatar = PERSONA_AVATAR_COLORS[i % PERSONA_AVATAR_COLORS.length];
             return (
@@ -322,7 +311,6 @@ function PersonaCarousel({ personas }: { personas: AudiencePersonaCard[] }) {
             );
           })}
         </div>
-        <button type="button" className="persona-carousel-nav" onClick={() => scrollByCard(1)} aria-label="Next personas">›</button>
       </div>
     </div>
   );
