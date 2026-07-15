@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type { ChatMessage, JsonSchemaTool } from "./llmTypes.js";
 import { recordTokens } from "./tokenMeter.js";
 import { recordGlobalLlmUsage } from "./llmUsageBoundary.js";
+import { dynamicFetch } from "./dynamicFetch.js";
 
 // Ollama exposes an OpenAI-compatible endpoint, so the same SDK works unchanged — just a
 // different baseURL and a throwaway API key (Ollama doesn't check it, but the SDK requires
@@ -11,7 +12,7 @@ import { recordGlobalLlmUsage } from "./llmUsageBoundary.js";
 // just fails, which llmRouter.ts's fallback-to-OpenAI wrapping already handles.
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1";
 const OLLAMA_DEFAULT_MODEL = process.env.OLLAMA_MODEL ?? "llama3.2";
-const ollama = new OpenAI({ baseURL: OLLAMA_BASE_URL, apiKey: "ollama" });
+const ollama = new OpenAI({ baseURL: OLLAMA_BASE_URL, apiKey: "ollama", fetch: dynamicFetch });
 
 // Caps how many requests run concurrently against the one local Ollama instance — without
 // this, assigning several concurrently-running agents/providers to Ollama would all hit

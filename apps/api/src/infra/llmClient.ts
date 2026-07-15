@@ -1,5 +1,6 @@
 import * as groq from "./groqClient.js";
 import * as mistral from "./mistralClient.js";
+import * as llmRouter from "./llmRouter.js";
 import type { ChatMessage, JsonSchemaTool, WebSearchOutcome } from "./llmTypes.js";
 
 export type { ChatMessage, JsonSchemaTool, WebSearchOutcome };
@@ -13,6 +14,14 @@ export type { ChatMessage, JsonSchemaTool, WebSearchOutcome };
  * is a drop-in replacement for the old infra/openaiClient.ts: same function names/shapes,
  * backed by Groq (the new default text-generation provider — fast, hosted, a genuinely
  * free tier) instead of OpenAI.
+ *
+ * runStructured/runText route through llmRouter.ts with a fixed "groq" assignment rather
+ * than calling groqClient directly — every one of these ~20 call sites gets llmRouter's
+ * fallback chain (groq -> mistral -> google) for free this way, no call-site changes
+ * needed. Before this, a Groq failure here (e.g. its daily token quota exhausted) had
+ * nowhere to fall back to at all — see modules/onboarding/analysis.ts's fact-extraction
+ * call, which failed outright with a Groq 429 while router-based callers doing the exact
+ * same kind of work already degraded gracefully to Mistral.
  *
  * Two capabilities OpenAI had that neither Groq nor Mistral replace:
  *  - Live web search: OpenAI's gpt-4o-search-preview was a hosted server-side search tool,
@@ -34,13 +43,17 @@ export async function runStructured<T>(opts: {
   tool: JsonSchemaTool;
 }): Promise<T | null> {
   if (!llm) throw new Error("GROQ_API_KEY is not set");
-  return groq.runStructured<T>(opts);
+  const { model, ...rest } = opts;
+  const result = await llmRouter.runStructured<T>({ provider: "groq", model: model ?? groq.GROQ_DEFAULT_MODEL }, rest);
+  return result.data;
 }
 
 /** Plain chat completion, no tools — returns the assistant's text, or null if empty. */
 export async function runText(opts: { model?: string; maxTokens: number; system?: string; messages: ChatMessage[] }): Promise<string | null> {
   if (!llm) throw new Error("GROQ_API_KEY is not set");
-  return groq.runText(opts);
+  const { model, ...rest } = opts;
+  const result = await llmRouter.runText({ provider: "groq", model: model ?? groq.GROQ_DEFAULT_MODEL }, rest);
+  return result.data;
 }
 
 /** Always returns an empty result — see this file's doc comment on why no provider here

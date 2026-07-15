@@ -23,7 +23,7 @@ const NAME_EXTRACTION_TOOL = {
         maxItems: 12,
         items: {
           type: "object",
-          properties: { name: { type: "string" }, url: { type: "string" } },
+          properties: { name: { type: "string" } },
           required: ["name"],
         },
       },
@@ -32,9 +32,17 @@ const NAME_EXTRACTION_TOOL = {
   },
 };
 
-async function extractNamesFromNarrative(narrative: string): Promise<{ name: string; url?: string }[]> {
+// url intentionally NOT part of this schema. This call has no citations to verify a url
+// against (it only ever sees narrative prose), so it had no way to distinguish "this
+// competitor's own homepage" from "the url of the article the narrative came from" — and
+// in practice it never got that distinction right: an audit of every url this call had
+// ever produced (research_memory_entries, kind "competitor-profile") found 76/76 were the
+// citing article's url (g2.com, forbes.com, owler.com comparison pages, etc.), not the
+// named competitor's own site. Source 3 (discoverFromResearchMemory below) may still
+// surface a url from a previously-verified source; this one just stops fabricating one.
+async function extractNamesFromNarrative(narrative: string): Promise<{ name: string }[]> {
   if (!narrative.trim()) return [];
-  const result = await runStructured<{ competitors: { name: string; url?: string }[] }>({
+  const result = await runStructured<{ competitors: { name: string }[] }>({
     maxTokens: 512,
     tool: NAME_EXTRACTION_TOOL,
     messages: [{ role: "user", content: `Extract named competitors from this text:\n\n${narrative}` }],
@@ -44,7 +52,7 @@ async function extractNamesFromNarrative(narrative: string): Promise<{ name: str
 
 /** Source 1: a direct "who competes with X" search — the same angle CompetitorProvider
  * already uses, kept here too since it's still a legitimate, independent signal. */
-async function discoverFromDirectSearch(input: DiscoveryInput): Promise<{ name: string; url?: string }[]> {
+async function discoverFromDirectSearch(input: DiscoveryInput): Promise<{ name: string }[]> {
   if (!llm) return [];
   const research = await runWebSearch(
     `Who are the main direct competitors of the business at ${input.url}${input.businessName ? ` ("${input.businessName}")` : ""} in ${input.industry ?? "its category"}? List real, named companies.`
@@ -56,7 +64,7 @@ async function discoverFromDirectSearch(input: DiscoveryInput): Promise<{ name: 
  * from source 1, since "X alternatives" and "X vs" queries tend to surface review-site
  * roundups (G2, Capterra, ...) and comparison articles that a plain "competitors of X"
  * query often doesn't, giving a genuinely independent second read on the landscape. */
-async function discoverFromAlternativesSearch(input: DiscoveryInput): Promise<{ name: string; url?: string }[]> {
+async function discoverFromAlternativesSearch(input: DiscoveryInput): Promise<{ name: string }[]> {
   if (!llm) return [];
   const subject = input.businessName ?? hostnameOf(input.url);
   const research = await runWebSearch(

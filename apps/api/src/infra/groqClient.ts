@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type { ChatMessage, JsonSchemaTool } from "./llmTypes.js";
 import { recordTokens } from "./tokenMeter.js";
 import { assertGlobalLlmUsageAvailable, recordGlobalLlmUsage } from "./llmUsageBoundary.js";
+import { dynamicFetch } from "./dynamicFetch.js";
 
 // Groq's API is OpenAI-compatible (same chat.completions.create shape, including
 // tool_choice-by-name forcing) — confirmed live against api.groq.com before this file was
@@ -9,8 +10,8 @@ import { assertGlobalLlmUsageAvailable, recordGlobalLlmUsage } from "./llmUsageB
 // ollamaClient.ts uses for the local model. This is now the platform's default/reliable
 // text-generation backend (replacing OpenAI): fast hosted inference, a genuinely free tier,
 // no local model to keep running.
-const groq = process.env.GROQ_API_KEY ? new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1" }) : null;
-const GROQ_DEFAULT_MODEL = process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile";
+const groq = process.env.GROQ_API_KEY ? new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1", fetch: dynamicFetch }) : null;
+export const GROQ_DEFAULT_MODEL = process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile";
 
 export async function runStructured<T>(opts: {
   model?: string;

@@ -129,16 +129,60 @@ test("llmRouter.runStructured - a mistral assignment with no real key configured
   }
 });
 
-test("llmRouter.runStructured - both the assigned provider and the Groq fallback failing still degrades gracefully, never throws", async () => {
+test("llmRouter.runStructured - a groq assignment failing now falls back to Mistral instead of failing outright", async () => {
+  // The actual production bug this fallback chain exists to fix: Groq is the default
+  // assignment for most tasks, and until this chain existed, a Groq failure (e.g. its
+  // daily token quota exhausted) had no further fallback at all — every task defaulted to
+  // Groq degraded to "no live research" simultaneously. Mistral is the next tier now.
   const original = currentFetchImpl;
-  currentFetchImpl = (async () => {
+  const reached: string[] = [];
+  currentFetchImpl = (async (url) => {
+    if (isUrl(url, "api.groq.com")) {
+      reached.push("groq");
+      throw new Error("429 rate limit (simulated)");
+    }
+    if (isUrl(url, "api.mistral.ai")) {
+      reached.push("mistral");
+      return jsonResponse({ choices: [{ message: { tool_calls: [{ function: { name: "emit_test", arguments: JSON.stringify({ ok: true, via: "mistral" }) } }] } }] });
+    }
+    throw new Error(`unexpected fetch: ${String(url)}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await runStructured({ provider: "groq", model: "llama-3.3-70b-versatile" }, BASE_OPTS);
+    assert.strictEqual(result.source, "mistral");
+    assert.deepStrictEqual(result.data, { ok: true, via: "mistral" });
+    // The OpenAI SDK (which groqClient.ts reuses) auto-retries a connection error a few
+    // times before giving up, so groq may appear more than once — dedup to first-seen
+    // order to assert only what matters: groq was tried, then mistral, in that order.
+    assert.deepStrictEqual([...new Set(reached)], ["groq", "mistral"]);
+  } finally {
+    currentFetchImpl = original;
+  }
+});
+
+test("llmRouter.runStructured - the assigned provider, Groq, and Mistral all failing still degrades gracefully, never throws", async () => {
+  const original = currentFetchImpl;
+  const reached: string[] = [];
+  currentFetchImpl = (async (url) => {
+    if (isUrl(url, "11434")) reached.push("ollama");
+    else if (isUrl(url, "api.groq.com")) reached.push("groq");
+    else if (isUrl(url, "api.mistral.ai")) reached.push("mistral");
     throw new Error("network unavailable (simulated)");
   }) as typeof fetch;
 
   try {
     const result = await runStructured({ provider: "ollama", model: "llama3.1" }, BASE_OPTS);
     assert.strictEqual(result.data, null);
-    assert.strictEqual(result.source, "groq");
+    // Reports the originally-assigned provider once the whole chain is exhausted — no
+    // single leg is privileged as "the" source when everything failed.
+    assert.strictEqual(result.source, "ollama");
+    // Confirms the chain actually walked through every configured tier (not just
+    // "didn't throw") — Google/Gemini isn't in this list since GEMINI_API_KEY isn't set in
+    // this test file, so it degrades to null without a network call, same as being absent.
+    // Dedup to first-seen order: the OpenAI SDK (groq/ollama) auto-retries a connection
+    // error a few times before giving up, so a provider may appear more than once.
+    assert.deepStrictEqual([...new Set(reached)], ["ollama", "groq", "mistral"]);
   } finally {
     currentFetchImpl = original;
   }

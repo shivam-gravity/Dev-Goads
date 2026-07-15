@@ -12,17 +12,26 @@ import { assertGlobalLlmUsageAvailable } from "./llmUsageBoundary.js";
  * research/decision/support.ts) never import groqClient/ollamaClient/mistralClient/
  * geminiClient directly; they resolve an LLMAssignment via llmTaskConfig.ts and call this.
  *
- * Groq replaces OpenAI as the reliable default/fallback-of-last-resort (OpenAI and
- * Anthropic/Claude have been removed from this platform entirely — see infra/llmClient.ts
- * for what that cost: no replacement for OpenAI's hosted web search or image generation).
- * An assignment of "groq" is called directly, no wrapping. Any other assignment gets a
- * timeout + automatic fallback to Groq on failure — the assigned provider is the
- * new/experimental leg, Groq is the safety net, same shape as infra/scrapeFallback.ts's
- * in-house-then-Firecrawl pattern, just inverted (here the *reliable* leg is the fallback,
- * not the first attempt). This is also what makes it safe to assign a task to
- * "mistral"/"google" before a key is configured (or, for Mistral specifically right now,
- * while the configured key is invalid — see mistralClient.ts): the client returns null,
- * which this treats as "unusable" and falls through to Groq.
+ * Groq replaces OpenAI as the reliable default (OpenAI and Anthropic/Claude have been
+ * removed from this platform entirely — see infra/llmClient.ts for what that cost: no
+ * replacement for OpenAI's hosted web search or image generation). An assignment of "groq"
+ * is called directly first; any other assignment gets a timeout + automatic fallback on
+ * failure — the assigned provider is the new/experimental leg, same shape as
+ * infra/scrapeFallback.ts's in-house-then-Firecrawl pattern, just inverted (here the
+ * *reliable* leg is the fallback, not the first attempt).
+ *
+ * FALLBACK_CHAIN below is tried in order (skipping whichever provider was already
+ * attempted) whenever the first attempt fails — Groq is no longer a dead end. A single
+ * shared Groq key is both the default assignment for most tasks AND was, until this chain
+ * existed, the ONLY fallback leg: the day Groq's own daily token quota got exhausted (from
+ * heavy same-day testing against one key), every task defaulted to Groq had nowhere left
+ * to go and the entire pipeline degraded to "no live research" placeholders simultaneously
+ * (see the 2026-07-15 polluxa.com campaign-generation run — 526 Groq 429s in one job,
+ * 23/27 research providers falling back). Mistral/Gemini now catch that case instead of
+ * every task failing at once. Ollama is intentionally NOT in this chain — it's a
+ * deliberately-assigned local/slow leg for specific tasks, not a general safety net.
+ * This is also what makes it safe to assign a task to "mistral"/"google" before a key is
+ * configured: the client returns null, which this treats as "unusable" and falls through.
  */
 
 export type LLMProvider = "groq" | "ollama" | "mistral" | "google";
@@ -37,6 +46,10 @@ const CLIENTS = {
   mistral: mistralClient,
   google: geminiClient,
 };
+
+// Tried in order (skipping whatever was already attempted) whenever the first attempt
+// fails or is unconfigured. Ollama deliberately excluded — see the file-level doc comment.
+const FALLBACK_CHAIN: LLMProvider[] = ["groq", "mistral", "google"];
 
 // Kill switch — set to "false" to disable the fallback-to-Groq safety net and let an
 // assigned non-Groq provider fail outright instead, mirroring SCRAPE_FALLBACK_ENABLED's
@@ -111,16 +124,51 @@ async function safeGroqText(opts: TextOpts & { model?: string }): Promise<string
   }
 }
 
+/** Walks FALLBACK_CHAIN in order, skipping `alreadyTried` (the provider the caller already
+ * attempted), stopping at the first one that returns usable data. Reports `alreadyTried` as
+ * `source` if the whole chain is exhausted — `data` is null in that case regardless, so
+ * `source` is only informational (which leg was attempted last), matching the existing
+ * convention on total failure. */
+async function fallbackChainStructured<T>(opts: StructuredOpts, alreadyTried: LLMProvider): Promise<RunResult<T>> {
+  for (const provider of FALLBACK_CHAIN) {
+    if (provider === alreadyTried) continue;
+    try {
+      const data = await raceWithTimeout(CLIENTS[provider].runStructured<T>(opts), timeoutFor(provider));
+      if (data !== null) return { data, source: provider };
+      logger.warn(`llmRouter: fallback provider ${provider} produced no usable result`);
+    } catch (err) {
+      logger.warn(`llmRouter: fallback provider ${provider} failed`, err);
+    }
+  }
+  return { data: null, source: alreadyTried };
+}
+
+async function fallbackChainText(opts: TextOpts, alreadyTried: LLMProvider): Promise<RunResult<string>> {
+  for (const provider of FALLBACK_CHAIN) {
+    if (provider === alreadyTried) continue;
+    try {
+      const data = await raceWithTimeout(CLIENTS[provider].runText(opts), timeoutFor(provider));
+      if (data !== null) return { data, source: provider };
+      logger.warn(`llmRouter: fallback provider ${provider} produced no usable text result`);
+    } catch (err) {
+      logger.warn(`llmRouter: fallback provider ${provider} failed`, err);
+    }
+  }
+  return { data: null, source: alreadyTried };
+}
+
 export async function runStructured<T>(assignment: LLMAssignment, opts: StructuredOpts): Promise<RunResult<T>> {
-  // Checked before every other branch, including the direct-Groq path and the
-  // fallback-to-Groq safety net below — see llmUsageBoundary.ts for why this is a hard
-  // stop with no fallback, unlike the per-provider degrade-and-continue pattern everywhere
-  // else in this router.
+  // Checked before every other branch, including the direct-Groq path and the fallback
+  // chain below — see llmUsageBoundary.ts for why this is a hard stop with no fallback,
+  // unlike the per-provider degrade-and-continue pattern everywhere else in this router.
   assertGlobalLlmUsageAvailable();
 
   if (assignment.provider === "groq") {
     const data = await safeGroqStructured<T>({ ...opts, model: assignment.model });
-    return { data, source: "groq" };
+    if (data !== null) return { data, source: "groq" };
+    if (!FALLBACK_ENABLED) return { data: null, source: "groq" };
+    logger.warn("llmRouter: groq (default provider) failed — trying fallback chain");
+    return fallbackChainStructured<T>(opts, "groq");
   }
 
   if (!FALLBACK_ENABLED) {
@@ -132,13 +180,12 @@ export async function runStructured<T>(assignment: LLMAssignment, opts: Structur
     const client = CLIENTS[assignment.provider];
     const data = await raceWithTimeout(client.runStructured<T>({ ...opts, model: assignment.model }), timeoutFor(assignment.provider));
     if (data !== null) return { data, source: assignment.provider };
-    logger.warn(`llmRouter: ${assignment.provider}:${assignment.model} produced no usable result — falling back to Groq`);
+    logger.warn(`llmRouter: ${assignment.provider}:${assignment.model} produced no usable result — falling back`);
   } catch (err) {
-    logger.warn(`llmRouter: ${assignment.provider}:${assignment.model} failed — falling back to Groq`, err);
+    logger.warn(`llmRouter: ${assignment.provider}:${assignment.model} failed — falling back`, err);
   }
 
-  const data = await safeGroqStructured<T>(opts);
-  return { data, source: "groq" };
+  return fallbackChainStructured<T>(opts, assignment.provider);
 }
 
 export async function runText(assignment: LLMAssignment, opts: TextOpts): Promise<RunResult<string>> {
@@ -146,7 +193,10 @@ export async function runText(assignment: LLMAssignment, opts: TextOpts): Promis
 
   if (assignment.provider === "groq") {
     const data = await safeGroqText({ ...opts, model: assignment.model });
-    return { data, source: "groq" };
+    if (data !== null) return { data, source: "groq" };
+    if (!FALLBACK_ENABLED) return { data: null, source: "groq" };
+    logger.warn("llmRouter: groq (default provider) failed — trying fallback chain");
+    return fallbackChainText(opts, "groq");
   }
 
   if (!FALLBACK_ENABLED) {
@@ -158,11 +208,10 @@ export async function runText(assignment: LLMAssignment, opts: TextOpts): Promis
     const client = CLIENTS[assignment.provider];
     const data = await raceWithTimeout(client.runText({ ...opts, model: assignment.model }), timeoutFor(assignment.provider));
     if (data !== null) return { data, source: assignment.provider };
-    logger.warn(`llmRouter: ${assignment.provider}:${assignment.model} produced no usable text result — falling back to Groq`);
+    logger.warn(`llmRouter: ${assignment.provider}:${assignment.model} produced no usable text result — falling back`);
   } catch (err) {
-    logger.warn(`llmRouter: ${assignment.provider}:${assignment.model} failed — falling back to Groq`, err);
+    logger.warn(`llmRouter: ${assignment.provider}:${assignment.model} failed — falling back`, err);
   }
 
-  const data = await safeGroqText(opts);
-  return { data, source: "groq" };
+  return fallbackChainText(opts, assignment.provider);
 }
