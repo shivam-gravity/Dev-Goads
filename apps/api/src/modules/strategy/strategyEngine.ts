@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import { llm, runStructured } from "../../infra/llmClient.js";
 import { prisma } from "../../db/prisma.js";
 import type { AdCreative, AdNetwork, AdStrategy, AudienceAnalysis, AudiencePersona, BusinessProfile, CampaignSuggestion, CompetitorBudgetAnalysis, MarketLocationAnalysis, ProductAnalysis } from "../../types/index.js";
 import type { CampaignAgentOutput, ComplianceAgentOutput, ObjectionHandlingAgentOutput, PricingOfferAgentOutput } from "../../agents/types/index.js";
@@ -107,7 +107,7 @@ function fallbackStrategy(business: BusinessProfile): Omit<AdStrategy, "id" | "b
 export async function generateStrategy(business: BusinessProfile): Promise<AdStrategy> {
   let payload: Omit<AdStrategy, "id" | "businessId" | "createdAt">;
 
-  if (openai) {
+  if (llm) {
     const result = await runStructured<typeof payload>({
       maxTokens: 1024,
       tool: STRATEGY_TOOL,
@@ -424,7 +424,7 @@ function fallbackCampaignSuggestions(input: ResearchStrategyInput): CampaignSugg
  * become the campaign's ads directly (see createStrategyFromSuggestions/buildCampaignFromSuggestions) —
  * no separate pre-builder pick-one step. TikTok is excluded — shown as "Coming soon" in the builder. */
 export async function generateCampaignSuggestions(input: ResearchStrategyInput): Promise<CampaignSuggestion[]> {
-  if (!openai) return fallbackCampaignSuggestions(input);
+  if (!llm) return fallbackCampaignSuggestions(input);
 
   type SuggestionItem = Omit<CampaignSuggestion, "id" | "platform">;
   const result = await runStructured<{ metaSuggestions: SuggestionItem[]; googleSuggestions: SuggestionItem[] }>({

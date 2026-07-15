@@ -6,17 +6,22 @@ import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
 
 after(disconnectTestInfra);
 
-// openaiClient.ts's `openai` export is computed once at module load from
-// process.env.OPENAI_API_KEY — a static top-level import would be hoisted ahead of the
-// delete below and always see the real key (if one happens to be configured in this
-// environment). A cache-busted dynamic import, run AFTER the delete, is this codebase's
-// established way to guarantee a genuinely-null `openai` for these tests (see
-// audienceIntelligenceEngine.test.ts).
+// llmClient.ts's `llm` export (and mistralClient.ts's/groqClient.ts's own gates) are each
+// computed once at module load from their respective env vars — a static top-level import
+// would be hoisted ahead of the deletes below and always see whatever real keys happen to
+// be loaded (several earlier-running test files in this same `npm test` process load
+// dotenv/config, e.g. memoryCoordinator.test.ts, which pulls the real apps/api/.env
+// GROQ_API_KEY into process.env for the rest of the process). A cache-busted dynamic
+// import, run AFTER the deletes, is this codebase's established way to guarantee
+// genuinely-unconfigured clients for these tests (see audienceIntelligenceEngine.test.ts).
 delete process.env.OPENAI_API_KEY;
+delete process.env.GROQ_API_KEY;
+delete process.env.MISTRAL_API_KEY;
+delete process.env.GEMINI_API_KEY;
 const t = Date.now();
 const { analyzeAdCreative, analyzeNewCompetitorAds } = await import(`../research/creative-intelligence/AdCreativeAnalyzer.js?t=${t}`);
 
-test("analyzeAdCreative - with no OPENAI_API_KEY, degrades to a labeled low-confidence fallback", async () => {
+test("analyzeAdCreative - with no LLM provider configured, degrades to a labeled low-confidence fallback", async () => {
   const result = await analyzeAdCreative({ id: "ad-1", platform: "meta", headline: "Big Sale", description: "50% off", cta: null, landingPageUrl: null });
   assert.strictEqual(result.confidence, 0.1);
   assert.match(result.hook, /no live analysis performed/);

@@ -56,7 +56,7 @@ test("crawl pipeline (live) - stripe.com crawl persists page-level rows with raw
   }
 });
 
-test("crawl pipeline (live) - fact extraction attaches provenance to real crawled pages", { skip: !process.env.OPENAI_API_KEY, timeout: 180_000 }, async () => {
+test("crawl pipeline (live) - fact extraction attaches provenance to real crawled pages", { skip: !process.env.GROQ_API_KEY, timeout: 180_000 }, async () => {
   const businessId = randomUUID();
   await prisma.business.create({ data: { id: businessId, data: { id: businessId, name: "Stripe (live fact test)" } as any } });
 

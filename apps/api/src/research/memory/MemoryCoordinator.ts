@@ -1,4 +1,4 @@
-import { createEmbedding } from "../../infra/openaiClient.js";
+import { createEmbedding } from "../../infra/llmClient.js";
 import { logger } from "../../modules/logger/logger.js";
 import {
   findMemoryEntryByDedupKey,

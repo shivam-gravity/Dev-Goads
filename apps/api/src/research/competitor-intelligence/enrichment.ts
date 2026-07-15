@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { openai, runStructured, runWebSearch } from "../../infra/openaiClient.js";
+import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
 import { normalizeUrl } from "../../modules/onboarding/scraper.js";
 import { hostnameOf } from "../providers/support.js";
 import type { Citation } from "../../types/index.js";
@@ -156,7 +156,7 @@ function computeProfileConfidence(usedFallback: boolean, citations: Citation[], 
  * schema mismatch) rather than failing the whole batch over one competitor.
  */
 export async function enrichCompetitor(discovered: DiscoveredCompetitor, businessContext: { industry?: string }): Promise<CompetitorProfile> {
-  if (!openai) {
+  if (!llm) {
     return {
       name: discovered.name,
       url: discovered.url,

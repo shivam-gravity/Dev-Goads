@@ -2,8 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { getImageProvider, MockImageProvider } from "../modules/generation/imageProvider.js";
 
-test("Image Provider - falls back to MockImageProvider when OPENAI_API_KEY is unset", async () => {
-  delete process.env.OPENAI_API_KEY;
+test("Image Provider - getImageProvider always returns MockImageProvider (no image-gen backend since OpenAI's removal)", async () => {
   const provider = getImageProvider();
   assert.ok(provider instanceof MockImageProvider);
   const image = await provider.generate("a red shoe");

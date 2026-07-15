@@ -1,13 +1,34 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { createAIAgents } from "../agents/agents/index.js";
 import type { ResearchContext } from "../research/types/index.js";
 
 delete process.env.OPENAI_API_KEY;
+delete process.env.GROQ_API_KEY;
+delete process.env.GEMINI_API_KEY;
+delete process.env.MISTRAL_API_KEY;
 
-// Cache-busting dynamic import (same technique as aiAgents.test.ts) — infra/openaiClient.ts
-// computes `openai` once at module-evaluation time, so every agent module needs a fresh
-// module graph after deleting the env var above.
+// No API key alone no longer guarantees zero network calls: every agent is assigned to
+// Ollama by default (llmTaskConfig.ts), which has no "configured or not" concept the way a
+// hosted API with a key does — if a real Ollama server happens to be reachable at
+// localhost:11434 in whatever environment this runs, the agent can genuinely succeed via a
+// real model call instead of falling back, making these tests flaky (this actually
+// happened — see the session notes around 2026-07-15). Blocking `global.fetch` at the
+// module level, before any agent module is imported, is what makes "no live model call
+// can succeed" deterministic regardless of what's reachable on the network — the Groq/
+// Ollama clients (both the OpenAI SDK pointed at different baseURLs) capture `fetch` once
+// at client-construction time (`this.fetch = options.fetch ?? Shims.getDefaultFetch()`),
+// so the indirection has to be installed before that construction happens. Critically,
+// this means `createAIAgents` (agents/agents/index.js's barrel export, previously a
+// STATIC top-of-file import here) must NOT be statically imported — ES module static
+// imports are hoisted and fully resolved before any other code in the file runs, which
+// silently loaded the entire agent->llmRouter->ollamaClient chain (capturing the REAL
+// native fetch) before the override below ever ran. Every agent import here is dynamic
+// for exactly that reason.
+let currentFetchImpl: typeof fetch = (async () => {
+  throw new Error("network unavailable (simulated)");
+}) as typeof fetch;
+global.fetch = ((...args: Parameters<typeof fetch>) => currentFetchImpl(...args)) as typeof fetch;
+
 const t = Date.now();
 const { LandingPageAgent } = await import(`../agents/agents/LandingPageAgent.js?t=${t}`);
 const { PricingOfferAgent } = await import(`../agents/agents/PricingOfferAgent.js?t=${t}`);
@@ -19,6 +40,8 @@ const { FunnelRetargetingAgent } = await import(`../agents/agents/FunnelRetarget
 const { ObjectionHandlingAgent } = await import(`../agents/agents/ObjectionHandlingAgent.js?t=${t}`);
 const { ForecastingKPIAgent } = await import(`../agents/agents/ForecastingKPIAgent.js?t=${t}`);
 const { ComplianceAgent } = await import(`../agents/agents/ComplianceAgent.js?t=${t}`);
+// Also dynamic, and after the fetch override, for the same reason as above.
+const { createAIAgents } = await import("../agents/agents/index.js");
 // Plain (non-busted) import intentionally shares the same singleton the busted agent
 // modules use — their static imports resolve without the query param, so it's one registry.
 const { promptRegistry } = await import("../agents/prompts/PromptRegistry.js");
@@ -55,30 +78,18 @@ const PRODUCER_AGENTS = [
 ];
 
 for (const { Ctor, name } of PRODUCER_AGENTS) {
-  test(`${name} - degrades to a labeled fallback with zero network calls when OPENAI_API_KEY is unset`, async () => {
-    const original = global.fetch;
-    let fetchCalled = false;
-    global.fetch = (async () => {
-      fetchCalled = true;
-      throw new Error("should not be called");
-    }) as typeof fetch;
+  test(`${name} - degrades to a labeled fallback when no live model call can succeed`, async () => {
+    const agent = new Ctor();
+    const result = await agent.execute(fixtureContext());
 
-    try {
-      const agent = new Ctor();
-      const result = await agent.execute(fixtureContext());
-
-      assert.strictEqual(result.agent, name);
-      assert.strictEqual(result.promptId, name);
-      // Latest registry version, not a hardcoded 1 — fact-grounded agents run prompt v2.
-      assert.strictEqual(result.promptVersion, promptRegistry.get(name).version);
-      assert.strictEqual(result.usedFallback, true);
-      assert.strictEqual(result.confidence, 0.2, "no-API-key runs must report the flat fallback confidence");
-      assert.ok(Array.isArray(result.evidence) && result.evidence.length > 0, "every agent must include a non-empty evidence trail");
-      assert.ok(result.data && typeof result.data === "object", "every agent must return a JSON-shaped data object");
-      assert.strictEqual(fetchCalled, false, "no OPENAI_API_KEY should mean zero network calls");
-    } finally {
-      global.fetch = original;
-    }
+    assert.strictEqual(result.agent, name);
+    assert.strictEqual(result.promptId, name);
+    // Latest registry version, not a hardcoded 1 — fact-grounded agents run prompt v2.
+    assert.strictEqual(result.promptVersion, promptRegistry.get(name).version);
+    assert.strictEqual(result.usedFallback, true);
+    assert.strictEqual(result.confidence, 0.2, "a fully-degraded run must report the flat fallback confidence");
+    assert.ok(Array.isArray(result.evidence) && result.evidence.length > 0, "every agent must include a non-empty evidence trail");
+    assert.ok(result.data && typeof result.data === "object", "every agent must return a JSON-shaped data object");
   });
 }
 

@@ -1,9 +1,9 @@
-import { openai, runWebSearch } from "../../infra/openaiClient.js";
+import { llm, runWebSearch } from "../../infra/llmClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { NewsData, ProviderResult, ResearchProviderInput } from "../types/index.js";
 import { citationsToEvidence, runProviderStep } from "./support.js";
 
-const NO_KEY_DATA_SOURCE = "AI estimate — no live web search performed (OPENAI_API_KEY not set)";
+const NO_KEY_DATA_SOURCE = "AI estimate — no live web search available (no provider offers hosted search)";
 const NO_CITATIONS_DATA_SOURCE = "No recent news coverage found";
 
 /**
@@ -18,7 +18,7 @@ export class NewsProvider implements ResearchProvider<NewsData> {
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<NewsData>> {
     return runProviderStep(this.name, 1, input, async () => {
-      if (!openai) {
+      if (!llm) {
         return { status: "partial", data: { articles: [], summary: "", dataSource: NO_KEY_DATA_SOURCE } };
       }
 

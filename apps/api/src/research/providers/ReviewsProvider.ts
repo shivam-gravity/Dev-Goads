@@ -1,5 +1,5 @@
 import { firecrawlScrape, firecrawlSearch } from "../../infra/firecrawlClient.js";
-import { runStructured } from "../../infra/openaiClient.js";
+import { runStructured } from "../../infra/llmClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProviderResult, ResearchProviderInput, ReviewsData } from "../types/index.js";
 import { citationsToEvidence, hostnameOf, NO_CITATIONS_DATA_SOURCE, NO_SEARCH_DATA_SOURCE, runProviderStep, webSearchThenStructure } from "./support.js";

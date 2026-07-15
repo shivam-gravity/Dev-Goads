@@ -1,5 +1,3 @@
-import { computeImageCostUsd, isOpenAIBudgetExceeded, recordOpenAISpend } from "../../infra/openaiBudget.js";
-
 export interface GeneratedImage {
   buffer: Buffer;
   mimeType: string;
@@ -13,65 +11,18 @@ export interface ImageGenOptions {
   quality?: ImageQuality;
 }
 
-// gpt-image-1 only accepts these three literal sizes (plus "auto") — these are the closest
-// fits to the vertical/square/horizontal ad placements Meta/Google/TikTok actually run.
-const SIZE_BY_ASPECT_RATIO: Record<ImageAspectRatio, string> = {
-  square: "1024x1024",
-  portrait: "1024x1536",
-  landscape: "1536x1024",
-};
-
-const QUALITY_PARAM: Record<ImageQuality, string> = {
-  standard: "medium",
-  high: "high",
-};
-
 export interface ImageGenProvider {
   readonly name: string;
   generate(prompt: string, options?: ImageGenOptions): Promise<GeneratedImage>;
 }
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-/** OpenAI Images API (gpt-image-1). Plain fetch, matching how metaAdapter/googleAdapter call their APIs directly. */
-export class OpenAIImageProvider implements ImageGenProvider {
-  readonly name = "openai";
-
-  async generate(prompt: string, options?: ImageGenOptions): Promise<GeneratedImage> {
-    if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not set");
-    if (isOpenAIBudgetExceeded()) throw new Error("OpenAI monthly budget exceeded — see infra/openaiBudget.ts");
-
-    const res = await fetch("https://api.openai.com/v1/images/generations", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-image-1",
-        prompt,
-        size: SIZE_BY_ASPECT_RATIO[options?.aspectRatio ?? "square"],
-        quality: QUALITY_PARAM[options?.quality ?? "standard"],
-        n: 1,
-      }),
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`OpenAI image generation failed (${res.status}): ${text}`);
-    }
-
-    recordOpenAISpend(computeImageCostUsd());
-
-    const json = (await res.json()) as { data: { b64_json: string }[] };
-    const b64 = json.data?.[0]?.b64_json;
-    if (!b64) throw new Error("OpenAI image generation returned no image data");
-
-    return { buffer: Buffer.from(b64, "base64"), mimeType: "image/png" };
-  }
-}
-
-/** Deterministic fallback used when OPENAI_API_KEY is unset, so local dev keeps working end-to-end. */
+/**
+ * OpenAI's gpt-image-1 was the only real image-generation backend this platform ever had
+ * (removed along with the rest of OpenAI — see infra/llmClient.ts's doc comment). Neither
+ * Groq nor Mistral offer image generation, so MockImageProvider below is now the only
+ * ImageGenProvider — a real replacement would mean adding a dedicated image-gen API
+ * (Google Imagen, Stability, etc.), which is out of scope here.
+ */
 export class MockImageProvider implements ImageGenProvider {
   readonly name = "mock";
 
@@ -86,5 +37,5 @@ export class MockImageProvider implements ImageGenProvider {
 }
 
 export function getImageProvider(): ImageGenProvider {
-  return OPENAI_API_KEY && !isOpenAIBudgetExceeded() ? new OpenAIImageProvider() : new MockImageProvider();
+  return new MockImageProvider();
 }

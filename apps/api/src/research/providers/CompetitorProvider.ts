@@ -1,4 +1,4 @@
-import { openai } from "../../infra/openaiClient.js";
+import { llm } from "../../infra/llmClient.js";
 import { logger } from "../../modules/logger/logger.js";
 import { readMemory, writeMemory } from "../memory/MemoryCoordinator.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
@@ -103,7 +103,7 @@ export class CompetitorProvider implements ResearchProvider<CompetitorData> {
       // Research Memory only has anything to offer when there's a model to embed with —
       // without OPENAI_API_KEY this is a no-op string, same fail-soft posture as the rest
       // of this provider when there's no live search either.
-      const memoryContext = openai ? await retrieveCompetitorMemoryContext(input, industry) : "";
+      const memoryContext = llm ? await retrieveCompetitorMemoryContext(input, industry) : "";
 
       const { status, data, citations } = await webSearchThenStructure<CompetitorData>({
         maxTokens: 1024,

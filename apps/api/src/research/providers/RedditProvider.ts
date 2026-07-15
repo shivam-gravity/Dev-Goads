@@ -1,4 +1,4 @@
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import { llm, runStructured } from "../../infra/llmClient.js";
 import { searchRedditThreads } from "../../infra/pullpushClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { CommunityDiscussionData, CommunityDiscussionThread, ProviderResult, ResearchProviderInput } from "../types/index.js";
@@ -77,7 +77,7 @@ export class RedditProvider implements ResearchProvider<CommunityDiscussionData>
     // self-posts) just don't contribute an excerpt, same as an empty scrape used to mean.
     const excerpts = threads.filter((t) => t.selftext.length > 0).map((t) => `### ${t.title}\n${t.url}\n${t.selftext.slice(0, MAX_EXCERPT_LENGTH)}`);
 
-    if (!openai || excerpts.length === 0) {
+    if (!llm || excerpts.length === 0) {
       const fallbackThreads: CommunityDiscussionThread[] = threads.map((t) => ({ title: t.title, url: t.url, sentiment: "unknown — not analyzed" }));
       return {
         status: "partial",

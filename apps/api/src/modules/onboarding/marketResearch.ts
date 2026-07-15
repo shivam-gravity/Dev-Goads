@@ -1,4 +1,4 @@
-import { openai, runStructured, runWebSearch } from "../../infra/openaiClient.js";
+import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
 import { Agent } from "undici";
 import { logger } from "../logger/logger.js";
 import type { AudienceAnalysis, AudiencePersona, Citation, CompetitorBudgetAnalysis, DeepResearchBlock, MarketLocationAnalysis, ProductAnalysis, ScrapedSite } from "../../types/index.js";
@@ -181,7 +181,7 @@ function writeCache(prompt: string, result: WebResearchResult): void {
  * block can't sink a whole research session.
  */
 export async function runWebResearch(prompt: string): Promise<WebResearchResult> {
-  if (!openai) return EMPTY_RESULT;
+  if (!llm) return EMPTY_RESULT;
 
   const cached = readCache(prompt);
   if (cached) return cached;
@@ -196,7 +196,7 @@ export async function runWebResearch(prompt: string): Promise<WebResearchResult>
   }
 }
 
-const NO_SEARCH_DATA_SOURCE = "AI estimate — no live web search performed (OPENAI_API_KEY not set)";
+const NO_SEARCH_DATA_SOURCE = "AI estimate — no live web search available (no provider offers hosted search)";
 const NO_CITATIONS_DATA_SOURCE = "AI estimate based on site content and general market knowledge (no citable sources found)";
 
 function fallbackProductPositioning(site: ScrapedSite): ProductAnalysis {
@@ -267,7 +267,7 @@ const PRODUCT_POSITIONING_TOOL = {
 export async function analyzeProductDeep(site: ScrapedSite, allowSearch = true): Promise<DeepResearchBlock<ProductAnalysis>> {
   const label = RESEARCH_STEPS.productPositioning;
 
-  if (!openai) {
+  if (!llm) {
     const sg = await fetchScrapeGraphResearch(site);
     if (sg && blockUsable(sg.product)) {
       return { key: "productPositioning", label, citations: [], data: { ...sg.product, dataSource: SCRAPEGRAPH_DATA_SOURCE } };
@@ -351,7 +351,7 @@ const AUDIENCE_DEEP_TOOL = {
 export async function analyzeAudienceDeep(site: ScrapedSite, product: ProductAnalysis, allowSearch = true): Promise<DeepResearchBlock<AudienceAnalysis>> {
   const label = RESEARCH_STEPS.audienceProfile;
 
-  if (!openai) {
+  if (!llm) {
     const sg = await fetchScrapeGraphResearch(site);
     if (sg && blockUsable(sg.audience)) {
       const data: AudienceAnalysis = {
@@ -445,7 +445,7 @@ const COMPETITOR_BUDGET_TOOL = {
 export async function analyzeCompetitorsAndBudget(site: ScrapedSite, product: ProductAnalysis, allowSearch = true): Promise<DeepResearchBlock<CompetitorBudgetAnalysis>> {
   const label = RESEARCH_STEPS.competitorBudget;
 
-  if (!openai) {
+  if (!llm) {
     const sg = await fetchScrapeGraphResearch(site);
     if (sg && blockUsable(sg.competitor)) {
       return { key: "competitorBudget", label, citations: [], data: { ...sg.competitor, dataSource: SCRAPEGRAPH_DATA_SOURCE } };
@@ -518,7 +518,7 @@ const MARKET_LOCATION_TOOL = {
 export async function analyzeMarketAndLocation(site: ScrapedSite, product: ProductAnalysis, allowSearch = true): Promise<DeepResearchBlock<MarketLocationAnalysis>> {
   const label = RESEARCH_STEPS.marketLocation;
 
-  if (!openai) {
+  if (!llm) {
     const sg = await fetchScrapeGraphResearch(site);
     const platform = sg?.market.recommendedPlatform.trim().toLowerCase();
     if (sg && blockUsable(sg.market) && (platform === "meta" || platform === "google" || platform === "tiktok")) {
@@ -612,7 +612,7 @@ export async function mineAudiencePersonas(
 ): Promise<DeepResearchBlock<AudiencePersona[]>> {
   const label = RESEARCH_STEPS.audiencePersonas;
 
-  if (!openai) {
+  if (!llm) {
     const sg = await fetchScrapeGraphResearch(site);
     if (sg && sg.personas.length > 0 && sg.personas.every((p) => !isJunkString(p.name) && p.interests.length > 0)) {
       return { key: "audiencePersonas", label, citations: [], data: sg.personas };

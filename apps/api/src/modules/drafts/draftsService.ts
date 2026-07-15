@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../db/prisma.js";
-import { openai, runText } from "../../infra/openaiClient.js";
+import { llm, runText } from "../../infra/llmClient.js";
 import { logger } from "../logger/logger.js";
 
 export interface Draft {
@@ -19,7 +19,7 @@ export interface Draft {
 }
 
 async function generateAiRecommendation(name: string, type: Draft["type"], data: Record<string, unknown>): Promise<string | undefined> {
-  if (!openai) return undefined;
+  if (!llm) return undefined;
   try {
     const reply = await runText({
       maxTokens: 220,

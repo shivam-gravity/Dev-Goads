@@ -1,4 +1,4 @@
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import { llm, runStructured } from "../../infra/llmClient.js";
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
 import { normalizePerformance, getRawMetrics, ESTIMATED_REVENUE_CENTS_PER_CONVERSION } from "../pipeline/performancePipeline.js";
 import { getBusiness } from "../business/businessService.js";
@@ -177,7 +177,7 @@ export async function getAudienceSuggestions(businessId: string): Promise<Audien
   const business = await getBusiness(businessId);
   if (!business) throw new Error("Business not found");
 
-  if (!openai) return fallbackAudienceSuggestions(business.name, business.industry);
+  if (!llm) return fallbackAudienceSuggestions(business.name, business.industry);
 
   const result = await runStructured<{ suggestions: AudienceSuggestion[] }>({
     maxTokens: 2048,

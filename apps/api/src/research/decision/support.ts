@@ -1,7 +1,7 @@
 import * as llmRouter from "../../infra/llmRouter.js";
 import { resolveTaskModel } from "../../infra/llmTaskConfig.js";
 import { logger } from "../../modules/logger/logger.js";
-import type { ChatMessage, JsonSchemaTool } from "../../infra/openaiClient.js";
+import type { ChatMessage, JsonSchemaTool } from "../../infra/llmTypes.js";
 
 export interface CallDecisionModelOptions {
   /** Keys into llmTaskConfig.ts's registry — one per Decision Engine step, e.g.

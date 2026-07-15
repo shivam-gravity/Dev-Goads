@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import { llm, runStructured } from "../../infra/llmClient.js";
 import { prisma } from "../../db/prisma.js";
 import type { CreativeAsset, AdCreative } from "../../types/index.js";
 
@@ -108,7 +108,7 @@ function fallbackVariations(base: AdCreative): CreativeVariation[] {
 }
 
 export async function generateCreativeVariations(base: AdCreative): Promise<CreativeVariation[]> {
-  if (!openai) return fallbackVariations(base);
+  if (!llm) return fallbackVariations(base);
 
   const result = await runStructured<{ variations: CreativeVariation[] }>({
     maxTokens: 1024,

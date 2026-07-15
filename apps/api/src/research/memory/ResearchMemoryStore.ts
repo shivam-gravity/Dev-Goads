@@ -86,6 +86,14 @@ const MAX_CANDIDATES = 2000;
  * that file's version is intentionally paired with its own hashEmbedding placeholder and
  * the two are expected to diverge once one of them moves to a real vector backend. */
 export function cosineSimilarity(a: number[], b: number[]): number {
+  // Mismatched lengths mean the two vectors came from different embedding models (e.g. a
+  // row embedded before a provider switch — OpenAI's text-embedding-3-small was 1536-dim,
+  // Mistral's mistral-embed is 1024-dim) — comparing them at all would silently produce a
+  // meaningless partial dot product (or NaN, if b is shorter than a), not a real similarity
+  // score. Zero is the correct answer: these rows simply predate the current embedding
+  // model and can never match a new query, exactly as if they'd aged out.
+  if (a.length !== b.length) return 0;
+
   let dot = 0;
   let magA = 0;
   let magB = 0;

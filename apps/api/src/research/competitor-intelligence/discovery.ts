@@ -1,4 +1,4 @@
-import { openai, runStructured, runWebSearch } from "../../infra/openaiClient.js";
+import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
 import { hostnameOf } from "../providers/support.js";
 import { readMemory } from "../memory/MemoryCoordinator.js";
 import type { DiscoveredCompetitor } from "./types.js";
@@ -45,7 +45,7 @@ async function extractNamesFromNarrative(narrative: string): Promise<{ name: str
 /** Source 1: a direct "who competes with X" search — the same angle CompetitorProvider
  * already uses, kept here too since it's still a legitimate, independent signal. */
 async function discoverFromDirectSearch(input: DiscoveryInput): Promise<{ name: string; url?: string }[]> {
-  if (!openai) return [];
+  if (!llm) return [];
   const research = await runWebSearch(
     `Who are the main direct competitors of the business at ${input.url}${input.businessName ? ` ("${input.businessName}")` : ""} in ${input.industry ?? "its category"}? List real, named companies.`
   );
@@ -57,7 +57,7 @@ async function discoverFromDirectSearch(input: DiscoveryInput): Promise<{ name: 
  * roundups (G2, Capterra, ...) and comparison articles that a plain "competitors of X"
  * query often doesn't, giving a genuinely independent second read on the landscape. */
 async function discoverFromAlternativesSearch(input: DiscoveryInput): Promise<{ name: string; url?: string }[]> {
-  if (!openai) return [];
+  if (!llm) return [];
   const subject = input.businessName ?? hostnameOf(input.url);
   const research = await runWebSearch(
     `What are the best alternatives to ${subject} in ${input.industry ?? "its category"}? Include named products/companies from comparison articles, review sites, and "X vs Y" style content.`
@@ -71,7 +71,7 @@ async function discoverFromAlternativesSearch(input: DiscoveryInput): Promise<{ 
  * the sense that it costs no new web search and reflects what was ALREADY found for
  * comparable businesses, not a fresh read of the same live web content sources 1/2 hit. */
 async function discoverFromResearchMemory(input: DiscoveryInput): Promise<{ name: string; url?: string }[]> {
-  if (!openai) return [];
+  if (!llm) return [];
   const queryText = `${input.businessName ?? hostnameOf(input.url)} — ${input.industry ?? "its category"}`;
 
   const [fromCompetitorKind, fromProfileKind] = await Promise.all([

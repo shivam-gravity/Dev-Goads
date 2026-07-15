@@ -1,4 +1,4 @@
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import { llm, runStructured } from "../../infra/llmClient.js";
 import type { AudienceAnalysis, ProductAnalysis, ScrapedSite } from "../../types/index.js";
 import { scrapeUrl } from "./scraper.js";
 import { vectorStore, hashEmbedding } from "../../infra/vectorStore.js";
@@ -123,7 +123,7 @@ export interface AnalysisOptions {
 }
 
 export async function analyzeProduct(site: ScrapedSite, options: AnalysisOptions = {}): Promise<ProductAnalysis> {
-  if (!openai) return fallbackProductAnalysis(site);
+  if (!llm) return fallbackProductAnalysis(site);
 
   const result = await runStructured<ProductAnalysis & { facts?: ExtractedFact[] }>({
     maxTokens: 2048,
@@ -140,7 +140,7 @@ export async function analyzeProduct(site: ScrapedSite, options: AnalysisOptions
 }
 
 export async function analyzeAudience(site: ScrapedSite, product: ProductAnalysis, options: AnalysisOptions = {}): Promise<AudienceAnalysis> {
-  if (!openai) return fallbackAudienceAnalysis(product);
+  if (!llm) return fallbackAudienceAnalysis(product);
 
   const result = await runStructured<AudienceAnalysis & { facts?: ExtractedFact[] }>({
     maxTokens: 2048,

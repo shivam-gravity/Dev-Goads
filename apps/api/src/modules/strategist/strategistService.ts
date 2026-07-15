@@ -1,4 +1,4 @@
-import { openai, runText } from "../../infra/openaiClient.js";
+import { llm, runText } from "../../infra/llmClient.js";
 import { getBusiness } from "../business/businessService.js";
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
 import { getAnalyticsSummary } from "../analytics/analyticsService.js";
@@ -40,7 +40,7 @@ export async function chatWithStrategist(businessId: string, messages: Strategis
   const business = await getBusiness(businessId);
   const campaigns = await listCampaignsForBusiness(businessId);
 
-  if (!openai) return fallbackReply(business, campaigns.length);
+  if (!llm) return fallbackReply(business, campaigns.length);
 
   const text = await runText({
     maxTokens: 1024,

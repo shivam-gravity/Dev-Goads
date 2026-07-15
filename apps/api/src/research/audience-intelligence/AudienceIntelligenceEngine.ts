@@ -1,4 +1,4 @@
-import { openai, runStructured, runWebSearch } from "../../infra/openaiClient.js";
+import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
 import { hostnameOf } from "../providers/support.js";
 import { readMemory, writeMemory } from "../memory/MemoryCoordinator.js";
 import { computeLtvProxy, type LtvProxyResult } from "./ltvProxy.js";
@@ -286,7 +286,7 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
   // step, so it still runs (and can still succeed) even when there's no OPENAI_API_KEY.
   const estimatedLtvProxy = await computeLtvProxyForInput(input);
 
-  if (!openai) {
+  if (!llm) {
     return {
       ...fallbackFields(businessLabel),
       estimatedLtvProxy,

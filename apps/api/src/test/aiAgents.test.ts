@@ -4,11 +4,26 @@ import type { ResearchContext } from "../research/types/index.js";
 import type { AgentEvidenceItem } from "../agents/types/index.js";
 
 delete process.env.OPENAI_API_KEY;
+delete process.env.GROQ_API_KEY;
+delete process.env.GEMINI_API_KEY;
+delete process.env.MISTRAL_API_KEY;
 
-// Cache-busting dynamic import (same technique as marketResearch.test.ts /
-// researchProviders.test.ts): infra/openaiClient.ts computes `openai` once at
-// module-evaluation time, so every agent module (which reaches it transitively through
-// agents/support.ts) needs a fresh module graph after deleting the env var above.
+// No API key alone no longer guarantees zero network calls: every agent is assigned to
+// Ollama by default (llmTaskConfig.ts), which has no "configured or not" concept the way a
+// hosted API with a key does — if a real Ollama server happens to be reachable at
+// localhost:11434 in whatever environment this runs, the agent can genuinely succeed via a
+// real model call instead of falling back, making these tests flaky (this actually
+// happened — see the session notes around 2026-07-15). Blocking `global.fetch` at the
+// module level, before any agent module is imported, is what makes "no live model call
+// can succeed" deterministic regardless of what's reachable on the network: the Groq/
+// Ollama clients (both the OpenAI SDK pointed at different baseURLs) capture `fetch` once
+// at client-construction time, so the indirection has to be installed before that
+// construction happens, same technique llmRouter.test.ts uses.
+let currentFetchImpl: typeof fetch = (async () => {
+  throw new Error("network unavailable (simulated)");
+}) as typeof fetch;
+global.fetch = ((...args: Parameters<typeof fetch>) => currentFetchImpl(...args)) as typeof fetch;
+
 const t = Date.now();
 const { ProductAgent } = await import(`../agents/agents/ProductAgent.js?t=${t}`);
 const { AudienceAgent } = await import(`../agents/agents/AudienceAgent.js?t=${t}`);
@@ -54,32 +69,20 @@ const AGENTS = [
 ];
 
 for (const { Ctor, name } of AGENTS) {
-  test(`${name} - degrades to a labeled fallback with zero network calls when OPENAI_API_KEY is unset`, async () => {
-    const original = global.fetch;
-    let fetchCalled = false;
-    global.fetch = (async () => {
-      fetchCalled = true;
-      throw new Error("should not be called");
-    }) as typeof fetch;
+  test(`${name} - degrades to a labeled fallback when no live model call can succeed`, async () => {
+    const agent = new Ctor();
+    const result = await agent.execute(fixtureContext());
 
-    try {
-      const agent = new Ctor();
-      const result = await agent.execute(fixtureContext());
-
-      assert.strictEqual(result.agent, name);
-      assert.strictEqual(result.promptId, name);
-      // Agents always run the registry's latest prompt version (render() with no pin) —
-      // compare against the registry rather than hardcoding, so registering a v2 prompt
-      // (e.g. the fact-grounded creative/campaign/critic prompts) doesn't break this test.
-      assert.strictEqual(result.promptVersion, promptRegistry.get(name).version);
-      assert.strictEqual(result.usedFallback, true);
-      assert.strictEqual(result.confidence, 0.2, "no-API-key runs must report the flat fallback confidence");
-      assert.ok(Array.isArray(result.evidence) && result.evidence.length > 0, "every agent must include a non-empty evidence trail");
-      assert.ok(result.data && typeof result.data === "object", "every agent must return a JSON-shaped data object");
-      assert.strictEqual(fetchCalled, false, "no OPENAI_API_KEY should mean zero network calls");
-    } finally {
-      global.fetch = original;
-    }
+    assert.strictEqual(result.agent, name);
+    assert.strictEqual(result.promptId, name);
+    // Agents always run the registry's latest prompt version (render() with no pin) —
+    // compare against the registry rather than hardcoding, so registering a v2 prompt
+    // (e.g. the fact-grounded creative/campaign/critic prompts) doesn't break this test.
+    assert.strictEqual(result.promptVersion, promptRegistry.get(name).version);
+    assert.strictEqual(result.usedFallback, true);
+    assert.strictEqual(result.confidence, 0.2, "a fully-degraded run must report the flat fallback confidence");
+    assert.ok(Array.isArray(result.evidence) && result.evidence.length > 0, "every agent must include a non-empty evidence trail");
+    assert.ok(result.data && typeof result.data === "object", "every agent must return a JSON-shaped data object");
   });
 }
 
@@ -109,7 +112,7 @@ test("CriticAgent - with prior results supplied, includes each reviewed agent in
   };
   const result = await agent.execute(fixtureContext(), { priorResults });
   assert.ok(result.evidence.some((e: AgentEvidenceItem) => e.source === "product-agent" && /Reviewed/.test(e.detail)));
-  assert.strictEqual(result.confidence, 0.2, "no-API-key run with non-empty proposals still floors at the fallback confidence, not the empty-proposals 0.1");
+  assert.strictEqual(result.confidence, 0.2, "a fully-degraded run with non-empty proposals still floors at the fallback confidence, not the empty-proposals 0.1");
 });
 
 test("CampaignAgent - does not require any other agent's output to run (independently testable)", async () => {

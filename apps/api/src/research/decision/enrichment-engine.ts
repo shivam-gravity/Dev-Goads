@@ -1,4 +1,4 @@
-import { openai, runWebSearch } from "../../infra/openaiClient.js";
+import { llm, runWebSearch } from "../../infra/llmClient.js";
 import { callDecisionModel } from "./support.js";
 import { hostnameOf } from "../providers/support.js";
 import type { ResearchContext } from "../types/index.js";
@@ -124,7 +124,7 @@ async function researchRegionalDepth(context: ResearchContext, businessLabel: st
  * polish on top of the core Decision Engine, never something the rest of it depends on.
  */
 export async function enrichBusinessContext(context: ResearchContext): Promise<EnrichmentData> {
-  if (!openai) return emptyEnrichment();
+  if (!llm) return emptyEnrichment();
   const businessLabel = context.company?.name ?? hostnameOf(context.url);
 
   const [proofPoints, regionalMarketDepth] = await Promise.all([

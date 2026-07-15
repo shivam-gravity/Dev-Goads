@@ -1,4 +1,4 @@
-import { openai, runWebSearch } from "../../infra/openaiClient.js";
+import { llm, runWebSearch } from "../../infra/llmClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { GeneralSearchData, ProviderResult, ResearchProviderInput } from "../types/index.js";
 import { citationsToEvidence, hostnameOf, runProviderStep } from "./support.js";
@@ -7,7 +7,7 @@ import { TtlCache, normalizeCacheKey } from "../cache/TtlCache.js";
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const cache = new TtlCache<{ narrative: string; citations: { url: string; title: string }[]; searchesUsed: number }>(CACHE_TTL_MS);
 
-const NO_KEY_DATA_SOURCE = "AI estimate — no live web search performed (OPENAI_API_KEY not set)";
+const NO_KEY_DATA_SOURCE = "AI estimate — no live web search available (no provider offers hosted search)";
 
 /**
  * General-purpose live web-search provider — reuses the existing runWebSearch primitive
@@ -22,7 +22,7 @@ export class SearchProvider implements ResearchProvider<GeneralSearchData> {
 
   async execute(input: ResearchProviderInput): Promise<ProviderResult<GeneralSearchData>> {
     return runProviderStep(this.name, 1, input, async () => {
-      if (!openai) {
+      if (!llm) {
         return { status: "partial", data: { narrative: "", searchesUsed: 0, dataSource: NO_KEY_DATA_SOURCE } };
       }
 

@@ -1,4 +1,4 @@
-import { openai, runStructured } from "../openaiClient.js";
+import { llm, runStructured } from "../llmClient.js";
 import type { AdCopyVariant, NormalizedProduct } from "../types.js";
 
 const VARIANT_COUNT = 3;
@@ -32,9 +32,9 @@ function fallbackAdCopy(product: NormalizedProduct): AdCopyVariant[] {
   return [{ headline: product.name, body: product.description, callToAction: "Shop now" }];
 }
 
-/** Falls back to a single generic variant if OPENAI_API_KEY is unset. */
+/** Falls back to a single generic variant if GROQ_API_KEY is unset. */
 export async function generateAdCopy(product: NormalizedProduct): Promise<AdCopyVariant[]> {
-  if (!openai) return fallbackAdCopy(product);
+  if (!llm) return fallbackAdCopy(product);
 
   const result = await runStructured<{ variants: AdCopyVariant[] }>({
     maxTokens: 1024,

@@ -1,4 +1,4 @@
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import { llm, runStructured } from "../../infra/llmClient.js";
 import { randomUUID } from "node:crypto";
 import { objectStorage } from "../../infra/objectStorage.js";
 import { createAsset } from "../assets/assetService.js";
@@ -49,7 +49,7 @@ function fallbackBrief(context: string): CreativeBrief {
 }
 
 async function generateCreativeBrief(context: string, language?: string): Promise<CreativeBrief> {
-  if (!openai) return fallbackBrief(context);
+  if (!llm) return fallbackBrief(context);
 
   const languageInstruction = language && language !== "English"
     ? ` Write the headline, body, and call to action in ${language} (the image prompt itself should stay in English, since that's what the image model expects).`

@@ -1,4 +1,4 @@
-import { openai, runStructured } from "../openaiClient.js";
+import { llm, runStructured } from "../llmClient.js";
 import type { NormalizedProduct, RawProductDraft, ScrapedProduct } from "../types.js";
 
 const PRODUCT_TOOL = {
@@ -41,10 +41,10 @@ function fallbackNormalizedProduct(draft: RawProductDraft, site: ScrapedProduct)
  * Fills gaps in the Product Parser's deterministic draft (e.g. price wasn't in
  * JSON-LD, category needs inferring, features need summarizing from page text)
  * and cleans up what's there. Falls back to a passthrough of the draft if
- * OPENAI_API_KEY is unset.
+ * GROQ_API_KEY is unset.
  */
 export async function normalizeProduct(draft: RawProductDraft, site: ScrapedProduct): Promise<NormalizedProduct> {
-  if (!openai) return fallbackNormalizedProduct(draft, site);
+  if (!llm) return fallbackNormalizedProduct(draft, site);
 
   const result = await runStructured<NormalizedProduct>({
     maxTokens: 1024,

@@ -1,4 +1,4 @@
-import { openai, runStructured, runWebSearch } from "../../infra/openaiClient.js";
+import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
 import { hostnameOf } from "../providers/support.js";
 import { writeMemory } from "../memory/MemoryCoordinator.js";
 import type { Citation } from "../../types/index.js";
@@ -100,7 +100,7 @@ function computeConfidence(usedFallback: boolean, citationCount: number): number
 }
 
 async function analyzeCompetitorCreative(competitor: { name: string; url?: string }, industry: string | undefined): Promise<CompetitorCreativeAnalysis> {
-  if (!openai) {
+  if (!llm) {
     return { name: competitor.name, ...fallbackAnalysis(competitor.name), citations: [], confidence: computeConfidence(true, 0) };
   }
 
@@ -153,7 +153,7 @@ export async function runCreativeIntelligence(input: CreativeIntelligenceInput):
 
   await Promise.all(analyses.map((a) => (a.citations.length > 0 ? writeCreativeMemory(a, input) : Promise.resolve())));
 
-  if (!openai || analyses.every((a) => a.citations.length === 0)) {
+  if (!llm || analyses.every((a) => a.citations.length === 0)) {
     return {
       businessUrl: input.url,
       competitors: analyses,

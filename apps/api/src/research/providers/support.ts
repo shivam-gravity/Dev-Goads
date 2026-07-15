@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { openai, runWebSearch, type JsonSchemaTool } from "../../infra/openaiClient.js";
+import { llm, runWebSearch, type JsonSchemaTool } from "../../infra/llmClient.js";
 import * as llmRouter from "../../infra/llmRouter.js";
 import { resolveTaskModel } from "../../infra/llmTaskConfig.js";
 import { withSpan } from "../../infra/telemetry.js";
@@ -202,7 +202,7 @@ export function hostnameOf(url: string): string {
   }
 }
 
-export const NO_SEARCH_DATA_SOURCE = "AI estimate — no live web search performed (OPENAI_API_KEY not set)";
+export const NO_SEARCH_DATA_SOURCE = "AI estimate — no live web search available (no provider offers hosted search)";
 export const NO_CITATIONS_DATA_SOURCE = "AI estimate based on general knowledge (no citable sources found)";
 
 const URL_FIELDS = new Set(["url", "sourceUrl"]);
@@ -294,7 +294,7 @@ export async function webSearchThenStructure<T extends { dataSource?: string }>(
   // Gemini and reasons from general category knowledge, same as the "no live web research
   // available" prompt fallback below already anticipated, just previously unreachable
   // whenever OpenAI wasn't configured.
-  const research = openai
+  const research = llm
     ? await runWebSearch(opts.searchPrompt).catch(() => ({ narrative: "", citations: [] as Citation[], searchesUsed: 0 }))
     : { narrative: "", citations: [] as Citation[], searchesUsed: 0 };
   const taskName = currentProviderName.getStore() ?? "unknown-provider";
@@ -322,8 +322,8 @@ export async function webSearchThenStructure<T extends { dataSource?: string }>(
 
   const citationLabel = research.citations.length > 0 ? research.citations.map((c) => c.title).join(" + ") : NO_CITATIONS_DATA_SOURCE;
   // Only annotate the label when a non-default provider actually served the structuring
-  // step — keeps the default (openai) path's dataSource string byte-for-byte identical to
+  // step — keeps the default (llm) path's dataSource string byte-for-byte identical to
   // today's, so nothing that asserts on it needs to change unless a task is reassigned.
-  const dataSource = source === "openai" ? citationLabel : `${citationLabel} (structured via ${source}:${assignment.model})`;
+  const dataSource = source === "groq" ? citationLabel : `${citationLabel} (structured via ${source}:${assignment.model})`;
   return { status: "success", data: { ...verifiedResult, dataSource }, citations: research.citations };
 }

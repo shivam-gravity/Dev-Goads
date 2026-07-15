@@ -2,7 +2,7 @@ import "dotenv/config";
 import { createCampaignGenerationJob } from "../modules/orchestrator/campaignGenerationService.js";
 import { runCampaignGenerationPipeline } from "../modules/orchestrator/campaignGenerationPipeline.js";
 import { snapshotTokens, resetTokens, isTokenMeterEnabled, type TokenCall } from "../infra/tokenMeter.js";
-import { getOpenAIMonthSpendUsd } from "../infra/openaiBudget.js";
+import { getGlobalLlmMonthUsage, getGlobalLlmMonthlyBudget } from "../infra/llmUsageBoundary.js";
 
 // Reuse an existing seeded business so the run profiles the real pipeline, not data setup.
 const BUSINESS_ID = process.env.PROFILE_BUSINESS_ID ?? "0f1bf7b0-1b59-4ae6-8de3-4fc51a14f4ea"; // ClickUp
@@ -65,7 +65,8 @@ async function main() {
     error,
     elapsedMs,
     elapsedSec: Math.round(elapsedMs / 1000),
-    openAISpendUsdThisMonth: getOpenAIMonthSpendUsd(),
+    globalLlmTokensThisMonth: getGlobalLlmMonthUsage(),
+    globalLlmMonthlyTokenBudget: getGlobalLlmMonthlyBudget(),
     ...aggregate(calls),
     result,
   };

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import { llm, runStructured } from "../../infra/llmClient.js";
 import { prisma } from "../../db/prisma.js";
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
 import { normalizePerformance } from "../pipeline/performancePipeline.js";
@@ -145,7 +145,7 @@ const INSIGHT_TOOL = {
 export async function generateInsights(workspaceId: string, businessId: string): Promise<Insight[]> {
   await clearGeneratedInsights(workspaceId);
 
-  if (!openai) {
+  if (!llm) {
     await seedDemoInsights(workspaceId);
     return listInsights(workspaceId);
   }

@@ -1,5 +1,5 @@
 import { logger } from "../logger/logger.js";
-import type { AgentCoordinatorOptions, AgentPipelineResult } from "../../agents/AgentCoordinator.js";
+import type { AgentPipelineResult } from "../../agents/AgentCoordinator.js";
 import { runAgentCoordinator } from "../../agents/AgentCoordinator.js";
 import type { AgentResult, BudgetAgentOutput, CampaignAgentOutput, ComplianceAgentOutput, ObjectionHandlingAgentOutput, PricingOfferAgentOutput } from "../../agents/types/index.js";
 import type { ResearchContext } from "../../research/types/index.js";
@@ -8,8 +8,9 @@ import { extractAndPersistCrawlFacts } from "../../research/crawl/factExtraction
 import { buildAndPersistCompanyProfile } from "../../research/company-knowledge/CompanyKnowledgeBuilder.js";
 import { runDecisionEngine } from "../../research/decision/decision-engine.js";
 import type { DecisionContext } from "../../research/decision/types.js";
-import { runIntelligenceEnrichment, type IntelligenceEnrichmentResult } from "../../research/intelligenceEnrichment.js";
+import { runIntelligenceEnrichment } from "../../research/intelligenceEnrichment.js";
 import { generateAndPersistCampaignRecommendations } from "../../research/campaign-recommendation/CampaignRecommendationEngine.js";
+import * as brain from "../../brain/PlatformBrain.js";
 import { createStrategyFromAgentResults } from "../strategy/strategyEngine.js";
 import { buildCampaignFromStrategy } from "./campaignOrchestrator.js";
 import { getBusiness } from "../business/businessService.js";
@@ -181,45 +182,32 @@ export async function runCampaignGenerationPipeline(
       logger.warn(`Company Knowledge Builder failed for campaign generation job ${jobId} — continuing without a persisted CompanyProfile`, err);
     });
 
-    // Decision Engine runs concurrently with the Agent Coordinator below (same input,
-    // ResearchContext, independent output) so it adds no extra latency to the pipeline.
-    // Best-effort: a Decision Engine failure never fails campaign generation, which already
-    // works reliably off the Agent Coordinator — same "enhancement, not hard dependency"
-    // principle as every Research Memory write elsewhere in this codebase.
-    const decisionContextPromise = withSpan("campaign_generation.decision", () => deps.runDecisionEngine(context)).catch((err) => {
-      logger.warn(`Decision Engine failed for campaign generation job ${jobId} — continuing without it`, err);
-      return null;
-    });
-
-    // Not awaited alongside the rest of Phase 1/2 (same "enhancement, not hard dependency"
-    // posture as the Decision Engine above) — but unlike before, the promise itself IS kept
-    // (not discarded), since its landingPage result feeds the Campaign Recommendation Engine
-    // in Phase 3 below. By the time Phase 3 needs it, the real agent calls in Phase 2 have
-    // almost always already given this promise enough time to settle; awaiting it there adds
-    // no meaningful latency in the common case.
-    const intelligenceEnrichmentPromise = withSpan("campaign_generation.intelligence_enrichment", () => deps.runIntelligenceEnrichment(context)).catch(
-      (err): IntelligenceEnrichmentResult => {
-        logger.warn(`Intelligence enrichment failed for campaign generation job ${jobId} — continuing without it`, err);
-        return { landingPage: null };
-      }
-    );
-
-    // ── Phase 2: AI Agent Coordinator ──
+    // ── Phase 2: PlatformBrain — Decision Engine + Intelligence Enrichment + Agent
+    // Coordinator, concurrently off this same ResearchContext (same input, independent
+    // outputs, so none of the three adds extra latency to the others). This exact
+    // concurrency used to be inlined here; see brain/PlatformBrain.ts for the full
+    // rationale for pulling it into one named, reusable entry point. ──
     await markStatus("running_agents");
-    const pipeline: AgentPipelineResult = await withSpan("campaign_generation.agents", () =>
-      deps.runAgentCoordinator(context, {
-        onProgress: async (completed, _total, agentName) => {
+    const brainResult = await withSpan("campaign_generation.think", () =>
+      brain.think(context, {
+        logLabel: `campaign generation job ${jobId}`,
+        onAgentProgress: async (completed, _total, agentName) => {
           completedUnits = RESEARCH_PROVIDER_COUNT + completed;
           await reportOverall(agentName);
         },
-      } satisfies AgentCoordinatorOptions)
+        deps: {
+          runDecisionEngine: deps.runDecisionEngine,
+          runIntelligenceEnrichment: deps.runIntelligenceEnrichment,
+          runAgentCoordinator: deps.runAgentCoordinator,
+        },
+      })
     );
+    const pipeline: AgentPipelineResult = brainResult.agents;
     await deps.persistAgentResults(jobId, pipeline.results);
 
-    // Persist as soon as it's ready (usually well before this point, since it runs
-    // concurrently with the agents above) so a polling client sees the Decision Engine's
-    // rich, ranked/explainable output without waiting for the campaign build to finish too.
-    const decisionContext: DecisionContext | null = await decisionContextPromise;
+    // Persisted as soon as it's ready — brain.think() already ran and awaited this
+    // concurrently with the agents above, so there's no extra latency to wait out here.
+    const decisionContext: DecisionContext | null = brainResult.decision;
     if (decisionContext) await deps.persistDecisionContext(jobId, decisionContext);
 
     const campaignAgentResult = pipeline.results["campaign-agent"] as AgentResult<CampaignAgentOutput> | undefined;
@@ -254,7 +242,7 @@ export async function runCampaignGenerationPipeline(
     // Campaign Recommendation Engine — additive alongside the single Campaign just built
     // above (never replacing it). Best-effort: the function itself never throws, but this
     // stays defensive in case that contract changes.
-    const { landingPage } = await intelligenceEnrichmentPromise;
+    const { landingPage } = brainResult.intelligenceEnrichment;
     const landingPageRecommendation = landingPage?.recommendations[0] ?? "No landing-page-specific recommendation available.";
     await withSpan("campaign_generation.campaign_recommendations", () =>
       deps.generateCampaignRecommendations(jobId, decisionContext, campaignAgentResult.data.creatives, landingPageRecommendation)

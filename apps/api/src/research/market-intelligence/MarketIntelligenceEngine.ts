@@ -1,4 +1,4 @@
-import { openai, runStructured, runWebSearch } from "../../infra/openaiClient.js";
+import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
 import { hostnameOf } from "../providers/support.js";
 import { readMemory, writeMemory } from "../memory/MemoryCoordinator.js";
 import type { Citation } from "../../types/index.js";
@@ -152,7 +152,7 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
   const industry = input.industry ?? "its category";
   const dedupKey = input.businessId ?? input.url;
 
-  if (!openai) {
+  if (!llm) {
     return { ...fallbackFields(subject), opportunityScore: 0, citations: [], confidence: computeConfidence(true, 0), generatedAt: new Date().toISOString() };
   }
 

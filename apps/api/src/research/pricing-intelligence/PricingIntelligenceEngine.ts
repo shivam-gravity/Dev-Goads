@@ -1,4 +1,4 @@
-import { openai, runStructured, runWebSearch } from "../../infra/openaiClient.js";
+import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
 import { hostnameOf } from "../providers/support.js";
 import { writeMemory } from "../memory/MemoryCoordinator.js";
 import type { Citation } from "../../types/index.js";
@@ -75,7 +75,7 @@ function computeConfidence(usedFallback: boolean, citationCount: number, hasPric
 }
 
 async function extractPricePoint(name: string, industry: string | undefined): Promise<PricePoint> {
-  if (!openai) {
+  if (!llm) {
     return { name, startingPriceUsd: null, pricingSummary: `Unknown — no live research performed for ${name}.`, citations: [], confidence: computeConfidence(true, 0, false) };
   }
 
@@ -162,7 +162,7 @@ export async function runPricingIntelligence(input: PricingIntelligenceInput): P
   const position = computePosition(company.startingPriceUsd, competitorPrices);
 
   let recommendations: string[] = ["Not enough pricing data to generate recommendations."];
-  if (openai && position !== "unknown") {
+  if (llm && position !== "unknown") {
     const result = await runStructured<{ recommendations: string[] }>({
       maxTokens: 512,
       tool: RECOMMENDATIONS_TOOL,

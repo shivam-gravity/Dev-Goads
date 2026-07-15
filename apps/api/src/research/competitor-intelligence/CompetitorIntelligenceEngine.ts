@@ -1,4 +1,4 @@
-import { openai } from "../../infra/openaiClient.js";
+import { llm } from "../../infra/llmClient.js";
 import { getMetadataByDedupKey, writeMemory } from "../memory/MemoryCoordinator.js";
 import { fuseCompetitorProfiles, type CompetitorFusionEntry } from "../knowledge/KnowledgeFusionEngine.js";
 import { discoverCompetitors, type DiscoveryInput } from "./discovery.js";
@@ -23,7 +23,7 @@ function dedupKeyFor(name: string): string {
  * exact dedupKey lookup via MemoryCoordinator (name+workspace), not a similarity search —
  * "did we already profile THIS competitor" is an identity question, not a fuzzy-match one. */
 async function findPriorProfile(name: string, input: CompetitorIntelligenceInput): Promise<{ pricing?: string; positioning?: string } | undefined> {
-  if (!openai) return undefined;
+  if (!llm) return undefined;
   const metadata = await getMetadataByDedupKey(MEMORY_KIND, input.workspaceId, dedupKeyFor(name));
   return metadata ? { pricing: metadata.pricing as string | undefined, positioning: metadata.positioning as string | undefined } : undefined;
 }

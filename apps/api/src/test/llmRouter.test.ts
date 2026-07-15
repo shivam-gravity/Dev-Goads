@@ -1,21 +1,30 @@
 import { test } from "node:test";
 import assert from "node:assert";
+import path from "node:path";
+import os from "node:os";
 
-// Set before any import touches openaiClient.ts/claudeClient.ts (module-load-time env
+// Set before any import touches groqClient.ts/mistralClient.ts (module-load-time env
 // reads, same cache-busting-avoidance convention as scrapeFallback.test.ts) — lets these
 // tests exercise the "configured, but the call itself fails" fallback path for the
-// non-OpenAI providers, rather than only their "not configured at all" degrade path
-// (which is covered separately in claudeClient.test.ts/geminiClient.test.ts).
-process.env.OPENAI_API_KEY = "test-openai-key";
-process.env.ANTHROPIC_API_KEY = "test-anthropic-key";
+// non-Groq providers, rather than only their "not configured at all" degrade path
+// (which is covered separately in mistralClient.test.ts/geminiClient.test.ts).
+process.env.GROQ_API_KEY = "test-groq-key";
+process.env.MISTRAL_API_KEY = "test-mistral-key";
+// Redirects the global usage ledger to a throwaway path — without this, a real
+// (persistent, file-based) global-usage-exceeded state left over from an earlier run
+// would make this file's "an groq assignment calls Groq directly" style assertions fail
+// nondeterministically depending on what state happens to be on disk.
+process.env.LLM_USAGE_LEDGER_PATH = path.join(os.tmpdir(), "test-llm-usage-llmRouter.json");
 
-// The OpenAI/Anthropic SDKs capture `fetch` once at client-construction time
-// (`this.fetch = options.fetch ?? Shims.getDefaultFetch()`), not on every call — so
-// reassigning `global.fetch` inside each test would have zero effect on the module-level
-// client singletons constructed the moment llmRouter.js (and its transitive
-// openaiClient.ts/ollamaClient.ts/claudeClient.ts) is imported below. Installing a stable
+// The Groq/Ollama SDKs (both use the OpenAI SDK pointed at a different baseURL) capture
+// `fetch` once at client-construction time (`this.fetch = options.fetch ?? Shims.getDefaultFetch()`),
+// not on every call — so reassigning `global.fetch` inside each test would have zero
+// effect on the module-level client singletons constructed the moment llmRouter.js (and
+// its transitive groqClient.ts/ollamaClient.ts) is imported below. Installing a stable
 // indirection *before* that import means the SDKs capture this wrapper once, and each
-// test only needs to swap what it delegates to.
+// test only needs to swap what it delegates to. mistralClient.ts uses plain fetch() per
+// call (no SDK), so it isn't affected by this constraint either way, but the same
+// indirection works for it unchanged.
 let currentFetchImpl: typeof fetch = (async () => {
   throw new Error("no fetch impl installed for this test");
 }) as typeof fetch;
@@ -39,30 +48,30 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function openaiToolResponse(): Response {
-  return jsonResponse({ choices: [{ message: { tool_calls: [{ type: "function", function: { name: "emit_test", arguments: JSON.stringify({ ok: true, via: "openai" }) } }] } }] });
+function groqToolResponse(): Response {
+  return jsonResponse({ choices: [{ message: { tool_calls: [{ type: "function", function: { name: "emit_test", arguments: JSON.stringify({ ok: true, via: "groq" }) } }] } }] });
 }
 
-test("llmRouter.runStructured - an openai assignment calls OpenAI directly, no fallback wrapping", async () => {
+test("llmRouter.runStructured - a groq assignment calls Groq directly, no fallback wrapping", async () => {
   const original = currentFetchImpl;
   let calls = 0;
   currentFetchImpl = (async (url) => {
     calls += 1;
-    if (isUrl(url, "api.openai.com")) return openaiToolResponse();
+    if (isUrl(url, "api.groq.com")) return groqToolResponse();
     throw new Error(`unexpected fetch: ${String(url)}`);
   }) as typeof fetch;
 
   try {
-    const result = await runStructured({ provider: "openai", model: "gpt-4o" }, BASE_OPTS);
-    assert.strictEqual(result.source, "openai");
-    assert.deepStrictEqual(result.data, { ok: true, via: "openai" });
+    const result = await runStructured({ provider: "groq", model: "llama-3.3-70b-versatile" }, BASE_OPTS);
+    assert.strictEqual(result.source, "groq");
+    assert.deepStrictEqual(result.data, { ok: true, via: "groq" });
     assert.strictEqual(calls, 1);
   } finally {
     currentFetchImpl = original;
   }
 });
 
-test("llmRouter.runStructured - an ollama assignment succeeding never calls OpenAI", async () => {
+test("llmRouter.runStructured - an ollama assignment succeeding never calls Groq", async () => {
   const original = currentFetchImpl;
   currentFetchImpl = (async (url) => {
     if (isUrl(url, "11434")) {
@@ -80,47 +89,47 @@ test("llmRouter.runStructured - an ollama assignment succeeding never calls Open
   }
 });
 
-test("llmRouter.runStructured - an ollama assignment failing falls back to a succeeding OpenAI call", async () => {
+test("llmRouter.runStructured - an ollama assignment failing falls back to a succeeding Groq call", async () => {
   const original = currentFetchImpl;
   currentFetchImpl = (async (url) => {
     if (isUrl(url, "11434")) throw new Error("ollama unreachable (simulated)");
-    if (isUrl(url, "api.openai.com")) return openaiToolResponse();
+    if (isUrl(url, "api.groq.com")) return groqToolResponse();
     throw new Error(`unexpected fetch: ${String(url)}`);
   }) as typeof fetch;
 
   try {
     const result = await runStructured({ provider: "ollama", model: "llama3.1" }, BASE_OPTS);
-    assert.strictEqual(result.source, "openai");
-    assert.deepStrictEqual(result.data, { ok: true, via: "openai" });
+    assert.strictEqual(result.source, "groq");
+    assert.deepStrictEqual(result.data, { ok: true, via: "groq" });
   } finally {
     currentFetchImpl = original;
   }
 });
 
-test("llmRouter.runStructured - an anthropic assignment with no real key configured falls back to OpenAI without ever reaching Claude's API", async () => {
-  // Simulates the "no ANTHROPIC_API_KEY" case indirectly: claudeClient.ts's own gate
+test("llmRouter.runStructured - a mistral assignment with no real key configured falls back to Groq without ever reaching Mistral's API", async () => {
+  // Simulates the "no real MISTRAL_API_KEY" case indirectly: mistralClient.ts's own gate
   // already returns null without a network call when unconfigured, which is exercised
-  // directly in claudeClient.test.ts. Here we confirm the *router's* fallback still works
-  // when the assigned client returns null for any reason.
+  // directly in mistralClient.test.ts. Here we confirm the *router's* fallback still works
+  // when the assigned client returns null for any reason (here: a tool-call-less response).
   const original = currentFetchImpl;
   currentFetchImpl = (async (url) => {
-    if (isUrl(url, "api.anthropic.com")) {
-      return jsonResponse({ content: [] }); // no tool_use block => null
+    if (isUrl(url, "api.mistral.ai")) {
+      return jsonResponse({ choices: [{ message: {} }] }); // no tool_calls => null
     }
-    if (isUrl(url, "api.openai.com")) return openaiToolResponse();
+    if (isUrl(url, "api.groq.com")) return groqToolResponse();
     throw new Error(`unexpected fetch: ${String(url)}`);
   }) as typeof fetch;
 
   try {
-    const result = await runStructured({ provider: "anthropic", model: "claude-sonnet-5" }, BASE_OPTS);
-    assert.strictEqual(result.source, "openai");
-    assert.deepStrictEqual(result.data, { ok: true, via: "openai" });
+    const result = await runStructured({ provider: "mistral", model: "mistral-small-latest" }, BASE_OPTS);
+    assert.strictEqual(result.source, "groq");
+    assert.deepStrictEqual(result.data, { ok: true, via: "groq" });
   } finally {
     currentFetchImpl = original;
   }
 });
 
-test("llmRouter.runStructured - both the assigned provider and the OpenAI fallback failing still degrades gracefully, never throws", async () => {
+test("llmRouter.runStructured - both the assigned provider and the Groq fallback failing still degrades gracefully, never throws", async () => {
   const original = currentFetchImpl;
   currentFetchImpl = (async () => {
     throw new Error("network unavailable (simulated)");
@@ -129,7 +138,7 @@ test("llmRouter.runStructured - both the assigned provider and the OpenAI fallba
   try {
     const result = await runStructured({ provider: "ollama", model: "llama3.1" }, BASE_OPTS);
     assert.strictEqual(result.data, null);
-    assert.strictEqual(result.source, "openai");
+    assert.strictEqual(result.source, "groq");
   } finally {
     currentFetchImpl = original;
   }
@@ -142,7 +151,7 @@ test("llmRouter.runStructured - LLM_TASK_FALLBACK_ENABLED=false disables the saf
   const original = currentFetchImpl;
   currentFetchImpl = (async (url) => {
     if (isUrl(url, "11434")) throw new Error("ollama unreachable (simulated)");
-    throw new Error(`must not reach OpenAI when fallback is disabled: ${String(url)}`);
+    throw new Error(`must not reach Groq when fallback is disabled: ${String(url)}`);
   }) as typeof fetch;
 
   try {
@@ -158,5 +167,5 @@ test("llmRouter.runStructured - LLM_TASK_FALLBACK_ENABLED=false disables the saf
 });
 
 test.after(() => {
-  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.MISTRAL_API_KEY;
 });

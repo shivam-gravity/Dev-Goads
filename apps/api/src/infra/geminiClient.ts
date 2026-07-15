@@ -1,6 +1,7 @@
 import { FunctionCallingConfigMode, GoogleGenAI } from "@google/genai";
-import type { ChatMessage, JsonSchemaTool } from "./openaiClient.js";
+import type { ChatMessage, JsonSchemaTool } from "./llmTypes.js";
 import { recordTokens } from "./tokenMeter.js";
+import { recordGlobalLlmUsage } from "./llmUsageBoundary.js";
 
 // Gated behind GEMINI_API_KEY exactly like the other two non-OpenAI clients — no key
 // means every call below degrades to a clean `null`, and llmRouter.ts's fallback wrapping
@@ -41,6 +42,7 @@ export async function runStructured<T>(opts: {
   });
 
   recordTokens({ provider: "google", model: opts.model ?? GEMINI_DEFAULT_MODEL, kind: "structured", inputTokens: response.usageMetadata?.promptTokenCount ?? 0, outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0 });
+  recordGlobalLlmUsage((response.usageMetadata?.promptTokenCount ?? 0) + (response.usageMetadata?.candidatesTokenCount ?? 0));
 
   const call = response.functionCalls?.[0];
   return call?.args ? (call.args as T) : null;
@@ -56,6 +58,7 @@ export async function runText(opts: { model?: string; maxTokens: number; system?
     config: { systemInstruction: opts.system, maxOutputTokens: opts.maxTokens },
   });
   recordTokens({ provider: "google", model: opts.model ?? GEMINI_DEFAULT_MODEL, kind: "text", inputTokens: response.usageMetadata?.promptTokenCount ?? 0, outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0 });
+  recordGlobalLlmUsage((response.usageMetadata?.promptTokenCount ?? 0) + (response.usageMetadata?.candidatesTokenCount ?? 0));
 
   return response.text ?? null;
 }

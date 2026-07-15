@@ -1,22 +1,44 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { AppStoreProvider } from "../research/providers/AppStoreProvider.js";
-import { BacklinkAuthorityProvider } from "../research/providers/BacklinkAuthorityProvider.js";
-import { ContentMarketingProvider } from "../research/providers/ContentMarketingProvider.js";
-import { FundingProvider } from "../research/providers/FundingProvider.js";
-import { HiringSignalsProvider } from "../research/providers/HiringSignalsProvider.js";
-import { LegalRegulatoryProvider } from "../research/providers/LegalRegulatoryProvider.js";
-import { LocalPresenceProvider } from "../research/providers/LocalPresenceProvider.js";
-import { PartnershipProvider } from "../research/providers/PartnershipProvider.js";
-import { ReviewsProvider } from "../research/providers/ReviewsProvider.js";
-import { SocialMediaProvider } from "../research/providers/SocialMediaProvider.js";
-import { VideoPresenceProvider } from "../research/providers/VideoPresenceProvider.js";
 import type { ResearchProviderInput } from "../research/types/index.js";
 
 delete process.env.OPENAI_API_KEY;
+delete process.env.GROQ_API_KEY;
+delete process.env.GEMINI_API_KEY;
+delete process.env.MISTRAL_API_KEY;
 // ReviewsProvider/SocialMediaProvider now try a real Firecrawl crawl before falling back to the
 // LLM-web-search path tested below — unset so the "zero network calls" assertion still holds.
 delete process.env.FIRECRAWL_API_KEY;
+
+// No API key alone no longer guarantees zero network calls: every research-provider
+// structuring step is assigned to Ollama by default (llmTaskConfig.ts), which has no
+// "configured or not" concept the way a hosted API with a key does — if a real Ollama
+// server happens to be reachable at localhost:11434, the structuring step can genuinely
+// succeed via a real model call. Blocking `global.fetch` at the MODULE level (not
+// per-test, as this file previously did), before any provider module is imported, is what
+// makes "no live model call can succeed" deterministic. Critically, every provider import
+// below must be dynamic — a static top-of-file import (as this file previously had) is
+// hoisted and resolved before any other code in the file runs, silently loading the whole
+// provider->llmClient->groqClient/ollamaClient chain (capturing the REAL native fetch)
+// before a fetch override installed later ever takes effect. See newAgents.test.ts's doc
+// comment for the same lesson learned the hard way in that file.
+let currentFetchImpl: typeof fetch = (async () => {
+  throw new Error("network unavailable (simulated)");
+}) as typeof fetch;
+global.fetch = ((...args: Parameters<typeof fetch>) => currentFetchImpl(...args)) as typeof fetch;
+
+const t = Date.now();
+const { AppStoreProvider } = await import(`../research/providers/AppStoreProvider.js?t=${t}`);
+const { BacklinkAuthorityProvider } = await import(`../research/providers/BacklinkAuthorityProvider.js?t=${t}`);
+const { ContentMarketingProvider } = await import(`../research/providers/ContentMarketingProvider.js?t=${t}`);
+const { FundingProvider } = await import(`../research/providers/FundingProvider.js?t=${t}`);
+const { HiringSignalsProvider } = await import(`../research/providers/HiringSignalsProvider.js?t=${t}`);
+const { LegalRegulatoryProvider } = await import(`../research/providers/LegalRegulatoryProvider.js?t=${t}`);
+const { LocalPresenceProvider } = await import(`../research/providers/LocalPresenceProvider.js?t=${t}`);
+const { PartnershipProvider } = await import(`../research/providers/PartnershipProvider.js?t=${t}`);
+const { ReviewsProvider } = await import(`../research/providers/ReviewsProvider.js?t=${t}`);
+const { SocialMediaProvider } = await import(`../research/providers/SocialMediaProvider.js?t=${t}`);
+const { VideoPresenceProvider } = await import(`../research/providers/VideoPresenceProvider.js?t=${t}`);
 
 const INPUT: ResearchProviderInput = { jobId: "job-1", workspaceId: "ws-1", url: "https://example.com", businessName: "Example Co", industry: "widgets" };
 
@@ -35,23 +57,11 @@ const PROVIDERS = [
 ];
 
 for (const { name, instance } of PROVIDERS) {
-  test(`${name} - degrades to a partial, labeled fallback with zero network calls when OPENAI_API_KEY is unset`, async () => {
-    const original = global.fetch;
-    let fetchCalled = false;
-    global.fetch = (async () => {
-      fetchCalled = true;
-      throw new Error("should not be called");
-    }) as typeof fetch;
-
-    try {
-      const result = await instance.execute(INPUT);
-      assert.strictEqual(result.status, "partial");
-      assert.strictEqual(result.citations.length, 0);
-      assert.strictEqual(fetchCalled, false);
-      assert.ok(result.data, "expected a labeled fallback data object, not null");
-    } finally {
-      global.fetch = original;
-    }
+  test(`${name} - degrades to a partial, labeled fallback when no live model call can succeed`, async () => {
+    const result = await instance.execute(INPUT);
+    assert.strictEqual(result.status, "partial");
+    assert.strictEqual(result.citations.length, 0);
+    assert.ok(result.data, "expected a labeled fallback data object, not null");
   });
 
   test(`${name} - has a unique provider name and a priority in [100, 200]`, () => {

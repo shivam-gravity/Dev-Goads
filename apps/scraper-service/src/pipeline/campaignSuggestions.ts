@@ -1,4 +1,4 @@
-import { openai, runStructured } from "../openaiClient.js";
+import { llm, runStructured } from "../llmClient.js";
 import type { AdCopyVariant, CampaignSuggestion, NormalizedProduct } from "../types.js";
 
 const NETWORKS = ["meta", "google", "tiktok"] as const;
@@ -32,13 +32,13 @@ function fallbackCampaignSuggestion(): CampaignSuggestion {
     recommendedNetworks: ["meta"],
     budgetSplit: { meta: 1 },
     audiences: ["General interest shoppers"],
-    rationale: "Default single-network suggestion — set OPENAI_API_KEY for tailored recommendations.",
+    rationale: "Default single-network suggestion — set GROQ_API_KEY for tailored recommendations.",
   };
 }
 
-/** Falls back to a generic single-network suggestion if OPENAI_API_KEY is unset. */
+/** Falls back to a generic single-network suggestion if GROQ_API_KEY is unset. */
 export async function suggestCampaign(product: NormalizedProduct, adCopy: AdCopyVariant[]): Promise<CampaignSuggestion> {
-  if (!openai) return fallbackCampaignSuggestion();
+  if (!llm) return fallbackCampaignSuggestion();
 
   const result = await runStructured<CampaignSuggestion>({
     maxTokens: 1024,

@@ -3,27 +3,29 @@ import type { LLMAssignment, LLMProvider } from "./llmRouter.js";
 /**
  * One flat registry, shared by all three LLM call surfaces — the 20 agents, research
  * providers, and the Decision Engine — since a "task" is a task regardless of which
- * subsystem it lives in. Every task defaults to OpenAI (today's exact behavior) until a
- * row is added here or overridden via an env var, per the deliberate choice to ship this
- * with zero behavior change until someone opts a specific task in.
+ * subsystem it lives in. Every task not listed here falls through to DEFAULT_ASSIGNMENT
+ * (Groq) until a row is added or overridden via an env var.
  *
  * Keys: agent promptIds (e.g. "budget-agent"), research provider names (e.g.
  * "competitor", "reviews"), decision-engine step names (e.g. "decision-summary",
  * "recommendation-ranking", "tradeoff-analysis", "strategy-synthesis",
  * "context-enrichment").
  */
-const DEFAULT_ASSIGNMENT: LLMAssignment = { provider: "openai", model: "gpt-4o" };
+const DEFAULT_ASSIGNMENT: LLMAssignment = { provider: "groq", model: "llama-3.3-70b-versatile" };
 
 const OLLAMA: LLMAssignment = { provider: "ollama", model: process.env.OLLAMA_MODEL ?? "llama3.2" };
 const GEMINI: LLMAssignment = { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
+const MISTRAL: LLMAssignment = { provider: "mistral", model: process.env.MISTRAL_MODEL ?? "mistral-small-latest" };
 
-// Moves the whole app off OpenAI (token budget is limited) onto the two already-configured
-// free/local alternatives: Ollama for the 20 agents + research-provider structuring steps
-// (high call volume, tolerates Ollama's slower local inference), Gemini for the
-// lower-volume synthesis/narrative steps (Decision Engine + Intelligence Engines) where
-// quality matters more and the smaller call count is kinder to Gemini's free-tier quota.
-// OpenAI is untouched as DEFAULT_ASSIGNMENT/fallback-of-last-resort for anything not listed
-// here (see llmRouter.ts) — degrades to a graceful null if OPENAI_API_KEY is also unset.
+// OpenAI and Anthropic/Claude have been removed from this platform entirely (see
+// infra/llmClient.ts's doc comment for what that gives up — hosted web search, image
+// generation). Four providers remain: Ollama for the 20 agents + research-provider
+// structuring steps (high call volume, tolerates Ollama's slower local inference), Gemini
+// and Mistral split across the lower-volume synthesis/narrative steps (Decision Engine +
+// Intelligence Engines) for provider diversity rather than leaning on one free tier alone.
+// Groq is DEFAULT_ASSIGNMENT/fallback-of-last-resort for everything (see llmRouter.ts) —
+// deliberately NOT also assigned as a primary task below, so a Groq fallback is a genuinely
+// different leg from whatever primary provider just failed, not the same one retried.
 const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   // 20 marketing agents (agents/agents/*.ts, keyed by promptId)
   "campaign-agent": OLLAMA,
@@ -50,13 +52,14 @@ const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   // Decision Engine steps (research/decision/*.ts, keyed by taskName)
   "decision-summary": GEMINI,
   "enrichment-proof-points": GEMINI,
-  "enrichment-regional-depth": GEMINI,
-  "tradeoff-analysis": GEMINI,
+  "enrichment-regional-depth": MISTRAL,
+  "tradeoff-analysis": MISTRAL,
   "recommendation-generation": GEMINI,
-  "strategy-synthesis": GEMINI,
+  "strategy-synthesis": MISTRAL,
 
   // Research providers' structuring step (research/providers/*.ts, keyed by provider name;
-  // the web-search step itself has no non-OpenAI equivalent and stays OpenAI-only regardless)
+  // the web-search step itself has no provider equivalent and always returns empty now —
+  // see infra/llmClient.ts's runWebSearch)
   "app-store": OLLAMA,
   audience: OLLAMA,
   "ad-library": OLLAMA,
@@ -85,20 +88,19 @@ const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   search: OLLAMA,
   "search-ranking": OLLAMA,
 
-  // Intelligence Engines + crawl fact extraction (formerly hardcoded straight to
-  // infra/openaiClient.ts, migrated onto the router alongside this registry)
+  // Intelligence Engines + crawl fact extraction
   "audience-intelligence": GEMINI,
-  "competitor-intelligence-discovery": GEMINI,
-  "competitor-intelligence-enrichment": GEMINI,
+  "competitor-intelligence-discovery": MISTRAL,
+  "competitor-intelligence-enrichment": MISTRAL,
   "creative-intelligence": GEMINI,
-  "market-intelligence": GEMINI,
+  "market-intelligence": MISTRAL,
   "pricing-intelligence": GEMINI,
-  "landing-page-intelligence": GEMINI,
+  "landing-page-intelligence": MISTRAL,
   "crawl-fact-extraction": GEMINI,
-  "ad-creative-analysis": GEMINI,
+  "ad-creative-analysis": MISTRAL,
 };
 
-const VALID_PROVIDERS = new Set<string>(["openai", "ollama", "anthropic", "google"]);
+const VALID_PROVIDERS = new Set<string>(["groq", "ollama", "mistral", "google"]);
 
 /**
  * Resolution order: per-task env override (quick experiments, no code change) → static

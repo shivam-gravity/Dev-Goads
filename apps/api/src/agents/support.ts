@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { JsonSchemaTool } from "../infra/openaiClient.js";
+import type { JsonSchemaTool } from "../infra/llmTypes.js";
 import * as llmRouter from "../infra/llmRouter.js";
 import { resolveTaskModel } from "../infra/llmTaskConfig.js";
 import { logger } from "../modules/logger/logger.js";

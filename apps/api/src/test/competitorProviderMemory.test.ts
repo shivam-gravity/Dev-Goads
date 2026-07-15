@@ -2,15 +2,25 @@ import { test } from "node:test";
 import assert from "node:assert";
 
 delete process.env.OPENAI_API_KEY;
+delete process.env.GROQ_API_KEY;
+delete process.env.GEMINI_API_KEY;
+delete process.env.MISTRAL_API_KEY;
 
-// Cache-busting dynamic import (same technique as researchProviders.test.ts /
-// aiAgents.test.ts): infra/openaiClient.ts computes `openai` once at module-evaluation
-// time, so CompetitorProvider (which reaches it transitively) needs a fresh module graph
-// after deleting the env var above to see it unset.
+// CompetitorProvider's structuring step is assigned to Ollama by default
+// (llmTaskConfig.ts), which has no "configured or not" concept the way a hosted API with a
+// key does — deleting keys alone doesn't stop a real Ollama call. Blocking `global.fetch`
+// at the module level, before the dynamic import below, makes "no live model call can
+// succeed" deterministic. The import itself must stay dynamic (cache-busted) — a static
+// import would be hoisted ahead of both the deletes and the fetch override.
+let currentFetchImpl: typeof fetch = (async () => {
+  throw new Error("network unavailable (simulated)");
+}) as typeof fetch;
+global.fetch = ((...args: Parameters<typeof fetch>) => currentFetchImpl(...args)) as typeof fetch;
+
 const t = Date.now();
 const { CompetitorProvider } = await import(`../research/providers/CompetitorProvider.js?t=${t}`);
 
-test("CompetitorProvider - with no OPENAI_API_KEY, Research Memory is skipped entirely and the provider still degrades to its labeled fallback", async () => {
+test("CompetitorProvider - with no LLM provider configured, Research Memory is skipped entirely and the provider still degrades to its labeled fallback", async () => {
   const provider = new CompetitorProvider();
   const result = await provider.execute({ jobId: "job-1", workspaceId: "ws-1", businessId: "biz-1", url: "https://example.com" });
 
