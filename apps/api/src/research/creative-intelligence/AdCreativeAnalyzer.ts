@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import * as llmRouter from "../../infra/llmRouter.js";
+import { resolveTaskModel } from "../../infra/llmTaskConfig.js";
 import { prisma } from "../../db/prisma.js";
 import { logger } from "../../modules/logger/logger.js";
 
@@ -75,11 +76,11 @@ export interface AdForAnalysis {
 /** Pure model call — no DB I/O, so it's directly unit-testable. */
 export async function analyzeAdCreative(ad: AdForAnalysis): Promise<AdCreativeAnalysisFields & { confidence: number }> {
   const hasContent = Boolean(ad.headline || ad.description);
-  if (!openai || !hasContent) {
+  if (!hasContent) {
     return { ...fallbackFields(), confidence: computeConfidence(true, hasContent) };
   }
 
-  const structured = await runStructured<AdCreativeAnalysisFields>({
+  const { data: structured } = await llmRouter.runStructured<AdCreativeAnalysisFields>(resolveTaskModel("ad-creative-analysis"), {
     maxTokens: 512,
     tool: AD_CREATIVE_TOOL,
     messages: [

@@ -205,6 +205,67 @@ export function hostnameOf(url: string): string {
 export const NO_SEARCH_DATA_SOURCE = "AI estimate — no live web search performed (OPENAI_API_KEY not set)";
 export const NO_CITATIONS_DATA_SOURCE = "AI estimate based on general knowledge (no citable sources found)";
 
+const URL_FIELDS = new Set(["url", "sourceUrl"]);
+
+/** Normalizes a URL for comparison — a model's copy of a real citation can differ from the
+ * original in trivial formatting (trailing slash, etc.) even when it points at the exact
+ * same resource; an exact-string match would be too brittle in the safe direction (rejecting
+ * genuine matches), so this normalizes before comparing. Returns null for anything that
+ * doesn't parse as a URL at all — such a value can never be "verified". */
+function normalizeForComparison(raw: string): string | null {
+  try {
+    const u = new URL(raw);
+    return `${u.origin}${u.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return null;
+  }
+}
+
+const DROP_ITEM = Symbol("drop-item");
+
+/**
+ * Guards against the structuring model inventing a plausible-looking url/sourceUrl for an
+ * item it has no real citation for. The structuring call only ever sees narrative prose (plus
+ * the verified-sources list appended in webSearchThenStructure below) — nothing else stops it
+ * from fabricating a URL just to satisfy a schema field, and this codebase has already seen it
+ * happen (a monday.com Reddit result with 3 threads all sharing the same bare, path-less
+ * "https://en.reddit.com"). Walks every array field in the structured result; for any item
+ * whose url/sourceUrl doesn't match a real, search-verified citation, either drops the whole
+ * item ("drop-item" — right when the item is meaningless without a real source, e.g. a
+ * Reddit thread IS its URL) or keeps the item and clears just the offending field(s)
+ * ("null-field" — right when the rest of the item, e.g. a competitor's name/notes, is still
+ * worth keeping on its own). Caller picks per opts.unverifiedUrlPolicy below.
+ */
+function stripUnverifiedUrls<T>(result: T, citations: Citation[], policy: "drop-item" | "null-field"): T {
+  const verified = new Set(citations.map((c) => normalizeForComparison(c.url)).filter((u): u is string => u !== null));
+  const isVerified = (candidate: unknown): boolean => {
+    if (typeof candidate !== "string") return true; // not a url-shaped value — nothing to verify
+    const normalized = normalizeForComparison(candidate);
+    return normalized !== null && verified.has(normalized);
+  };
+
+  const output: Record<string, unknown> = { ...(result as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(output)) {
+    if (Array.isArray(value)) {
+      output[key] = value
+        .map((item) => {
+          if (!item || typeof item !== "object") return item;
+          const record = item as Record<string, unknown>;
+          const unverifiedFields = Object.keys(record).filter((field) => URL_FIELDS.has(field) && !isVerified(record[field]));
+          if (unverifiedFields.length === 0) return item;
+          if (policy === "drop-item") return DROP_ITEM;
+          const cleaned = { ...record };
+          for (const field of unverifiedFields) cleaned[field] = undefined;
+          return cleaned;
+        })
+        .filter((item) => item !== DROP_ITEM);
+    } else if (URL_FIELDS.has(key) && typeof value === "string" && !isVerified(value)) {
+      output[key] = undefined;
+    }
+  }
+  return output as T;
+}
+
 /**
  * The "live web research, then shape it into a structured schema" composition every
  * OpenAI-backed provider below needs — built on top of the existing runWebSearch/
@@ -218,30 +279,51 @@ export async function webSearchThenStructure<T extends { dataSource?: string }>(
   tool: JsonSchemaTool;
   maxTokens: number;
   fallback: () => T;
+  /** How to handle an item whose url/sourceUrl doesn't match a real, search-verified
+   * citation. Defaults to "drop-item" (Reddit's behavior — a thread with no real URL is
+   * meaningless). Pass "null-field" when the rest of the item still has standalone value
+   * (e.g. CompetitorProvider — a competitor's name/notes are worth keeping even without a
+   * verified URL). */
+  unverifiedUrlPolicy?: "drop-item" | "null-field";
 }): Promise<{ status: ResearchProviderStatus; data: T; citations: Citation[] }> {
-  if (!openai) {
-    return { status: "partial", data: { ...opts.fallback(), dataSource: NO_SEARCH_DATA_SOURCE }, citations: [] };
-  }
-
   // runWebSearch itself has no non-OpenAI equivalent (it's OpenAI's hosted server-side
   // search, not a model capability) and stays OpenAI-only regardless of task assignment —
-  // only the structuring step below is routed per-task.
-  const research = await runWebSearch(opts.searchPrompt);
+  // only the structuring step below is routed per-task. Without OPENAI_API_KEY (or on any
+  // transient search failure) this degrades to an empty narrative/no citations rather than
+  // skipping structuring altogether — the routed structuring call still runs on Ollama/
+  // Gemini and reasons from general category knowledge, same as the "no live web research
+  // available" prompt fallback below already anticipated, just previously unreachable
+  // whenever OpenAI wasn't configured.
+  const research = openai
+    ? await runWebSearch(opts.searchPrompt).catch(() => ({ narrative: "", citations: [] as Citation[], searchesUsed: 0 }))
+    : { narrative: "", citations: [] as Citation[], searchesUsed: 0 };
   const taskName = currentProviderName.getStore() ?? "unknown-provider";
   const assignment = resolveTaskModel(taskName);
+
+  // Gives the structuring call the actual, search-verified source list — without this it only
+  // ever saw narrative prose and had no way to know which (if any) URL was real, which is
+  // exactly what let it fabricate one to satisfy a schema field. This is belt (prompt
+  // instruction); stripUnverifiedUrls above is suspenders (hard post-hoc enforcement) — models
+  // don't reliably follow prompt-only instructions, so both layers stay.
+  const citationsBlock = research.citations.length > 0
+    ? `\n\nVerified sources — for any url/sourceUrl field, ONLY use a URL from this exact list; if none of these genuinely matches a specific item, leave that item's url/sourceUrl out entirely rather than inventing one:\n${research.citations.map((c) => `- ${c.title}: ${c.url}`).join("\n")}`
+    : `\n\n(No verified sources were found for this search — do not include any url/sourceUrl field in your response, since there is nothing real to point to.)`;
+
   const { data: result, source } = await llmRouter.runStructured<T>(assignment, {
     maxTokens: opts.maxTokens,
     tool: opts.tool,
-    messages: [{ role: "user", content: opts.structurePrompt(research.narrative || "(no live web research available — reason from general category knowledge)") }],
+    messages: [{ role: "user", content: opts.structurePrompt(research.narrative || "(no live web research available — reason from general category knowledge)") + citationsBlock }],
   });
   if (!result) {
     return { status: "partial", data: { ...opts.fallback(), dataSource: NO_SEARCH_DATA_SOURCE }, citations: [] };
   }
+
+  const verifiedResult = stripUnverifiedUrls(result, research.citations, opts.unverifiedUrlPolicy ?? "drop-item");
 
   const citationLabel = research.citations.length > 0 ? research.citations.map((c) => c.title).join(" + ") : NO_CITATIONS_DATA_SOURCE;
   // Only annotate the label when a non-default provider actually served the structuring
   // step — keeps the default (openai) path's dataSource string byte-for-byte identical to
   // today's, so nothing that asserts on it needs to change unless a task is reassigned.
   const dataSource = source === "openai" ? citationLabel : `${citationLabel} (structured via ${source}:${assignment.model})`;
-  return { status: "success", data: { ...result, dataSource }, citations: research.citations };
+  return { status: "success", data: { ...verifiedResult, dataSource }, citations: research.citations };
 }

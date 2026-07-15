@@ -14,7 +14,89 @@ import type { LLMAssignment, LLMProvider } from "./llmRouter.js";
  */
 const DEFAULT_ASSIGNMENT: LLMAssignment = { provider: "openai", model: "gpt-4o" };
 
-const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {};
+const OLLAMA: LLMAssignment = { provider: "ollama", model: process.env.OLLAMA_MODEL ?? "llama3.2" };
+const GEMINI: LLMAssignment = { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
+
+// Moves the whole app off OpenAI (token budget is limited) onto the two already-configured
+// free/local alternatives: Ollama for the 20 agents + research-provider structuring steps
+// (high call volume, tolerates Ollama's slower local inference), Gemini for the
+// lower-volume synthesis/narrative steps (Decision Engine + Intelligence Engines) where
+// quality matters more and the smaller call count is kinder to Gemini's free-tier quota.
+// OpenAI is untouched as DEFAULT_ASSIGNMENT/fallback-of-last-resort for anything not listed
+// here (see llmRouter.ts) — degrades to a graceful null if OPENAI_API_KEY is also unset.
+const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
+  // 20 marketing agents (agents/agents/*.ts, keyed by promptId)
+  "campaign-agent": OLLAMA,
+  "audience-agent": OLLAMA,
+  "budget-agent": OLLAMA,
+  "competitor-agent": OLLAMA,
+  "channel-placement-agent": OLLAMA,
+  "compliance-agent": OLLAMA,
+  "critic-agent": OLLAMA,
+  "forecasting-kpi-agent": OLLAMA,
+  "funnel-retargeting-agent": OLLAMA,
+  "creative-agent": OLLAMA,
+  "keyword-agent": OLLAMA,
+  "localization-agent": OLLAMA,
+  "market-agent": OLLAMA,
+  "landing-page-agent": OLLAMA,
+  "objection-handling-agent": OLLAMA,
+  "persona-agent": OLLAMA,
+  "pricing-offer-agent": OLLAMA,
+  "seo-content-agent": OLLAMA,
+  "seasonality-timing-agent": OLLAMA,
+  "product-agent": OLLAMA,
+
+  // Decision Engine steps (research/decision/*.ts, keyed by taskName)
+  "decision-summary": GEMINI,
+  "enrichment-proof-points": GEMINI,
+  "enrichment-regional-depth": GEMINI,
+  "tradeoff-analysis": GEMINI,
+  "recommendation-generation": GEMINI,
+  "strategy-synthesis": GEMINI,
+
+  // Research providers' structuring step (research/providers/*.ts, keyed by provider name;
+  // the web-search step itself has no non-OpenAI equivalent and stays OpenAI-only regardless)
+  "app-store": OLLAMA,
+  audience: OLLAMA,
+  "ad-library": OLLAMA,
+  competitor: OLLAMA,
+  company: OLLAMA,
+  autocomplete: OLLAMA,
+  "backlink-authority": OLLAMA,
+  funding: OLLAMA,
+  "serp-features": OLLAMA,
+  "hiring-signals": OLLAMA,
+  "content-marketing": OLLAMA,
+  "legal-regulatory": OLLAMA,
+  "local-presence": OLLAMA,
+  market: OLLAMA,
+  partnerships: OLLAMA,
+  product: OLLAMA,
+  reddit: OLLAMA,
+  reviews: OLLAMA,
+  seo: OLLAMA,
+  "social-media": OLLAMA,
+  technology: OLLAMA,
+  "video-presence": OLLAMA,
+  website: OLLAMA,
+  navigation: OLLAMA,
+  news: OLLAMA,
+  search: OLLAMA,
+  "search-ranking": OLLAMA,
+
+  // Intelligence Engines + crawl fact extraction (formerly hardcoded straight to
+  // infra/openaiClient.ts, migrated onto the router alongside this registry)
+  "audience-intelligence": GEMINI,
+  "competitor-intelligence-discovery": GEMINI,
+  "competitor-intelligence-enrichment": GEMINI,
+  "creative-intelligence": GEMINI,
+  "market-intelligence": GEMINI,
+  "pricing-intelligence": GEMINI,
+  "landing-page-intelligence": GEMINI,
+  "crawl-fact-extraction": GEMINI,
+  "ad-creative-analysis": GEMINI,
+};
 
 const VALID_PROVIDERS = new Set<string>(["openai", "ollama", "anthropic", "google"]);
 

@@ -357,7 +357,7 @@ export interface SerpFeaturesData {
 
 export interface CommunityDiscussionThread {
   title: string;
-  url: string;
+  url?: string;
   sentiment: string;
 }
 

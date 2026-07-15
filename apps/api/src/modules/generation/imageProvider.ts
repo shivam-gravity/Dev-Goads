@@ -1,3 +1,5 @@
+import { computeImageCostUsd, isOpenAIBudgetExceeded, recordOpenAISpend } from "../../infra/openaiBudget.js";
+
 export interface GeneratedImage {
   buffer: Buffer;
   mimeType: string;
@@ -37,6 +39,7 @@ export class OpenAIImageProvider implements ImageGenProvider {
 
   async generate(prompt: string, options?: ImageGenOptions): Promise<GeneratedImage> {
     if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not set");
+    if (isOpenAIBudgetExceeded()) throw new Error("OpenAI monthly budget exceeded — see infra/openaiBudget.ts");
 
     const res = await fetch("https://api.openai.com/v1/images/generations", {
       method: "POST",
@@ -57,6 +60,8 @@ export class OpenAIImageProvider implements ImageGenProvider {
       const text = await res.text();
       throw new Error(`OpenAI image generation failed (${res.status}): ${text}`);
     }
+
+    recordOpenAISpend(computeImageCostUsd());
 
     const json = (await res.json()) as { data: { b64_json: string }[] };
     const b64 = json.data?.[0]?.b64_json;
@@ -81,5 +86,5 @@ export class MockImageProvider implements ImageGenProvider {
 }
 
 export function getImageProvider(): ImageGenProvider {
-  return OPENAI_API_KEY ? new OpenAIImageProvider() : new MockImageProvider();
+  return OPENAI_API_KEY && !isOpenAIBudgetExceeded() ? new OpenAIImageProvider() : new MockImageProvider();
 }

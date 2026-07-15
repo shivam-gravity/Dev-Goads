@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ChatMessage, JsonSchemaTool } from "./openaiClient.js";
+import { recordTokens } from "./tokenMeter.js";
 
 // Gated behind ANTHROPIC_API_KEY exactly like openaiClient.ts's `openai` is gated behind
 // OPENAI_API_KEY — no key means this stays null forever, every call below degrades to a
@@ -34,6 +35,8 @@ export async function runStructured<T>(opts: {
     tool_choice: { type: "tool", name: opts.tool.name },
   });
 
+  recordTokens({ provider: "anthropic", model: opts.model ?? CLAUDE_DEFAULT_MODEL, kind: "structured", inputTokens: response.usage?.input_tokens ?? 0, outputTokens: response.usage?.output_tokens ?? 0 });
+
   const toolUse = response.content.find((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
   return toolUse ? (toolUse.input as T) : null;
 }
@@ -48,6 +51,8 @@ export async function runText(opts: { model?: string; maxTokens: number; system?
     system: opts.system,
     messages: opts.messages,
   });
+
+  recordTokens({ provider: "anthropic", model: opts.model ?? CLAUDE_DEFAULT_MODEL, kind: "text", inputTokens: response.usage?.input_tokens ?? 0, outputTokens: response.usage?.output_tokens ?? 0 });
 
   const textBlock = response.content.find((block): block is Anthropic.TextBlock => block.type === "text");
   return textBlock?.text ?? null;

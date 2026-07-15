@@ -24,7 +24,7 @@ const COMMUNITY_TOOL = {
             url: { type: "string" },
             sentiment: { type: "string", description: "one short phrase, e.g. 'mostly positive', 'mixed — pricing complaints', 'skeptical'" },
           },
-          required: ["title", "url", "sentiment"],
+          required: ["title", "sentiment"],
         },
       },
       summary: { type: "string", description: "1-2 sentences on what the community is actually saying" },

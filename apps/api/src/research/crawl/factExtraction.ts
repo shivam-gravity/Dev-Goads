@@ -1,4 +1,5 @@
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import * as llmRouter from "../../infra/llmRouter.js";
+import { resolveTaskModel } from "../../infra/llmTaskConfig.js";
 import { prisma } from "../../db/prisma.js";
 import { logger } from "../../modules/logger/logger.js";
 import { persistCrawlFacts, type ExtractedFact } from "./crawlPersistence.js";
@@ -45,8 +46,6 @@ const FACT_EXTRACTION_TOOL = {
  * the crawl has no pages or no model is configured — real facts or none, no fallback facts.
  */
 export async function extractAndPersistCrawlFacts(crawlJobId: string): Promise<number> {
-  if (!openai) return 0;
-
   const pages = await prisma.crawlPage.findMany({
     where: { crawlJobId, cleanedText: { not: null } },
     orderBy: { relevanceScore: "desc" },
@@ -59,7 +58,7 @@ export async function extractAndPersistCrawlFacts(crawlJobId: string): Promise<n
     .join("\n\n")
     .slice(0, MAX_CONTENT_CHARS);
 
-  const result = await runStructured<{ facts: ExtractedFact[] }>({
+  const { data: result } = await llmRouter.runStructured<{ facts: ExtractedFact[] }>(resolveTaskModel("crawl-fact-extraction"), {
     maxTokens: 2048,
     tool: FACT_EXTRACTION_TOOL,
     messages: [

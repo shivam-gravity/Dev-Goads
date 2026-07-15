@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { computeChatCostUsd, isOpenAIBudgetExceeded, recordOpenAISpend } from "./openaiBudget.js";
 
 export const openai = process.env.OPENAI_API_KEY ? new OpenAI() : null;
 
@@ -22,14 +23,17 @@ export async function runStructured<T>(opts: {
   tool: JsonSchemaTool;
 }): Promise<T | null> {
   if (!openai) throw new Error("OPENAI_API_KEY is not set");
+  if (isOpenAIBudgetExceeded()) throw new Error("OpenAI monthly budget exceeded — see openaiBudget.ts");
 
+  const model = opts.model ?? DEFAULT_MODEL;
   const completion = await openai.chat.completions.create({
-    model: opts.model ?? DEFAULT_MODEL,
+    model,
     max_tokens: opts.maxTokens,
     messages: opts.messages,
     tools: [{ type: "function", function: { name: opts.tool.name, description: opts.tool.description, parameters: opts.tool.input_schema } }],
     tool_choice: { type: "function", function: { name: opts.tool.name } },
   });
+  recordOpenAISpend(computeChatCostUsd(model, completion.usage));
 
   const call = completion.choices[0]?.message?.tool_calls?.[0];
   if (!call || call.type !== "function") return null;

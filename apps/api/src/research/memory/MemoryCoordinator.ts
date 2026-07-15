@@ -82,7 +82,18 @@ export interface MemoryWriteResult {
  * (kind, workspaceId, dedupKey) or creates a new one — the one dedup policy every
  * Intelligence engine's writes go through. */
 export async function writeMemory(request: MemoryWriteRequest): Promise<MemoryWriteResult> {
-  const embedding = await createEmbedding(request.content);
+  let embedding: number[];
+  try {
+    embedding = await createEmbedding(request.content);
+  } catch (err) {
+    // No embedding provider configured (OPENAI_API_KEY unset) or a transient API failure —
+    // Research Memory is an enhancement layer every Intelligence engine already treats as
+    // best-effort (see their own writeMemory try/catch wrappers); skipping the write here
+    // too means a missing/failing embedder degrades this one feature instead of throwing
+    // out of whatever engine called in, several of which don't wrap this call themselves.
+    logger.warn(`[MemoryCoordinator] embedding failed for ${request.kind}/"${request.dedupKey}" — skipping write`, err);
+    return { id: "", deduped: false };
+  }
   const metadata = { ...request.metadata, dedupKey: request.dedupKey };
 
   const existing = await findMemoryEntryByDedupKey(request.kind, request.workspaceId, request.dedupKey);
@@ -111,7 +122,13 @@ export async function writeMemory(request: MemoryWriteRequest): Promise<MemoryWr
  * delegates to ResearchMemoryStore's similarity search — the one embedding policy and one
  * TTL policy every Intelligence engine's reads go through. */
 export async function readMemory(request: MemoryReadRequest): Promise<ResearchMemoryMatch[]> {
-  const embedding = await createEmbedding(request.queryText);
+  let embedding: number[];
+  try {
+    embedding = await createEmbedding(request.queryText);
+  } catch (err) {
+    logger.warn(`[MemoryCoordinator] embedding failed for a "${request.kind}" query — returning no matches`, err);
+    return [];
+  }
   const ttlMs = request.ttlMs ?? DEFAULT_TTL_BY_KIND[request.kind] ?? FALLBACK_TTL_MS;
 
   const matches = await queryMemory({

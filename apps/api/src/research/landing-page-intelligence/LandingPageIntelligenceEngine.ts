@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
-import { openai, runStructured } from "../../infra/openaiClient.js";
+import * as llmRouter from "../../infra/llmRouter.js";
+import { resolveTaskModel } from "../../infra/llmTaskConfig.js";
 import { normalizeUrl, withTimeout } from "../providers/support.js";
 import { writeMemory } from "../memory/MemoryCoordinator.js";
 
@@ -147,18 +148,7 @@ export async function runLandingPageIntelligence(input: LandingPageIntelligenceI
 
   const performanceHints = computePerformanceHints(page.html, page.imageCount);
 
-  if (!openai) {
-    return {
-      url: input.url,
-      ...fallbackFields(),
-      seo: { title: page.title, description: page.description, headingCount: page.headingCount },
-      performanceHints,
-      confidence: computeConfidence(true, true),
-      generatedAt: new Date().toISOString(),
-    };
-  }
-
-  const structured = await runStructured<AnalysisFields>({
+  const { data: structured } = await llmRouter.runStructured<AnalysisFields>(resolveTaskModel("landing-page-intelligence"), {
     maxTokens: 1024,
     tool: LANDING_PAGE_TOOL,
     messages: [

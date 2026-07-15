@@ -108,6 +108,9 @@ export class CompetitorProvider implements ResearchProvider<CompetitorData> {
       const { status, data, citations } = await webSearchThenStructure<CompetitorData>({
         maxTokens: 1024,
         tool: COMPETITOR_TOOL,
+        // A fabricated url shouldn't cost us an otherwise-legitimate competitor name/notes —
+        // unlike a Reddit thread (which IS its URL), a competitor's identity stands on its own.
+        unverifiedUrlPolicy: "null-field",
         searchPrompt: `Research the main named competitors of the business at ${input.url}${input.businessName ? ` ("${input.businessName}")` : ""} in ${industry}. Find real competitor names and, where possible, their URLs and what differentiates them.${memoryContext}`,
         structurePrompt: (narrative) => `Using this web research, list named competitors and how this business could differentiate.\n\nWeb research findings:\n${narrative}\n\nBusiness URL: ${input.url}`,
         fallback: () => ({

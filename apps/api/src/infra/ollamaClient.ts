@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { ChatMessage, JsonSchemaTool } from "./openaiClient.js";
+import { recordTokens } from "./tokenMeter.js";
 
 // Ollama exposes an OpenAI-compatible endpoint, so the same SDK works unchanged — just a
 // different baseURL and a throwaway API key (Ollama doesn't check it, but the SDK requires
@@ -61,6 +62,7 @@ export async function runStructured<T>(opts: {
       tools: [{ type: "function", function: { name: opts.tool.name, description: opts.tool.description, parameters: opts.tool.input_schema } }],
       tool_choice: { type: "function", function: { name: opts.tool.name } },
     });
+    recordTokens({ provider: "ollama", model: opts.model ?? OLLAMA_DEFAULT_MODEL, kind: "structured", inputTokens: completion.usage?.prompt_tokens ?? 0, outputTokens: completion.usage?.completion_tokens ?? 0 });
 
     const call = completion.choices[0]?.message?.tool_calls?.[0];
     if (!call || call.type !== "function") return null;
@@ -79,6 +81,7 @@ export async function runText(opts: { model?: string; maxTokens: number; system?
         ...opts.messages,
       ],
     });
+    recordTokens({ provider: "ollama", model: opts.model ?? OLLAMA_DEFAULT_MODEL, kind: "text", inputTokens: completion.usage?.prompt_tokens ?? 0, outputTokens: completion.usage?.completion_tokens ?? 0 });
 
     return completion.choices[0]?.message?.content ?? null;
   });

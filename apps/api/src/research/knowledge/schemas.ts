@@ -252,7 +252,7 @@ export const serpFeaturesSchema = z.object({
 });
 
 export const communityDiscussionSchema = z.object({
-  threads: z.array(z.object({ title: z.string(), url: z.string(), sentiment: z.string() })),
+  threads: z.array(z.object({ title: z.string(), url: z.string().optional(), sentiment: z.string() })),
   summary: z.string(),
   dataSource: z.string(),
 });
