@@ -5,6 +5,11 @@ import { logger } from "../../modules/logger/logger.js";
 import { persistCrawlFacts, type ExtractedFact } from "./crawlPersistence.js";
 
 const MAX_CONTENT_CHARS = 18_000;
+// Below this, a page is either an unscored fallback-discovery link or a genuinely
+// low-priority sitemap entry (e.g. old blog posts) — see discoverAndSelectPages in
+// scraper.ts: the no-sitemap fallback path floors every candidate at 0.5, so this never
+// excludes anything there, only the sitemap path's genuinely low-declared-priority pages.
+const MIN_RELEVANCE_FOR_FACTS = 0.3;
 
 const FACT_EXTRACTION_TOOL = {
   name: "emit_crawl_facts",
@@ -47,16 +52,37 @@ const FACT_EXTRACTION_TOOL = {
  */
 export async function extractAndPersistCrawlFacts(crawlJobId: string): Promise<number> {
   const pages = await prisma.crawlPage.findMany({
-    where: { crawlJobId, cleanedText: { not: null } },
+    where: { crawlJobId, cleanedText: { not: null }, relevanceScore: { gte: MIN_RELEVANCE_FOR_FACTS } },
     orderBy: { relevanceScore: "desc" },
-    select: { url: true, cleanedText: true },
+    select: { url: true, cleanedText: true, contentHash: true },
   });
   if (pages.length === 0) return 0;
 
-  const content = pages
-    .map((p) => `[Page: ${p.url}]\n${p.cleanedText}`)
-    .join("\n\n")
-    .slice(0, MAX_CONTENT_CHARS);
+  // Greedily packs whole pages (highest relevance first) into the char budget rather than
+  // joining everything and slicing the result afterward — a blind post-join slice can cut a
+  // page off mid-sentence at an arbitrary point, feeding the model a garbled tail instead of
+  // simply not including a lower-relevance page. Exact-duplicate pages (same contentHash —
+  // templated legal/boilerplate pages are the common case) are skipped outright: they cost
+  // tokens without adding any fact the first copy didn't already offer.
+  const seenHashes = new Set<string>();
+  const parts: string[] = [];
+  let remaining = MAX_CONTENT_CHARS;
+  for (const p of pages) {
+    // contentHash is nullable in the schema even though persistCrawlPages always sets it —
+    // fall back to a per-page-unique key so a hypothetical null hash never wrongly dedupes
+    // two unrelated pages against each other.
+    const hashKey = p.contentHash ?? `no-hash:${p.url}`;
+    if (seenHashes.has(hashKey)) continue;
+    seenHashes.add(hashKey);
+    const block = `[Page: ${p.url}]\n${p.cleanedText}`;
+    if (block.length > remaining) {
+      if (parts.length === 0) parts.push(block.slice(0, remaining)); // still give the model SOMETHING even if the single highest-relevance page alone blows the budget
+      break;
+    }
+    parts.push(block);
+    remaining -= block.length + 2; // "\n\n" join below
+  }
+  const content = parts.join("\n\n");
 
   const { data: result } = await llmRouter.runStructured<{ facts: ExtractedFact[] }>(resolveTaskModel("crawl-fact-extraction"), {
     maxTokens: 2048,

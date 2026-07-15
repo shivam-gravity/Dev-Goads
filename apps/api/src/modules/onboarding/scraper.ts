@@ -288,6 +288,51 @@ export async function discoverAndSelectPages(entryUrl: string, entry$: cheerio.C
   return { toCrawl, totalDiscovered };
 }
 
+// Site-wide chrome (nav taglines, cookie notices, newsletter CTAs, copyright lines, sticky
+// CTAs) shows up verbatim on nearly every page of a site — unlike genuine page content.
+// cheerio's blunt `nav, footer` removal in fetchPage doesn't catch chrome implemented as
+// plain body elements (cookie banners, promo bars), so this catches what that misses.
+// Cross-page repetition, not a fixed keyword stoplist, is the signal: it self-calibrates to
+// whatever boilerplate THIS site actually uses instead of needing every variant enumerated,
+// and it directly cuts what factExtraction.ts pays tokens to read (a sentence repeated on
+// all 15 crawled pages otherwise costs ~15x its real information value).
+const BOILERPLATE_MIN_PAGES = 3; // fewer pages gives no reliable "site chrome vs. real repetition" signal
+const BOILERPLATE_FREQUENCY_RATIO = 0.5; // appears on at least half the crawled pages -> template, not content
+
+function splitIntoChunks(text: string): string[] {
+  // bodyText already has newlines collapsed to spaces (extractText), so sentence-terminator
+  // boundaries are the only structure left to split on — crude, but enough to isolate a
+  // repeated boilerplate sentence from the page-unique ones around it.
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Strips chunks that recur across most of this crawl's pages, keyed by exact chunk text.
+ * A page whose entire body turned out to be 100% site-wide chrome keeps its original text
+ * rather than going blank — over-including once beats silently losing a page's only
+ * content to an overzealous filter. */
+function stripCrossPageBoilerplate(bodyTextByUrl: Map<string, string>): Map<string, string> {
+  if (bodyTextByUrl.size < BOILERPLATE_MIN_PAGES) return bodyTextByUrl;
+
+  const chunksByUrl = new Map<string, string[]>();
+  const pageCountByChunk = new Map<string, number>();
+  for (const [url, text] of bodyTextByUrl) {
+    const chunks = splitIntoChunks(text);
+    chunksByUrl.set(url, chunks);
+    for (const c of new Set(chunks)) pageCountByChunk.set(c, (pageCountByChunk.get(c) ?? 0) + 1);
+  }
+
+  const threshold = Math.ceil(bodyTextByUrl.size * BOILERPLATE_FREQUENCY_RATIO);
+  const result = new Map<string, string>();
+  for (const [url, chunks] of chunksByUrl) {
+    const kept = chunks.filter((c) => (pageCountByChunk.get(c) ?? 0) < threshold);
+    result.set(url, kept.length > 0 ? kept.join(" ") : bodyTextByUrl.get(url)!);
+  }
+  return result;
+}
+
 /** Best-effort page classification from the URL path — used for CrawlPage.pageType so
  * crawled pages can be queried/filtered by kind (e.g. "show me every pricing page we've seen")
  * without re-parsing content. */
@@ -354,20 +399,27 @@ export async function scrapeUrl(input: string, opts?: { crawlCap?: number; timeB
   const images = extractImages(entry.$, url);
   const crawledPages = [url];
 
-  const excerptParts = [entryText.title, entryText.description, ...entryText.headings, entryText.bodyText];
+  interface RawPage {
+    url: string;
+    title: string;
+    pageType: string;
+    relevanceScore: number;
+    html: string;
+    description: string;
+    headings: string[];
+    bodyText: string;
+  }
 
-  const entryCleanedText = [entryText.title, entryText.description, ...entryText.headings, entryText.bodyText]
-    .filter(Boolean)
-    .join("\n")
-    .slice(0, MAX_EXCERPT_LENGTH);
-  const pages: ScrapedPage[] = [
+  const rawPages: RawPage[] = [
     {
       url,
       title: entryText.title || parsed.hostname,
       pageType: derivePageType(url, true),
       relevanceScore: 1,
-      cleanedText: entryCleanedText,
       html: entry.html,
+      description: entryText.description,
+      headings: entryText.headings,
+      bodyText: entryText.bodyText,
     },
   ];
 
@@ -391,25 +443,47 @@ export async function scrapeUrl(input: string, opts?: { crawlCap?: number; timeB
       await politeDelay(parsed.origin, robots.crawlDelayMs);
       const page = await fetchPage(link);
       const text = extractText(page.$);
-      excerptParts.push(...text.headings, text.bodyText);
       images.push(...extractImages(page.$, link));
       crawledPages.push(link);
-      pages.push({
+      rawPages.push({
         url: link,
         title: text.title || link,
         pageType: derivePageType(link, false),
         relevanceScore: score,
-        cleanedText: [text.title, text.description, ...text.headings, text.bodyText].filter(Boolean).join("\n").slice(0, MAX_EXCERPT_LENGTH),
         html: page.html,
+        description: text.description,
+        headings: text.headings,
+        bodyText: text.bodyText,
       });
     } catch {
       // A secondary page failing to load shouldn't sink the whole crawl.
     }
   }
 
+  // Deferred until every page is fetched (not built inline per-page above) since the
+  // cross-page boilerplate signal only exists once every page's body text is available to
+  // compare against — this is pure in-memory post-processing over already-fetched text, so
+  // it doesn't extend the crawl's own time budget.
+  const filteredBodyByUrl = stripCrossPageBoilerplate(new Map(rawPages.map((p) => [p.url, p.bodyText])));
+
+  const pages: ScrapedPage[] = rawPages.map((p) => ({
+    url: p.url,
+    title: p.title,
+    pageType: p.pageType,
+    relevanceScore: p.relevanceScore,
+    cleanedText: [p.title, p.description, ...p.headings, filteredBodyByUrl.get(p.url) ?? p.bodyText]
+      .filter(Boolean)
+      .join("\n")
+      .slice(0, MAX_EXCERPT_LENGTH),
+    html: p.html,
+  }));
+
   const title = entryText.title || parsed.hostname;
   const description = entryText.description;
-  const excerpt = excerptParts.filter(Boolean).join("\n").slice(0, MAX_EXCERPT_LENGTH * crawlCap);
+  const excerpt = pages
+    .map((p) => p.cleanedText)
+    .join("\n")
+    .slice(0, MAX_EXCERPT_LENGTH * crawlCap);
 
   if (!excerpt) {
     throw new Error("Couldn't extract any readable text from that page");
