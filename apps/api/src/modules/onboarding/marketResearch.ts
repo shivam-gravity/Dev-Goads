@@ -196,7 +196,7 @@ export async function runWebResearch(prompt: string): Promise<WebResearchResult>
   }
 }
 
-const NO_SEARCH_DATA_SOURCE = "AI estimate — no live web search available (no provider offers hosted search)";
+const NO_SEARCH_DATA_SOURCE = "AI estimate — live web search returned no usable results";
 const NO_CITATIONS_DATA_SOURCE = "AI estimate based on site content and general market knowledge (no citable sources found)";
 
 function fallbackProductPositioning(site: ScrapedSite): ProductAnalysis {

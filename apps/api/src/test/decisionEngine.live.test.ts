@@ -1,8 +1,11 @@
 import "dotenv/config";
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert";
 import { runDecisionEngine } from "../research/decision/decision-engine.js";
 import type { ResearchContext } from "../research/types/index.js";
+import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
+
+after(disconnectTestInfra);
 
 /** A rich, real-world-shaped context for stripe.com — the same business this session's
  * Competitor/Audience/Creative/Pricing/Market/Landing-Page Intelligence engines were

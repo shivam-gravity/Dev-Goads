@@ -7,7 +7,7 @@ import { TtlCache, normalizeCacheKey } from "../cache/TtlCache.js";
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const cache = new TtlCache<{ narrative: string; citations: { url: string; title: string }[]; searchesUsed: number }>(CACHE_TTL_MS);
 
-const NO_KEY_DATA_SOURCE = "AI estimate — no live web search available (no provider offers hosted search)";
+const NO_KEY_DATA_SOURCE = "AI estimate — live web search returned no usable results";
 
 /**
  * General-purpose live web-search provider — reuses the existing runWebSearch primitive

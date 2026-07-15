@@ -1,6 +1,8 @@
 import * as groq from "./groqClient.js";
 import * as mistral from "./mistralClient.js";
 import * as llmRouter from "./llmRouter.js";
+import * as searchRouter from "./searchRouter.js";
+import { resolveSearchTask } from "./searchTaskConfig.js";
 import type { ChatMessage, JsonSchemaTool, WebSearchOutcome } from "./llmTypes.js";
 
 export type { ChatMessage, JsonSchemaTool, WebSearchOutcome };
@@ -23,14 +25,11 @@ export type { ChatMessage, JsonSchemaTool, WebSearchOutcome };
  * call, which failed outright with a Groq 429 while router-based callers doing the exact
  * same kind of work already degraded gracefully to Mistral.
  *
- * Two capabilities OpenAI had that neither Groq nor Mistral replace:
- *  - Live web search: OpenAI's gpt-4o-search-preview was a hosted server-side search tool,
- *    not a model capability — nothing here replaces it. runWebSearch below always
- *    degrades to "no live search," exactly like the old contract did when
- *    OPENAI_API_KEY was unset, so every existing caller's fallback path is unchanged.
+ * One capability OpenAI had that neither Groq nor Mistral replace:
  *  - Image generation: gpt-image-1 has no Groq/Mistral equivalent either — see
  *    modules/generation/imageProvider.ts, which now always uses MockImageProvider.
  * Embeddings (Research Memory / RAG) DO have a replacement: Mistral's mistral-embed.
+ * Live web search DOES have a replacement now too — see runWebSearch below.
  */
 
 export const llm = groq.isGroqConfigured();
@@ -56,13 +55,36 @@ export async function runText(opts: { model?: string; maxTokens: number; system?
   return result.data;
 }
 
-/** Always returns an empty result — see this file's doc comment on why no provider here
- * replaces OpenAI's hosted web search. Kept as a function (not deleted) so
- * research/providers/support.ts's webSearchThenStructure and the handful of Intelligence
- * Engines that call this directly don't need their own call sites rewritten, only this
- * implementation. */
-export async function runWebSearch(_prompt: string): Promise<WebSearchOutcome> {
-  return { narrative: "", citations: [], searchesUsed: 0 };
+/**
+ * Backed by searchRouter.ts's tavily -> serper -> searxng chain (searchTaskConfig.ts
+ * assigns this the "web-research" task, resolving to Tavily by default). Previously backed
+ * by Firecrawl's /search — replaced after that account hit its credit limit. Groq's
+ * compound-beta model (tried live: rejected with an opaque "Request Entity Too Large" on
+ * this account/tier) and Gemini's Google Search grounding (tried live: this key's
+ * free-tier request quota is 0) were both ruled out earlier in that same search, before
+ * Firecrawl itself ran dry too.
+ *
+ * `prompt` here is a full instructional research sentence (e.g. "Research the main named
+ * competitors of the business at X..."), not a short keyword query like buildSearchQuery()
+ * produces for SearchRankingProvider's dedicated search-ranking task — passed through
+ * as-is rather than distilled into a shorter query first, since that would need an extra
+ * LLM call per search just to shorten a prompt that's already only one or two sentences.
+ * Tavily in particular is built to handle natural-language queries well, so this matters
+ * less here than it would for a bare keyword-search engine.
+ *
+ * Degrades to the same empty result on any outage (no vendor configured, every tier in the
+ * chain failed/empty) that the old permanent no-op always returned — every existing
+ * caller's fallback path (support.ts's webSearchThenStructure, the Intelligence Engines'
+ * own runWebSearch calls) already handles that shape and needs no changes.
+ */
+export async function runWebSearch(prompt: string): Promise<WebSearchOutcome> {
+  const assignment = resolveSearchTask("web-research");
+  const { results, searchesUsed } = await searchRouter.runSearch(assignment, prompt, { maxResults: 5 });
+  if (results.length === 0) return { narrative: "", citations: [], searchesUsed: 0 };
+
+  const narrative = results.map((r) => `${r.title}\n${r.snippet}`).join("\n\n");
+  const citations = results.map((r) => ({ url: r.url, title: r.title }));
+  return { narrative, citations, searchesUsed };
 }
 
 /** mistral-embed when MISTRAL_API_KEY is configured, else throws — same "not configured"

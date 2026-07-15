@@ -1,9 +1,12 @@
 import "dotenv/config";
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert";
 import { runIntelligenceEnrichment } from "../research/intelligenceEnrichment.js";
 import { getMetadataByDedupKey } from "../research/memory/MemoryCoordinator.js";
 import type { ResearchContext } from "../research/types/index.js";
+import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
+
+after(disconnectTestInfra);
 
 /**
  * Proves runIntelligenceEnrichment actually closes the gap the codebase survey found:

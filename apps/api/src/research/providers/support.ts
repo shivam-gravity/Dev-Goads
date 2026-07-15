@@ -202,7 +202,7 @@ export function hostnameOf(url: string): string {
   }
 }
 
-export const NO_SEARCH_DATA_SOURCE = "AI estimate — no live web search available (no provider offers hosted search)";
+export const NO_SEARCH_DATA_SOURCE = "AI estimate — live web search returned no usable results";
 export const NO_CITATIONS_DATA_SOURCE = "AI estimate based on general knowledge (no citable sources found)";
 
 const URL_FIELDS = new Set(["url", "sourceUrl"]);

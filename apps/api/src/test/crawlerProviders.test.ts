@@ -23,6 +23,13 @@ delete process.env.OPENAI_API_KEY;
 delete process.env.GROQ_API_KEY;
 delete process.env.MISTRAL_API_KEY;
 delete process.env.GEMINI_API_KEY;
+// SearchRankingProvider now goes through searchRouter (tavily -> serper -> searxng)
+// instead of firecrawlSearch directly — all three need clearing for the same reason as
+// the LLM keys above, or a real key leaked in from an earlier file lets the chain actually
+// reach a live vendor instead of degrading immediately.
+delete process.env.TAVILY_API_KEY;
+delete process.env.SERPER_API_KEY;
+delete process.env.SEARXNG_BASE_URL;
 
 const INPUT: ResearchProviderInput = { jobId: "job-1", workspaceId: "ws-1", url: "https://example.com", businessName: "Example Co", industry: "widgets" };
 
@@ -48,8 +55,10 @@ function neverReachFirecrawl(url: string | URL | Request): void {
 }
 
 // SearchRankingProvider was NOT converted to try an in-house path first (search has no
-// in-house replacement — see scrapeFallback.ts's scope boundary). It still makes zero network
-// calls at all when FIRECRAWL_API_KEY is unset — this is the original, still-valid contract.
+// in-house replacement — see scrapeFallback.ts's scope boundary). It still makes zero
+// network calls at all when none of the 3 search vendors (tavily/serper/searxng) are
+// configured — this is the original, still-valid contract, just against a different
+// backend than when this was Firecrawl-only.
 test("SearchRankingProvider - degrades to a partial, labeled fallback with zero network calls when no credentials are configured", async () => {
   const original = global.fetch;
   let fetchCalled = false;

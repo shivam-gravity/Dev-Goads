@@ -6,8 +6,12 @@ delete process.env.OPENAI_API_KEY;
 delete process.env.GROQ_API_KEY;
 delete process.env.GEMINI_API_KEY;
 delete process.env.MISTRAL_API_KEY;
-// ReviewsProvider/SocialMediaProvider now try a real Firecrawl crawl before falling back to the
-// LLM-web-search path tested below — unset so the "zero network calls" assertion still holds.
+// ReviewsProvider/SocialMediaProvider try a real search-then-scrape crawl (searchRouter's
+// tavily/serper/searxng chain, then a Firecrawl scrape of whatever URLs that finds) before
+// falling back further — unset so the "zero network calls succeed" assertion still holds.
+// The blanket module-level fetch-throw below (not per-vendor key deletion) is what actually
+// guarantees this: any of tavily/serper/searxng/firecrawl being "configured" just means an
+// attempt is made and caught, same graceful-empty result either way.
 delete process.env.FIRECRAWL_API_KEY;
 
 // No API key alone no longer guarantees zero network calls: every research-provider

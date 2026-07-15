@@ -3,7 +3,7 @@ import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { NewsData, ProviderResult, ResearchProviderInput } from "../types/index.js";
 import { citationsToEvidence, runProviderStep } from "./support.js";
 
-const NO_KEY_DATA_SOURCE = "AI estimate — no live web search available (no provider offers hosted search)";
+const NO_KEY_DATA_SOURCE = "AI estimate — live web search returned no usable results";
 const NO_CITATIONS_DATA_SOURCE = "No recent news coverage found";
 
 /**

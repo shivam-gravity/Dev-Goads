@@ -1,0 +1,21 @@
+# Minimal override merged on top of SearXNG's baked-in defaults (use_default_settings: true
+# pulls in every engine/setting we don't explicitly override here). Two changes from
+# defaults, both required for this to work as an API backend rather than a browser-facing
+# search page:
+#   - search.formats includes "json" — disabled by default specifically to stop exactly
+#     what we're doing (unattended API consumption); safe here because this instance is
+#     reachable only from this platform's own Docker network, not the public internet.
+#   - server.limiter: false — SearXNG's bot-detection would otherwise throttle/block our
+#     own backend's repeated automated requests the same way it blocks abusive public
+#     traffic. Only safe to disable because nothing outside our own services can reach it.
+use_default_settings: true
+
+server:
+  secret_key: "polluxa-searxng-internal-instance-not-public-facing"
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json

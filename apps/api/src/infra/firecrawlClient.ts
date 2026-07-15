@@ -1,7 +1,14 @@
 import { redisClient } from "./redisClient.js";
 import { logger } from "../modules/logger/logger.js";
 
-const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
+// Read fresh on every call rather than frozen as a module-scope const — this module is a
+// singleton across an entire `npm test` run (~90 files, one process), so a const captured
+// at first import would stay frozen at whatever FIRECRAWL_API_KEY was when some unrelated,
+// much-earlier test file first triggered it, immune to any later test's env changes. Same
+// class of bug dynamicFetch.ts fixes for groqClient.ts/ollamaClient.ts's fetch capture.
+function firecrawlApiKey(): string | undefined {
+  return process.env.FIRECRAWL_API_KEY;
+}
 const FIRECRAWL_MONTHLY_CREDIT_LIMIT = Number(process.env.FIRECRAWL_MONTHLY_CREDIT_LIMIT ?? 950);
 const BASE_URL = "https://api.firecrawl.dev/v2";
 const CRAWL_POLL_INTERVAL_MS = 2000;
@@ -54,7 +61,7 @@ export type FirecrawlOutage = "no-key" | "over-budget";
  * mirrors the existing "missing OPENAI_API_KEY -> labeled partial, never throw" contract every
  * other provider already follows (see research/providers/support.ts's webSearchThenStructure). */
 async function checkAvailable(): Promise<FirecrawlOutage | null> {
-  if (!FIRECRAWL_API_KEY) return "no-key";
+  if (!firecrawlApiKey()) return "no-key";
   if (!(await withinBudget())) return "over-budget";
   return null;
 }
@@ -75,7 +82,7 @@ async function post<T>(path: string, body: Record<string, unknown>): Promise<T |
   try {
     const res = await fetch(`${BASE_URL}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${FIRECRAWL_API_KEY}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${firecrawlApiKey()}` },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -96,7 +103,7 @@ async function get<T>(path: string): Promise<T | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`${BASE_URL}${path}`, { headers: { Authorization: `Bearer ${FIRECRAWL_API_KEY}` }, signal: controller.signal });
+    const res = await fetch(`${BASE_URL}${path}`, { headers: { Authorization: `Bearer ${firecrawlApiKey()}` }, signal: controller.signal });
     if (!res.ok) {
       logger.warn(`firecrawlClient: GET ${path} responded with ${res.status}`);
       return null;

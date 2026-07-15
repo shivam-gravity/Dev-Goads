@@ -12,6 +12,11 @@ function fakeContext(overrides: Partial<ResearchContext> = {}): ResearchContext 
 }
 
 delete process.env.OPENAI_API_KEY;
+// Firecrawl's /search now backs runWebSearch (via decision-engine.ts -> enrichment-engine.ts)
+// — deleted too, or the "zero network calls" test below would attempt a real Firecrawl call
+// instead of degrading immediately (firecrawlClient.ts reads this key fresh on every call,
+// not frozen).
+delete process.env.FIRECRAWL_API_KEY;
 const t = Date.now();
 const { runDecisionEngine } = await import(`../research/decision/decision-engine.js?t=${t}`);
 

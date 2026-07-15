@@ -34,6 +34,12 @@ test("computePosition - unknown when the company's price or competitor prices ar
 });
 
 delete process.env.OPENAI_API_KEY;
+// Firecrawl's /search now backs runWebSearch (infra/llmClient.ts) — this must be deleted
+// too, or this file's "zero network calls" tests below would actually attempt a real
+// Firecrawl call instead of degrading immediately (firecrawlClient.ts reads this key fresh
+// on every call, not frozen, so deleting it here — before the test body runs — is enough;
+// no cache-busting needed for this specific key).
+delete process.env.FIRECRAWL_API_KEY;
 const t = Date.now();
 const { runPricingIntelligence } = await import(`../research/pricing-intelligence/PricingIntelligenceEngine.js?t=${t}`);
 

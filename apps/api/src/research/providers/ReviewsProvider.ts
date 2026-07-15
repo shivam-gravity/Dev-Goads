@@ -1,4 +1,6 @@
-import { firecrawlScrape, firecrawlSearch } from "../../infra/firecrawlClient.js";
+import { firecrawlScrape } from "../../infra/firecrawlClient.js";
+import { runSearch } from "../../infra/searchRouter.js";
+import { resolveSearchTask } from "../../infra/searchTaskConfig.js";
 import { runStructured } from "../../infra/llmClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProviderResult, ResearchProviderInput, ReviewsData } from "../types/index.js";
@@ -26,11 +28,12 @@ const REVIEWS_TOOL = {
 };
 
 /**
- * OpenAI's own web search first (costs no Firecrawl credit), falling back to a real
- * review-site crawl (Firecrawl search scoped to G2/Capterra/TrustRadius + scrape of the
- * business's actual profile page(s), so praise/complaints come from verbatim review text)
- * only when the web-search leg didn't produce grounded results — same field/shape either
- * way, so nothing downstream changes regardless of which leg served the result.
+ * A general web-research pass first (via llmClient.ts's runWebSearch), falling back to a
+ * real review-site crawl (searchRouter's "reviews-search" task, scoped to
+ * G2/Capterra/TrustRadius via includeDomains, + a Firecrawl scrape of the business's actual
+ * profile page(s), so praise/complaints come from verbatim review text) only when the
+ * web-search leg didn't produce grounded results — same field/shape either way, so nothing
+ * downstream changes regardless of which leg served the result.
  */
 export class ReviewsProvider implements ResearchProvider<ReviewsData> {
   readonly name = "reviews";
@@ -64,12 +67,13 @@ export class ReviewsProvider implements ResearchProvider<ReviewsData> {
   }
 
   private async fromRealReviewSites(query: string): Promise<{ status: "success" | "partial"; data: ReviewsData; evidence: { url: string; title?: string }[] } | null> {
-    const searchResult = await firecrawlSearch(query, { includeDomains: REVIEW_SITES, limit: MAX_PROFILES });
-    if (searchResult.outage || searchResult.web.length === 0) return null;
+    const assignment = resolveSearchTask("reviews-search");
+    const searchResult = await runSearch(assignment, query, { includeDomains: REVIEW_SITES, maxResults: MAX_PROFILES });
+    if (searchResult.searchesUsed === 0) return null;
 
     const excerpts: string[] = [];
     const evidence: { url: string; title?: string }[] = [];
-    for (const profile of searchResult.web.slice(0, MAX_PROFILES)) {
+    for (const profile of searchResult.results.slice(0, MAX_PROFILES)) {
       const scraped = await firecrawlScrape(profile.url, ["markdown"]);
       if (scraped.outage) break;
       if (scraped.data?.markdown) {
@@ -86,7 +90,7 @@ export class ReviewsProvider implements ResearchProvider<ReviewsData> {
     }).catch(() => null);
     if (!structured) return null;
 
-    const data: ReviewsData = { ...structured, dataSource: `Firecrawl crawl of real review profiles (${evidence.map((e) => hostnameOf(e.url)).join(", ")})` };
+    const data: ReviewsData = { ...structured, dataSource: `Real review profiles (${evidence.map((e) => hostnameOf(e.url)).join(", ")})` };
     return { status: "success", data, evidence };
   }
 }

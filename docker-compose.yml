@@ -20,6 +20,9 @@ x-app-env: &app-env
   SENTRY_DSN: ${SENTRY_DSN:-}
   GROQ_API_KEY: ${GROQ_API_KEY:-}
   MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+  TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+  SERPER_API_KEY: ${SERPER_API_KEY:-}
+  SEARXNG_BASE_URL: http://searxng:8080
   RUNWAY_API_KEY: ${RUNWAY_API_KEY:-}
   SCRAPEGRAPH_SERVICE_URL: ${SCRAPEGRAPH_SERVICE_URL:-}
   META_ACCESS_TOKEN: ${META_ACCESS_TOKEN:-}
@@ -88,6 +91,26 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Self-hosted metasearch — last-resort tier in infra/searchRouter.ts's fallback chain
+  # (Tavily -> Serper -> searxng), behind our own network only (not port-published beyond
+  # localhost), so its rate limiter is safely disabled in searxng/settings.yml — a public
+  # instance would need it, ours only ever serves this platform's own backend.
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   api:
     <<: *api-image
