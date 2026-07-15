@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../db/prisma.js";
 import type { BusinessProfile } from "../../types/index.js";
 
@@ -32,9 +33,21 @@ function stripWorkspaceId(profile: BusinessProfile): Omit<BusinessProfile, "work
 export async function createBusiness(input: Omit<BusinessProfile, "id">): Promise<BusinessProfile> {
   const { workspaceId, ...profile } = input;
   const id = randomUUID();
-  await prisma.business.create({
-    data: { id, workspaceId, domain: domainFromWebsite(profile.website), data: { id, ...profile } as any, createdAt: new Date() },
-  });
+  try {
+    await prisma.business.create({
+      data: { id, workspaceId, domain: domainFromWebsite(profile.website), data: { id, ...profile } as any, createdAt: new Date() },
+    });
+  } catch (err) {
+    // P2002 here is always the @@unique([workspaceId, domain]) constraint (the only unique
+    // index on this table) — a foreseeable "you already have a business at this domain"
+    // conflict, not an infra failure. Re-thrown as a plain Error so gateway/errorResponse.ts's
+    // sendError() reports it as the caller-supplied 4xx instead of misclassifying it as infra
+    // (its isInfraError check treats every raw PrismaClientKnownRequestError as a 500).
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      throw new Error("A business with this website domain already exists in this workspace.");
+    }
+    throw err;
+  }
   return { id, workspaceId, ...profile };
 }
 

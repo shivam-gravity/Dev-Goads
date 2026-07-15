@@ -564,6 +564,18 @@ function safeParseUrl(value: string): URL | null {
   }
 }
 
+/** Loose format check for the "which page would you like to promote" input — accepts a
+ * bare domain (no scheme required, matching what people actually type: "polluxa.com" not
+ * "https://polluxa.com") but rejects plain text that was never a URL at all. Mirrors
+ * businessService.ts's domainFromWebsite() prepend-scheme-then-parse logic on the backend,
+ * and requires a dot in the hostname so a single bare word doesn't parse as "valid" (`new
+ * URL("hello")` resolves to a relative-looking URL and won't throw on its own). */
+function looksLikePageUrl(value: string): boolean {
+  const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  const parsed = safeParseUrl(withScheme);
+  return !!parsed && parsed.hostname.includes(".");
+}
+
 /** "Grounded in N verified facts from your website" — the trust panel. Every concrete
  * claim the AI agents used (prices, named customers, guarantees) is shown with the exact
  * page it was read from, so the campaign is auditable rather than take-our-word-for-it.
@@ -724,6 +736,10 @@ export default function NewCampaign() {
     const url = pageUrl.trim();
     if (!url) {
       setError("Please enter a page URL to continue.");
+      return;
+    }
+    if (!looksLikePageUrl(url)) {
+      setError("That doesn't look like a valid URL — try something like polluxa.com or https://polluxa.com.");
       return;
     }
     if (!businessId) {

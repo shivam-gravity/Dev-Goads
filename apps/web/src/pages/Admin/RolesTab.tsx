@@ -1,36 +1,36 @@
 import { useEffect, useState } from "react";
 import { api, RbacMatrix } from "../../api/client.js";
 
-// Permission actions
+// Permission keys match rbacService.ts's DEFAULT_MATRIX exactly — this is the shape
+// GET/PUT /api/workspaces/:id/rbac-matrix actually reads and writes.
 const PERMISSIONS = [
-  { key: "create_campaign", label: "Campaign Create" },
-  { key: "delete_campaign", label: "Campaign Delete" },
-  { key: "launch_campaign", label: "Launch Campaign" },
+  { key: "campaigns", label: "Create & Launch Campaigns" },
+  { key: "creatives", label: "Manage Creatives" },
   { key: "billing", label: "Billing Management" },
-  { key: "integrations", label: "Manage Integrations" },
-  { key: "workspace", label: "Workspace Settings" }
+  { key: "members", label: "Manage Team Members" },
+  { key: "settings", label: "Workspace Settings" }
 ] as const;
 
-// Roles list
-const ROLES = [
-  "Owner",
-  "Admin",
-  "Manager",
-  "Analyst",
-  "Designer",
-  "Viewer",
-  "Billing Admin"
-] as const;
+// The only 4 roles that actually exist — WorkspaceMember.role is "owner" | "admin" |
+// "member" | "viewer" (workspaceService.ts), same set MembersTab.tsx's invite picker
+// offers. A richer role set was drawn here previously but never existed on the backend,
+// which crashed this page the moment a real (mismatched) matrix loaded from the API.
+const ROLES = ["owner", "admin", "member", "viewer"] as const;
 
-// Default Matrix map
+const ROLE_LABELS: Record<typeof ROLES[number], string> = {
+  owner: "Owner",
+  admin: "Admin",
+  member: "Member",
+  viewer: "Viewer",
+};
+
+// Mirrors rbacService.ts's DEFAULT_MATRIX — only used as a placeholder while the real
+// matrix is loading, or if the load fails.
 const DEFAULT_MATRIX: Record<typeof ROLES[number], Record<string, boolean>> = {
-  "Owner": { create_campaign: true, delete_campaign: true, launch_campaign: true, billing: true, integrations: true, workspace: true },
-  "Admin": { create_campaign: true, delete_campaign: true, launch_campaign: true, billing: true, integrations: true, workspace: true },
-  "Manager": { create_campaign: true, delete_campaign: true, launch_campaign: true, billing: false, integrations: true, workspace: false },
-  "Analyst": { create_campaign: true, delete_campaign: false, launch_campaign: false, billing: false, integrations: false, workspace: false },
-  "Designer": { create_campaign: true, delete_campaign: false, launch_campaign: false, billing: false, integrations: false, workspace: false },
-  "Viewer": { create_campaign: false, delete_campaign: false, launch_campaign: false, billing: false, integrations: false, workspace: false },
-  "Billing Admin": { create_campaign: false, delete_campaign: false, launch_campaign: false, billing: true, integrations: false, workspace: false }
+  owner: { billing: true, campaigns: true, creatives: true, members: true, settings: true },
+  admin: { billing: false, campaigns: true, creatives: true, members: true, settings: true },
+  member: { billing: false, campaigns: true, creatives: true, members: false, settings: false },
+  viewer: { billing: false, campaigns: false, creatives: false, members: false, settings: false },
 };
 
 const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
@@ -59,12 +59,12 @@ export default function RolesTab() {
   }, []);
 
   function handleToggle(role: typeof ROLES[number], permissionKey: string) {
-    if (role === "Owner") return; // Owner permissions are immutable
+    if (role === "owner") return; // Owner permissions are immutable
     setMatrix(prev => ({
       ...prev,
       [role]: {
         ...prev[role],
-        [permissionKey]: !prev[role][permissionKey]
+        [permissionKey]: !prev[role]?.[permissionKey]
       }
     }));
     setModified(true);
@@ -107,7 +107,7 @@ export default function RolesTab() {
             <tr>
               <th>Feature Permission</th>
               {ROLES.map(role => (
-                <th key={role}>{role}</th>
+                <th key={role}>{ROLE_LABELS[role]}</th>
               ))}
             </tr>
           </thead>
@@ -116,14 +116,17 @@ export default function RolesTab() {
               <tr key={perm.key}>
                 <td>{perm.label}</td>
                 {ROLES.map(role => {
-                  const isChecked = matrix[role][perm.key];
+                  // Defensive read, not a bare index: a role/permission the API doesn't
+                  // (yet) have an entry for reads as unchecked instead of crashing the
+                  // whole page — this exact shape mismatch is what crashed this tab before.
+                  const isChecked = matrix[role]?.[perm.key] ?? false;
                   return (
                     <td key={role}>
                       <input
                         type="checkbox"
                         className="rbac-checkbox"
                         checked={isChecked}
-                        disabled={role === "Owner"}
+                        disabled={role === "owner"}
                         onChange={() => handleToggle(role, perm.key)}
                       />
                     </td>

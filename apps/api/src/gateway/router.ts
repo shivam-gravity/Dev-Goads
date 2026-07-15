@@ -18,6 +18,7 @@ import { getCampaignRecommendations } from "../research/campaign-recommendation/
 
 import { logger } from "../modules/logger/logger.js";
 import { requireWorkspaceMember, requireBusinessAccess } from "./middleware/workspaceAccess.js";
+import { requireOpsAccess } from "./middleware/opsAuth.js";
 import { getMembership } from "../modules/workspace/workspaceService.js";
 import type { AuthedRequest } from "./middleware/auth.js";
 
@@ -369,7 +370,11 @@ router.get("/workspaces/:id/audiences", requireWorkspaceMember("params", "id"), 
 router.post("/workspaces/:id/audiences", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = savedAudienceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  res.status(201).json(await createSavedAudience(req.params.id, parsed.data));
+  try {
+    res.status(201).json(await createSavedAudience(req.params.id, parsed.data));
+  } catch (err) {
+    sendError(res, err, 409, "Failed to create audience");
+  }
 }));
 
 router.patch("/audiences/:id", requireSavedAudienceAccess, asyncHandler(async (req, res) => {
@@ -626,7 +631,11 @@ const businessUpdateSchema = z.object(businessProfileFields).partial();
 router.post("/businesses", requireWorkspaceMember("body", "workspaceId"), asyncHandler(async (req, res) => {
   const parsed = businessCreateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  res.status(201).json(await createBusiness(parsed.data));
+  try {
+    res.status(201).json(await createBusiness(parsed.data));
+  } catch (err) {
+    sendError(res, err, 409, "Failed to create business");
+  }
 }));
 
 router.get("/businesses", asyncHandler(async (req: AuthedRequest, res) => {
@@ -1212,7 +1221,7 @@ router.get("/campaigns/generate/:id/recommendations", asyncHandler(async (req: A
    OPS — operational visibility into infra that has no other queryable surface.
    ═══════════════════════════════════════════════ */
 
-router.get("/ops/dead-letter", asyncHandler(async (req, res) => {
+router.get("/ops/dead-letter", requireOpsAccess, asyncHandler(async (req, res) => {
   const queue = typeof req.query.queue === "string" ? req.query.queue : undefined;
   const limit = req.query.limit ? Math.min(Number(req.query.limit), 200) : 50;
   res.json(await listDeadLetterEntries(queue, limit));

@@ -54,6 +54,16 @@ export async function createSavedAudience(
   workspaceId: string,
   input: Omit<SavedAudience, "id" | "workspaceId" | "createdAt">
 ): Promise<SavedAudience> {
+  // No DB-level unique constraint on name (SavedAudience.data is a JSON blob, not a
+  // dedicated column), so a double-submit (double-click "Save", a retried request) would
+  // otherwise silently create two identical-looking rows in the Audience Segments Library.
+  // Case/whitespace-insensitive since "Dup Audience" and "dup audience " are the same
+  // collision from a user's point of view.
+  const existing = await listSavedAudiences(workspaceId);
+  const normalizedName = input.name.trim().toLowerCase();
+  if (existing.some((a) => a.name.trim().toLowerCase() === normalizedName)) {
+    throw new Error(`An audience named "${input.name}" already exists in this workspace.`);
+  }
   const a: SavedAudience = { id: randomUUID(), workspaceId, createdAt: new Date().toISOString(), ...input };
   await save(a);
   return a;

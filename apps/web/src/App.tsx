@@ -41,6 +41,7 @@ import MediaPlan from "./pages/MediaPlan.js";
 import OptimizeGoal from "./pages/OptimizeGoal.js";
 import BrandProfile from "./pages/BrandProfile.js";
 import Products from "./pages/Products.js";
+import NotFound from "./pages/NotFound.js";
 import UserCenter from "./pages/UserCenter/index.js";
 import { CopilotProvider, useCopilot } from "./providers/CopilotProvider.js";
 import CopilotDrawer from "./components/Copilot/Drawer.js";
@@ -330,10 +331,10 @@ function AuthenticatedApp() {
             <Route path="/goal" element={<OptimizeGoal />} />
             <Route path="/brand" element={<BrandProfile />} />
             <Route path="/products" element={<Products />} />
-            {/* Any unmatched path (including the old /login, /signup) lands on the dashboard
-                instead of a blank pane or a 404 — there's no separate "logged out" state to
-                send them to anymore. */}
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            {/* Any unmatched path (including the old /login, /signup — there's no separate
+                "logged out" state to send them to anymore) gets a real 404 rather than a
+                silent redirect, so a stale/mistyped link doesn't look like a normal visit. */}
+            <Route path="*" element={<NotFound />} />
           </Routes>
         </main>
       </div>
