@@ -13,7 +13,7 @@ export interface DiscoveryInput {
 
 const NAME_EXTRACTION_TOOL = {
   name: "emit_competitor_names",
-  description: "Extract the real, named companies/products mentioned as competitors in this text.",
+  description: "Extract the real, named companies/products mentioned as competitors in this text. Only include companies that sell a directly competing PRODUCT in the same category — exclude IT-services firms, consultancies, systems integrators, and agencies that merely mention the industry keyword in their own marketing without actually competing on product.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -45,7 +45,10 @@ async function extractNamesFromNarrative(narrative: string): Promise<{ name: str
   const result = await runStructured<{ competitors: { name: string }[] }>({
     maxTokens: 512,
     tool: NAME_EXTRACTION_TOOL,
-    messages: [{ role: "user", content: `Extract named competitors from this text:\n\n${narrative}` }],
+    messages: [{
+      role: "user",
+      content: `Extract named competitors from this text. Only list companies that sell a directly competing product in the same category — do NOT list IT-services firms, consultancies, systems integrators, or agencies just because their marketing happens to mention the same keyword/industry phrase.\n\n${narrative}`,
+    }],
   });
   return result?.competitors ?? [];
 }

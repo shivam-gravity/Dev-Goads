@@ -29,15 +29,16 @@ export class AudienceIntelligenceProvider implements ResearchProvider<AudienceDa
       const report = await runAudienceIntelligence(input);
       const usedFallback = report.citations.length === 0 && report.confidence <= 0.1;
 
-      // AudienceIntelligenceReport has no literal "segments" field — the closest real
-      // structure it does have is one entry per decision-maker role, paired with the
-      // motivation/buying-trigger most likely to apply to that role (cycled by index when
-      // there are fewer of one than the other, so no segment is left without a description).
-      const segments: AudienceSegmentData[] = report.decisionMakers.map((role, i) => ({
-        name: role,
-        description: [report.motivations[i % Math.max(report.motivations.length, 1)], report.buyingTriggers[i % Math.max(report.buyingTriggers.length, 1)]]
-          .filter(Boolean)
-          .join(" "),
+      // One segment per genuinely distinct persona (report.personas — each with its own
+      // pain point, motivation, and channels straight from the LLM synthesis). Previously
+      // this reconstructed segments by zipping report.decisionMakers against motivations/
+      // buyingTriggers via `i % length`, which visibly duplicated text across personas
+      // whenever decisionMakers outnumbered the other arrays (index wraparound landing two
+      // different roles on the same entry).
+      const segments: AudienceSegmentData[] = report.personas.map((p) => ({
+        name: p.role,
+        description: [p.motivation, p.painPoint].filter(Boolean).join(" "),
+        interests: p.channels,
       }));
 
       const dataSource = usedFallback

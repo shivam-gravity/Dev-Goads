@@ -3,6 +3,7 @@ import type { ChatMessage, JsonSchemaTool } from "./llmTypes.js";
 import { recordTokens } from "./tokenMeter.js";
 import { assertGlobalLlmUsageAvailable, recordGlobalLlmUsage } from "./llmUsageBoundary.js";
 import { dynamicFetch } from "./dynamicFetch.js";
+import { logger } from "../modules/logger/logger.js";
 
 // Groq's API is OpenAI-compatible (same chat.completions.create shape, including
 // tool_choice-by-name forcing) — confirmed live against api.groq.com before this file was
@@ -39,7 +40,16 @@ export async function runStructured<T>(opts: {
 
   const call = completion.choices[0]?.message?.tool_calls?.[0];
   if (!call || call.type !== "function") return null;
-  return JSON.parse(call.function.arguments) as T;
+  try {
+    return JSON.parse(call.function.arguments) as T;
+  } catch (err) {
+    // The model can return truncated tool-call arguments if it hits max_tokens mid-object
+    // (finish_reason "length") — a malformed response, not a network/API failure, so treat
+    // it the same as "didn't call the tool": null, letting llmRouter's fallback chain move
+    // to the next provider instead of throwing an uncaught parse error.
+    logger.warn("groqClient: tool-call arguments were not valid JSON (likely truncated by max_tokens)", err);
+    return null;
+  }
 }
 
 /** Plain chat completion, no tools — returns the assistant's text, or null if empty/not configured. */

@@ -10,8 +10,26 @@ function tavilyApiKey(): string | undefined {
 const BASE_URL = "https://api.tavily.com";
 const REQUEST_TIMEOUT_MS = 15_000;
 
+// Tavily hard-rejects with a 400 ("Query is too long. Max query length is 400 characters.")
+// above this — confirmed live 2026-07-15. Callers here (runWebSearch et al.) pass full
+// instructional research sentences, not short keywords, and several routinely run 450+
+// chars, so this isn't a rare edge case — without truncation, Tavily (this codebase's
+// first-tier/default search vendor) 400s on most real research prompts and every one of
+// those calls silently falls through to Serper, wasting the round-trip and never actually
+// using the vendor it's configured to prefer.
+const MAX_QUERY_LENGTH = 400;
+
 interface TavilyResponse {
   results?: { title: string; url: string; content: string }[];
+}
+
+/** Truncates at the last whitespace boundary at or before the limit so we don't cut a word
+ * in half — Tavily still searches fine on a shortened-but-coherent query. */
+function truncateQuery(query: string): string {
+  if (query.length <= MAX_QUERY_LENGTH) return query;
+  const truncated = query.slice(0, MAX_QUERY_LENGTH);
+  const lastSpace = truncated.lastIndexOf(" ");
+  return (lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated).trim();
 }
 
 /**
@@ -24,6 +42,11 @@ export async function tavilySearch(query: string, opts?: { maxResults?: number; 
   const apiKey = tavilyApiKey();
   if (!apiKey) return { results: [], outage: "no-key" };
 
+  const effectiveQuery = truncateQuery(query);
+  if (effectiveQuery.length < query.length) {
+    logger.warn(`tavilyClient: query truncated from ${query.length} to ${effectiveQuery.length} chars (Tavily's 400-char limit)`);
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -32,7 +55,7 @@ export async function tavilySearch(query: string, opts?: { maxResults?: number; 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_key: apiKey,
-        query,
+        query: effectiveQuery,
         max_results: opts?.maxResults ?? 5,
         ...(opts?.includeDomains ? { include_domains: opts.includeDomains } : {}),
       }),

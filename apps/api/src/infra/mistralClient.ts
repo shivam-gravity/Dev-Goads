@@ -1,6 +1,7 @@
 import type { ChatMessage, JsonSchemaTool } from "./llmTypes.js";
 import { recordTokens } from "./tokenMeter.js";
 import { assertGlobalLlmUsageAvailable, recordGlobalLlmUsage } from "./llmUsageBoundary.js";
+import { logger } from "../modules/logger/logger.js";
 
 // Plain fetch (no SDK dependency added) against Mistral's own API, matching the shape
 // documented at docs.mistral.ai/api — closely OpenAI-compatible (same messages/tools
@@ -69,7 +70,12 @@ export async function runStructured<T>(opts: {
 
   const call = response.choices[0]?.message?.tool_calls?.[0];
   if (!call) return null;
-  return JSON.parse(call.function.arguments) as T;
+  try {
+    return JSON.parse(call.function.arguments) as T;
+  } catch (err) {
+    logger.warn("mistralClient: tool-call arguments were not valid JSON (likely truncated by max_tokens)", err);
+    return null;
+  }
 }
 
 export async function runText(opts: { model?: string; maxTokens: number; system?: string; messages: ChatMessage[] }): Promise<string | null> {

@@ -60,6 +60,19 @@ export interface CustomerJourneyStage {
   description: string;
 }
 
+/** One buying-committee role's OWN pain point, motivation, and reachable channels — unlike
+ * decisionMakers/painPoints/motivations/channels below (flat, report-wide arrays), this is
+ * genuinely per-role so downstream persona cards don't have to reconstruct one via
+ * index/modulo tricks against arrays of mismatched length (which produced visibly
+ * duplicated persona cards — same channels list and, when decisionMakers outnumbered
+ * motivations, identical pain-point text on two different roles). */
+export interface AudiencePersonaProfile {
+  role: string;
+  painPoint: string;
+  motivation: string;
+  channels: string[];
+}
+
 export interface AudienceIntelligenceReport {
   icp: IdealCustomerProfile;
   decisionMakers: string[];
@@ -68,6 +81,11 @@ export interface AudienceIntelligenceReport {
   objections: string[];
   motivations: string[];
   channels: string[];
+  /** One entry per key buying-committee role, each with its own distinct pain point,
+   * motivation, and channels — the source of truth for UI persona cards (see
+   * AudienceIntelligenceProvider.ts). The flat fields above remain report-wide aggregates
+   * (used for messaging/creative synthesis elsewhere), not per-persona views. */
+  personas: AudiencePersonaProfile[];
   buyingCommittee: BuyingCommitteeRole[];
   /** How the buying committee's roles relate/report to each other for this kind of purchase. */
   decisionHierarchy: string;
@@ -132,6 +150,22 @@ const AUDIENCE_TOOL = {
       objections: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6, description: "Reasons a prospect hesitates or says no" },
       motivations: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6, description: "Underlying goals/outcomes the audience actually wants" },
       channels: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6, description: "Where this audience can realistically be reached (platforms, communities, publications)" },
+      personas: {
+        type: "array",
+        minItems: 3,
+        maxItems: 6,
+        items: {
+          type: "object",
+          properties: {
+            role: { type: "string", description: "One specific decision-maker role, e.g. \"Head of Sales\" — should correspond to one of decisionMakers" },
+            painPoint: { type: "string", description: "This role's OWN specific pain point — must be genuinely distinct from every other persona's, not a generic/shared one" },
+            motivation: { type: "string", description: "This role's OWN specific motivation or desired outcome — must be genuinely distinct from every other persona's" },
+            channels: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 5, description: "Where THIS specific role can realistically be reached — different roles are typically reached differently (e.g. an engineer vs. a CFO), so this should vary persona to persona, not repeat the same list" },
+          },
+          required: ["role", "painPoint", "motivation", "channels"],
+        },
+        description: "One persona per key buying-committee role. Every persona must have ITS OWN pain point, motivation, and channels — never reuse the same wording or channel list across two personas",
+      },
       buyingCommittee: {
         type: "array",
         minItems: 1,
@@ -161,7 +195,7 @@ const AUDIENCE_TOOL = {
         description: "The stages a buyer moves through from first awareness to becoming a customer",
       },
     },
-    required: ["icp", "decisionMakers", "buyingTriggers", "painPoints", "objections", "motivations", "channels", "buyingCommittee", "decisionHierarchy", "budgetOwner", "procurementCycle", "customerJourney"],
+    required: ["icp", "decisionMakers", "buyingTriggers", "painPoints", "objections", "motivations", "channels", "personas", "buyingCommittee", "decisionHierarchy", "budgetOwner", "procurementCycle", "customerJourney"],
   },
 };
 
@@ -180,6 +214,7 @@ function fallbackFields(businessName: string): AudienceFields {
     objections: ["Not yet researched"],
     motivations: ["Not yet researched"],
     channels: ["Not yet researched"],
+    personas: [{ role: "Not yet researched", painPoint: "Not yet researched", motivation: "Not yet researched", channels: ["Not yet researched"] }],
     buyingCommittee: [],
     decisionHierarchy: "Unknown — no live research performed.",
     budgetOwner: "Unknown — no live research performed.",
@@ -305,12 +340,19 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
   ]);
 
   const memoryContext = priorMatches.length > 0
-    ? `\n\nPrior audience research on similar businesses (Research Memory — verify before relying on it):\n${priorMatches.map((m) => `- ${m.content}`).join("\n")}`
+    ? `\n\nPrior audience research on OTHER businesses, retrieved by loose text similarity (Research Memory — this may be about a completely different industry that just happens to use similar vocabulary; only reuse a finding below if it is genuinely about the same product category/audience as "${businessLabel}" — otherwise ignore it entirely, do not blend it in):\n${priorMatches.map((m) => `- ${m.content}`).join("\n")}`
     : "";
   const competitorContext = input.competitorNames?.length ? `\n\nKnown competitors: ${input.competitorNames.join(", ")}.` : "";
 
   const structured = await runStructured<AudienceFields>({
-    maxTokens: 1024,
+    // Larger than most 1024-token structured-extraction calls elsewhere — this schema is
+    // unusually wide (icp + 6 array fields up to 6 items each, a 3-6-entry `personas` array
+    // with 4 sub-fields per entry, buyingCommittee, and a 3-6-stage customerJourney with
+    // full descriptions). Both 1024 and 1536 were observed live truncating mid-object
+    // (JSON.parse failing on the tool-call arguments, e.g. "Unterminated string") once
+    // `personas` was added — this is the same 2048 budget decision-engine.ts/
+    // strategy-engine.ts/tradeoff-engine.ts already use for comparably wide syntheses.
+    maxTokens: 2048,
     tool: AUDIENCE_TOOL,
     messages: [
       {

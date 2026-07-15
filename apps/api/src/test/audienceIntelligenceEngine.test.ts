@@ -27,7 +27,7 @@ test("runAudienceIntelligence - with no OPENAI_API_KEY, degrades to a labeled lo
     assert.strictEqual(report.citations.length, 0);
     assert.strictEqual(report.evidence.length, 0);
     assert.ok(report.confidence <= 0.2);
-    for (const field of ["decisionMakers", "buyingTriggers", "painPoints", "objections", "motivations", "channels"]) {
+    for (const field of ["decisionMakers", "buyingTriggers", "painPoints", "objections", "motivations", "channels", "personas"]) {
       assert.ok(Array.isArray(report[field]) && report[field].length > 0, `${field} must be populated even in fallback`);
     }
     assert.strictEqual(fetchCalled, false);

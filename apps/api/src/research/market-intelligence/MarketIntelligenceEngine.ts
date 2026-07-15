@@ -163,7 +163,7 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
   ]);
 
   const memoryContext = priorMatches.length > 0
-    ? `\n\nPrior market research on similar businesses (Research Memory — verify before relying on it):\n${priorMatches.map((m) => `- ${m.content}`).join("\n")}`
+    ? `\n\nPrior market research on OTHER businesses, retrieved by loose text similarity (Research Memory — this may be about a completely different industry that just happens to use similar vocabulary; only reuse a finding below if it is genuinely about the same product category/market as "${subject}" (${industry}) — otherwise ignore it entirely, do not blend it in):\n${priorMatches.map((m) => `- ${m.content}`).join("\n")}`
     : "";
 
   const structured = await runStructured<MarketFields>({

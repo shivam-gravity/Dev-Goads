@@ -3,6 +3,7 @@ import type { ChatMessage, JsonSchemaTool } from "./llmTypes.js";
 import { recordTokens } from "./tokenMeter.js";
 import { recordGlobalLlmUsage } from "./llmUsageBoundary.js";
 import { dynamicFetch } from "./dynamicFetch.js";
+import { logger } from "../modules/logger/logger.js";
 
 // Ollama exposes an OpenAI-compatible endpoint, so the same SDK works unchanged — just a
 // different baseURL and a throwaway API key (Ollama doesn't check it, but the SDK requires
@@ -69,7 +70,12 @@ export async function runStructured<T>(opts: {
 
     const call = completion.choices[0]?.message?.tool_calls?.[0];
     if (!call || call.type !== "function") return null;
-    return JSON.parse(call.function.arguments) as T;
+    try {
+      return JSON.parse(call.function.arguments) as T;
+    } catch (err) {
+      logger.warn("ollamaClient: tool-call arguments were not valid JSON (likely truncated by max_tokens)", err);
+      return null;
+    }
   });
 }
 

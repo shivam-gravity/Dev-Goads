@@ -12,8 +12,8 @@ import { runAudienceIntelligence } from "../research/audience-intelligence/Audie
 // silently falling back instead of exercising the real path — same isolation issue
 // imageProvider.live.test.ts/metaAdapter.live.test.ts already solve by using a dedicated file.
 test("runAudienceIntelligence - live path returns a structured ICP with weighted firmographic and behavioral criteria", async () => {
-  if (!process.env.OPENAI_API_KEY) {
-    console.log("Skipping — OPENAI_API_KEY not set.");
+  if (!process.env.GROQ_API_KEY) {
+    console.log("Skipping — GROQ_API_KEY not set.");
     return;
   }
   const report = await runAudienceIntelligence({ workspaceId: `ws-icp-${Date.now()}`, url: "https://stripe.com", businessName: "Stripe" });
@@ -24,5 +24,17 @@ test("runAudienceIntelligence - live path returns a structured ICP with weighted
   for (const c of [...report.icp.firmographics, ...report.icp.behavioralSignals]) {
     assert.ok(typeof c.criterion === "string" && c.criterion.length > 0);
     assert.ok(c.weight >= 0 && c.weight <= 1, `weight must be in [0,1], got ${c.weight}`);
+  }
+
+  // Regression test for a real bug: personas used to be reconstructed downstream by
+  // zipping decisionMakers against motivations/buyingTriggers via `i % length`, which
+  // visibly duplicated pain-point text and channel lists across different persona cards in
+  // the UI. Each persona must now genuinely stand on its own.
+  assert.ok(report.personas.length >= 3, "expected at least 3 distinct personas");
+  const painPoints = report.personas.map((p) => p.painPoint);
+  assert.strictEqual(new Set(painPoints).size, painPoints.length, "every persona's painPoint must be distinct");
+  for (const p of report.personas) {
+    assert.ok(p.role.length > 0);
+    assert.ok(p.channels.length > 0, `persona "${p.role}" must have at least one channel`);
   }
 });

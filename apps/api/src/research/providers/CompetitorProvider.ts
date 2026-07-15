@@ -61,7 +61,7 @@ async function retrieveCompetitorMemoryContext(input: ResearchProviderInput, ind
       excludeBusinessId: input.businessId,
     });
     if (matches.length === 0) return "";
-    return `\n\nPrior research found on similar businesses (Research Memory — verify before relying on this, it may be outdated or only partially applicable):\n${matches.map((m) => `- ${m.content}`).join("\n")}`;
+    return `\n\nPrior research found on OTHER businesses, retrieved by loose text similarity (Research Memory — this may be about a completely different industry that just happens to use similar vocabulary; only reuse a finding below if it is genuinely about the same product category as this business, otherwise ignore it entirely — do not blend it in):\n${matches.map((m) => `- ${m.content}`).join("\n")}`;
   } catch (err) {
     logger.warn("CompetitorProvider: failed to query Research Memory", err);
     return "";
@@ -112,7 +112,7 @@ export class CompetitorProvider implements ResearchProvider<CompetitorData> {
         // unlike a Reddit thread (which IS its URL), a competitor's identity stands on its own.
         unverifiedUrlPolicy: "null-field",
         searchPrompt: `Research the main named competitors of the business at ${input.url}${input.businessName ? ` ("${input.businessName}")` : ""} in ${industry}. Find real competitor names and, where possible, their URLs and what differentiates them.${memoryContext}`,
-        structurePrompt: (narrative) => `Using this web research, list named competitors and how this business could differentiate.\n\nWeb research findings:\n${narrative}\n\nBusiness URL: ${input.url}`,
+        structurePrompt: (narrative) => `Using this web research, list named competitors and how this business could differentiate. Only list companies that sell a directly competing product in the same category — do NOT list IT-services firms, consultancies, systems integrators, or agencies just because their own marketing happens to mention the same keyword/industry phrase (e.g. a literal search for "${industry}" can surface consulting firms with that phrase in their name — those are not real product competitors).\n\nWeb research findings:\n${narrative}\n\nBusiness URL: ${input.url}`,
         fallback: () => ({
           competitors: [{ name: "Other providers in this category" }],
           competitionIntensity: "Unknown — no live research performed",

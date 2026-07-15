@@ -110,13 +110,17 @@ async function synthesizeSummary(context: ResearchContext, businessLabel: string
 function buildAudiencePersonas(context: ResearchContext): AudiencePersonaCard[] {
   const audience = context.audience;
   if (!audience || audience.segments.length === 0) return [];
-  const interests = audience.interestTags.slice(0, 6);
+  // Each segment carries its OWN interests/channels when the audience provider populated
+  // them (AudienceIntelligenceProvider.ts, from real per-persona research) — falls back to
+  // the report-wide interestTags only for older/cached segments that predate per-segment
+  // channels, so every persona doesn't render the identical chip list.
+  const fallbackInterests = audience.interestTags.slice(0, 6);
   return audience.segments.map((segment) => ({
     name: segment.name,
     description: segment.description,
     ageRange: audience.demographics?.ageDistribution,
     genderSplit: audience.demographics?.genderRatio,
-    interests,
+    interests: segment.interests && segment.interests.length > 0 ? segment.interests : fallbackInterests,
   }));
 }
 

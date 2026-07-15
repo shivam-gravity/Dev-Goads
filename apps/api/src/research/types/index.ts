@@ -153,6 +153,10 @@ export interface CompetitorData {
 export interface AudienceSegmentData {
   name: string;
   description: string;
+  /** This segment's OWN channels — distinct per role (e.g. an engineer and a CFO are
+   * reached differently). Optional so older/cached segments without it still degrade
+   * cleanly to AudienceData.interestTags at the consumer (decision-engine.ts). */
+  interests?: string[];
 }
 
 export interface AudienceData {
