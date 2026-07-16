@@ -195,14 +195,34 @@ Tavily's ~**1,000 free searches/month** (~20 campaigns at ~50 searches each). Th
 concurrency (4 Playwright pages via `SCRAPER_MAX_CONCURRENT_PAGES`, single scraper-service
 instance) is a latency wall, not the first hard break.
 
-**Competitor `domain` populated from a citation article's host, not the competitor's own site.**
-The earlier fabricated-competitor-URL guard (§5) stopped the discovery LLM from *inventing* a
-competitor URL, but the `domain` that does get stored is frequently the host of a citation/roundup
-article rather than the competitor's homepage. In this session's `polluxa.com` validation run only
-**3 of 16** enriched competitors had a `domain` at all, and all three were wrong (`PayPal →
-businesschronicler.com`, `Helcim → forbes.com`, `Adyen → champsignal.com`). Same class as the
-fabricated-URL poisoning already fixed — the citations themselves are real and verified, but the
-competitor's own domain is not being resolved from them. Not yet fixed.
+**Competitor `domain` populated from a citation article's host, not the competitor's own site
+(Bucket A cleaned; Bucket B deferred).** The earlier fabricated-competitor-URL guard (§5) stopped
+the discovery LLM from *inventing* a competitor URL, but the `domain` that got stored was
+frequently the host of a citation/roundup article rather than the competitor's homepage — same
+class as the fabricated-URL poisoning. Investigated end-to-end this session: `competitor.domain`
+derives solely from `discovered.url`, which post-fix can only come from research-memory; a
+non-clearing `domain ?? undefined` upsert then froze stale pre-fix (07-14) citation-host domains
+in place forever. **Fixed the persistence side (Bucket A):** the upsert now writes the computed
+`domain` including `null` so a re-enrichment clears a stale value (`competitorPersistence.ts`), and
+a one-time `cleanupStaleCompetitorDomains.ts` cleared the backlog the earlier migration missed —
+**80 stale citation-host domains** cleared from the relational `competitors` table (backup written;
+3 genuine brand-matching domains e.g. `airtable.com` correctly preserved), and the
+`kind:"competitor"` memory gap audited (0 to clear — see the empty-metadata anomaly below).
+Detection (`domainMismatchesName`) is unit-tested and locked. **Still deferred (Bucket B):** nothing
+resolves a competitor's *actual* homepage — so new competitors now correctly store `domain=null`
+("unknown") rather than a wrong host, but a real domain is not yet derived. The citation host also
+still mis-grounds enrichment's page crawl (`enrichment.ts` crawls `discovered.url` as if it were the
+competitor's own site).
+
+**Flagged for future investigation: 680 `kind:"competitor"` research-memory rows have empty `{}`
+metadata.** `CompetitorProvider.writeCompetitorMemory` is written to persist
+`metadata: { industry, competitors, competitionIntensity, differentiators }`, but a raw-SQL audit
+this session found **all 680** `kind:"competitor"` rows store a literally empty `{}` object
+(`metadata::text = '{}'`), while every other memory kind (`competitor-profile`, `pricing-analysis`,
+`decision-recommendation`, …) is fully populated. That means discovery.ts's "research-memory"
+source (which reads `metadata.competitors[]` from this kind) gets nothing from these rows regardless.
+Root cause not yet established (a write-path serialization bug, or a MemoryCoordinator dedup/update
+that blanks metadata). Not fixed — documented so it isn't lost.
 
 **Reference-only infra implementations** awaiting real backends (all behind interfaces):
 `InMemoryEventBus` (tests only; prod uses Redis Streams), `LocalFileObjectStorage` (awaits

@@ -1,0 +1,482 @@
+[
+  {
+    "id": "639757b1-ca49-4e71-bf49-3ae6f5276ac3",
+    "businessId": "demo-business",
+    "name": "Salesforce",
+    "originalDomain": "softwarepodium.com"
+  },
+  {
+    "id": "79283d97-f328-40ad-9ed3-f0473f4ced2b",
+    "businessId": "demo-business",
+    "name": "Pipedrive",
+    "originalDomain": "g2.com"
+  },
+  {
+    "id": "2193e01c-6c68-48e5-935f-42b976ee4f00",
+    "businessId": "f70dc188-f797-4af9-b11d-fe5719b9f983",
+    "name": "Coda",
+    "originalDomain": "champsignal.com"
+  },
+  {
+    "id": "3dc80090-2dc9-443b-abe6-9520da99025b",
+    "businessId": "demo-business",
+    "name": "HubSpot Sales Hub",
+    "originalDomain": "gartner.com"
+  },
+  {
+    "id": "fd559659-becd-4951-bafb-720b778a491b",
+    "businessId": "demo-business",
+    "name": "Microsoft Dynamics 365 Sales",
+    "originalDomain": "gartner.com"
+  },
+  {
+    "id": "30bf09a5-dbc4-4066-b173-603bc4e9f01b",
+    "businessId": "demo-business",
+    "name": "Axure",
+    "originalDomain": "serchen.com"
+  },
+  {
+    "id": "f996e544-1ff0-4427-80a5-a21e2909bdbe",
+    "businessId": "demo-business",
+    "name": "JUSTINMIND",
+    "originalDomain": "serchen.com"
+  },
+  {
+    "id": "770ded90-a46e-4e38-84dd-97ef6322f225",
+    "businessId": "demo-business",
+    "name": "PayPal",
+    "originalDomain": "businesschronicler.com"
+  },
+  {
+    "id": "cc1e1cce-2e0d-42f4-bf7f-7d8b935c7390",
+    "businessId": "demo-business",
+    "name": "Sarcos Robotics",
+    "originalDomain": "growjo.com"
+  },
+  {
+    "id": "a51501e1-470d-42cb-b7b1-8ba42d5fd5f1",
+    "businessId": "demo-business",
+    "name": "ActiveCampaign",
+    "originalDomain": "gartner.com"
+  },
+  {
+    "id": "6d9eea3a-80c5-4eb1-8ebe-7205b5ce5d90",
+    "businessId": "demo-business",
+    "name": "Prodomax Automation",
+    "originalDomain": "growjo.com"
+  },
+  {
+    "id": "b9f91118-3ac4-4f81-8cc2-64b2420c0f35",
+    "businessId": "demo-business",
+    "name": "Xigent Automation Systems",
+    "originalDomain": "growjo.com"
+  },
+  {
+    "id": "05856249-4852-4b84-9774-ff02b81fbffe",
+    "businessId": "demo-business",
+    "name": "Helcim",
+    "originalDomain": "forbes.com"
+  },
+  {
+    "id": "3404ddfa-92ef-4395-a923-61889359175e",
+    "businessId": "demo-business",
+    "name": "Poal.me",
+    "originalDomain": "alternativeto.net"
+  },
+  {
+    "id": "718bece0-153f-41d0-8832-26bbc2ce99d6",
+    "businessId": "demo-business",
+    "name": "Adyen",
+    "originalDomain": "champsignal.com"
+  },
+  {
+    "id": "574a8a84-9d30-4eca-8832-83eac562b789",
+    "businessId": "f70dc188-f797-4af9-b11d-fe5719b9f983",
+    "name": "ClickUp",
+    "originalDomain": "forbes.com"
+  },
+  {
+    "id": "c462ea02-fbe7-4d82-9be0-4ac3e208580a",
+    "businessId": "demo-business",
+    "name": "Salesforce CRM",
+    "originalDomain": "peoplemanagingpeople.com"
+  },
+  {
+    "id": "3cd0baf2-0d63-448c-b0bd-a26b337846f9",
+    "businessId": "demo-business",
+    "name": "Square",
+    "originalDomain": "convesio.com"
+  },
+  {
+    "id": "24e2055c-85f4-4e33-b309-926993e42450",
+    "businessId": "demo-business",
+    "name": "Braintree",
+    "originalDomain": "convesio.com"
+  },
+  {
+    "id": "9d4df32b-35b7-460c-9724-427ded7444d9",
+    "businessId": "demo-business",
+    "name": "Authorize.Net",
+    "originalDomain": "businesschronicler.com"
+  },
+  {
+    "id": "5db8a08b-0fd5-4ffa-9613-15fc444dbdac",
+    "businessId": "166f51fd-802f-4c0c-be72-6bf75d754230",
+    "name": "Salesforce",
+    "originalDomain": "craft.co"
+  },
+  {
+    "id": "3341628f-6027-4e2f-a074-fb41fa1cf57d",
+    "businessId": "166f51fd-802f-4c0c-be72-6bf75d754230",
+    "name": "Pipedrive",
+    "originalDomain": "owler.com"
+  },
+  {
+    "id": "41f16bc4-9b94-4b4b-99a9-64069dd3213b",
+    "businessId": "166f51fd-802f-4c0c-be72-6bf75d754230",
+    "name": "Freshworks",
+    "originalDomain": "craft.co"
+  },
+  {
+    "id": "b9369232-dce8-4d38-92fa-a69c338632f0",
+    "businessId": "166f51fd-802f-4c0c-be72-6bf75d754230",
+    "name": "ActiveCampaign",
+    "originalDomain": "owler.com"
+  },
+  {
+    "id": "183d11f7-b13b-4fbf-ac48-87cf2a953562",
+    "businessId": "166f51fd-802f-4c0c-be72-6bf75d754230",
+    "name": "Mailchimp",
+    "originalDomain": "owler.com"
+  },
+  {
+    "id": "65523cb8-e3b9-4de8-a97b-9f550649a208",
+    "businessId": "166f51fd-802f-4c0c-be72-6bf75d754230",
+    "name": "Zoho",
+    "originalDomain": "craft.co"
+  },
+  {
+    "id": "62ba06a7-fc7e-4a6a-838c-c9ec9d950692",
+    "businessId": "demo-business",
+    "name": "Salesforce Sales Cloud",
+    "originalDomain": "gartner.com"
+  },
+  {
+    "id": "d8af18aa-fad1-4076-ad3f-bbdb64706878",
+    "businessId": "demo-business",
+    "name": "HubSpot CRM",
+    "originalDomain": "g2.com"
+  },
+  {
+    "id": "22b432cd-461d-4595-99d0-9232a86ec2b9",
+    "businessId": "f70dc188-f797-4af9-b11d-fe5719b9f983",
+    "name": "Smartsheet",
+    "originalDomain": "gartner.com"
+  },
+  {
+    "id": "0638a7c6-bb2e-4bbc-a7bb-a347a0f4d71c",
+    "businessId": "f70dc188-f797-4af9-b11d-fe5719b9f983",
+    "name": "Airtable",
+    "originalDomain": "distillintelligence.com"
+  },
+  {
+    "id": "15c3eea9-1a1e-41c2-9ce3-bf1931e5f197",
+    "businessId": "f70dc188-f797-4af9-b11d-fe5719b9f983",
+    "name": "Asana",
+    "originalDomain": "agiled.app"
+  },
+  {
+    "id": "d3fdece7-06f1-439c-8fc9-2e5a4f787f83",
+    "businessId": "demo-business",
+    "name": "Zoho CRM",
+    "originalDomain": "gartner.com"
+  },
+  {
+    "id": "c6cc8623-6216-47f1-bffa-35ecfd890a5f",
+    "businessId": "f70dc188-f797-4af9-b11d-fe5719b9f983",
+    "name": "Microsoft",
+    "originalDomain": "distillintelligence.com"
+  },
+  {
+    "id": "35293e94-793b-49fd-a3a0-61554d5cce9c",
+    "businessId": "e3f94c9b-6b99-4c9c-b6df-b7f03646a8ee",
+    "name": "Adobe Express",
+    "originalDomain": "allable.ai"
+  },
+  {
+    "id": "28e326ce-9cef-477f-b064-63f9f6621c28",
+    "businessId": "e3f94c9b-6b99-4c9c-b6df-b7f03646a8ee",
+    "name": "Figma",
+    "originalDomain": "aiproductivity.ai"
+  },
+  {
+    "id": "19301884-b6f3-4404-bb6f-0d22a83393b9",
+    "businessId": "e3f94c9b-6b99-4c9c-b6df-b7f03646a8ee",
+    "name": "Visme",
+    "originalDomain": "underconstructionpage.com"
+  },
+  {
+    "id": "e0433fcb-8251-4093-a12e-9f646990af9d",
+    "businessId": "e3f94c9b-6b99-4c9c-b6df-b7f03646a8ee",
+    "name": "Piktochart",
+    "originalDomain": "growthnavigate.com"
+  },
+  {
+    "id": "1a10ca0e-b122-4ea6-9ba2-e36fd29742aa",
+    "businessId": "e3f94c9b-6b99-4c9c-b6df-b7f03646a8ee",
+    "name": "Snappa",
+    "originalDomain": "owler.com"
+  },
+  {
+    "id": "1228d1a6-d448-4e2f-908f-af74e5ea0796",
+    "businessId": "e3f94c9b-6b99-4c9c-b6df-b7f03646a8ee",
+    "name": "VistaCreate",
+    "originalDomain": "growthnavigate.com"
+  },
+  {
+    "id": "4b183fd9-3043-483e-886e-60d582d3d64e",
+    "businessId": "0f1bf7b0-1b59-4ae6-8de3-4fc51a14f4ea",
+    "name": "Wrike",
+    "originalDomain": "clickup.com"
+  },
+  {
+    "id": "fc55e3cb-a729-4f47-a132-24f3f8b2f986",
+    "businessId": "0f1bf7b0-1b59-4ae6-8de3-4fc51a14f4ea",
+    "name": "Smartsheet",
+    "originalDomain": "gartner.com"
+  },
+  {
+    "id": "4c58700e-59cb-4ab7-81cb-705bc4b62fd9",
+    "businessId": "0f1bf7b0-1b59-4ae6-8de3-4fc51a14f4ea",
+    "name": "Trello",
+    "originalDomain": "clickup.com"
+  },
+  {
+    "id": "76f2f5ec-931e-4fee-b5b7-9bc026da1779",
+    "businessId": "0f1bf7b0-1b59-4ae6-8de3-4fc51a14f4ea",
+    "name": "Notion",
+    "originalDomain": "clickup.com"
+  },
+  {
+    "id": "cc127f37-fcdf-4505-84a6-f26368d74fd2",
+    "businessId": "9eddb647-4115-4950-ac36-1089d1e3366d",
+    "name": "Cognism",
+    "originalDomain": "lusha.com"
+  },
+  {
+    "id": "07d61267-dc5d-403d-a375-3562a5afcfba",
+    "businessId": "9eddb647-4115-4950-ac36-1089d1e3366d",
+    "name": "ZoomInfo",
+    "originalDomain": "lusha.com"
+  },
+  {
+    "id": "9565ae31-7635-468b-aefe-4b0851291275",
+    "businessId": "9eddb647-4115-4950-ac36-1089d1e3366d",
+    "name": "Lusha",
+    "originalDomain": "distillintelligence.com"
+  },
+  {
+    "id": "2689db0c-e9df-4ee4-9834-50111ad3f38b",
+    "businessId": "9eddb647-4115-4950-ac36-1089d1e3366d",
+    "name": "Seamless.AI",
+    "originalDomain": "uplead.com"
+  },
+  {
+    "id": "69f5fcf9-ba1d-4f14-99c6-545a5e152346",
+    "businessId": "9eddb647-4115-4950-ac36-1089d1e3366d",
+    "name": "Hunter.io",
+    "originalDomain": "uplead.com"
+  },
+  {
+    "id": "738cdcfe-9322-445b-9190-473bf288debd",
+    "businessId": "9eddb647-4115-4950-ac36-1089d1e3366d",
+    "name": "RocketReach",
+    "originalDomain": "distillintelligence.com"
+  },
+  {
+    "id": "0374d5d1-f346-4b4f-9ae3-1c54a3f4fbd2",
+    "businessId": "bc991de1-1795-48d8-b9b0-19967f9ed8f0",
+    "name": "Apollo.io",
+    "originalDomain": "checkthat.ai"
+  },
+  {
+    "id": "b914cd7e-2e5a-407f-9fd3-38cc6cf2d372",
+    "businessId": "bc991de1-1795-48d8-b9b0-19967f9ed8f0",
+    "name": "ZoomInfo",
+    "originalDomain": "champsignal.com"
+  },
+  {
+    "id": "fc4a6d40-3764-4e9a-9af2-0aaae691c02b",
+    "businessId": "bc991de1-1795-48d8-b9b0-19967f9ed8f0",
+    "name": "Cognism",
+    "originalDomain": "champsignal.com"
+  },
+  {
+    "id": "78aa80db-c26d-4399-88c2-e3ff41eb4387",
+    "businessId": "bc991de1-1795-48d8-b9b0-19967f9ed8f0",
+    "name": "Lusha",
+    "originalDomain": "champsignal.com"
+  },
+  {
+    "id": "d291cee6-5443-4ae7-9f8c-bff1b9b5d05c",
+    "businessId": "bc991de1-1795-48d8-b9b0-19967f9ed8f0",
+    "name": "Clearbit",
+    "originalDomain": "champsignal.com"
+  },
+  {
+    "id": "20247e65-cb9c-4582-9108-fa4e5b9bcce4",
+    "businessId": "bc991de1-1795-48d8-b9b0-19967f9ed8f0",
+    "name": "Seamless.AI",
+    "originalDomain": "champsignal.com"
+  },
+  {
+    "id": "489e0f45-6e7e-4ef9-9447-d588012be62a",
+    "businessId": "f2d174ba-3938-4093-9610-9e57a208a819",
+    "name": "Lusha",
+    "originalDomain": "owler.com"
+  },
+  {
+    "id": "2e880847-9222-4e1e-9eb6-4e61dfd0c490",
+    "businessId": "f2d174ba-3938-4093-9610-9e57a208a819",
+    "name": "Apollo.io",
+    "originalDomain": "salesgear.io"
+  },
+  {
+    "id": "0e172154-4d64-4827-83c0-0a759e782cbd",
+    "businessId": "f2d174ba-3938-4093-9610-9e57a208a819",
+    "name": "Cognism",
+    "originalDomain": "growjo.com"
+  },
+  {
+    "id": "e0540dbb-2f0d-4406-a469-87c7efe1fe3a",
+    "businessId": "f2d174ba-3938-4093-9610-9e57a208a819",
+    "name": "Lead411",
+    "originalDomain": "growjo.com"
+  },
+  {
+    "id": "86d448b8-0df4-4eb1-8453-53bce6e1bd96",
+    "businessId": "f2d174ba-3938-4093-9610-9e57a208a819",
+    "name": "LinkedIn",
+    "originalDomain": "champsignal.com"
+  },
+  {
+    "id": "3d7bd41b-1296-47c3-850b-fc5714bb4601",
+    "businessId": "f2d174ba-3938-4093-9610-9e57a208a819",
+    "name": "Dun & Bradstreet",
+    "originalDomain": "champsignal.com"
+  },
+  {
+    "id": "d1c8883f-77c8-4907-a45b-c876f7df6308",
+    "businessId": "acfed0d0-dd13-4498-a6ab-8bcf21724ecb",
+    "name": "Asana",
+    "originalDomain": "workzone.com"
+  },
+  {
+    "id": "e8de7b14-c6fa-4704-b928-48a3ff53adbd",
+    "businessId": "acfed0d0-dd13-4498-a6ab-8bcf21724ecb",
+    "name": "Smartsheet",
+    "originalDomain": "gartner.com"
+  },
+  {
+    "id": "c8a25faf-e151-401e-80a7-36ff39c53983",
+    "businessId": "acfed0d0-dd13-4498-a6ab-8bcf21724ecb",
+    "name": "Wrike",
+    "originalDomain": "aipmtools.org"
+  },
+  {
+    "id": "ffaaae16-ba70-4b42-927b-fa3e1159f429",
+    "businessId": "acfed0d0-dd13-4498-a6ab-8bcf21724ecb",
+    "name": "ClickUp",
+    "originalDomain": "automationatlas.io"
+  },
+  {
+    "id": "ef47a450-70e0-4831-8147-380cb51e52eb",
+    "businessId": "acfed0d0-dd13-4498-a6ab-8bcf21724ecb",
+    "name": "Trello",
+    "originalDomain": "youtube.com"
+  },
+  {
+    "id": "faf9afb8-b280-4809-bbbc-4c4b6da65275",
+    "businessId": "23d9df42-8062-4eef-9c36-d3579b517981",
+    "name": "IFTTT",
+    "originalDomain": "craft.co"
+  },
+  {
+    "id": "190afd11-f1a9-47f3-af4a-9a7724119197",
+    "businessId": "23d9df42-8062-4eef-9c36-d3579b517981",
+    "name": "Celigo",
+    "originalDomain": "craft.co"
+  },
+  {
+    "id": "3f499f5a-5fb4-4dcd-85d9-3014875d4730",
+    "businessId": "23d9df42-8062-4eef-9c36-d3579b517981",
+    "name": "Make",
+    "originalDomain": "checkthat.ai"
+  },
+  {
+    "id": "751bde1e-b2ee-4024-973e-28219809f6af",
+    "businessId": "23d9df42-8062-4eef-9c36-d3579b517981",
+    "name": "Workato",
+    "originalDomain": "craft.co"
+  },
+  {
+    "id": "57f72f68-4b2b-46ab-9fd2-f622ca1a6cb6",
+    "businessId": "23d9df42-8062-4eef-9c36-d3579b517981",
+    "name": "n8n",
+    "originalDomain": "dupple.com"
+  },
+  {
+    "id": "e98e0c63-9c6a-420d-9bec-1c47a19e2a0f",
+    "businessId": "23d9df42-8062-4eef-9c36-d3579b517981",
+    "name": "Pabbly Connect",
+    "originalDomain": "checkthat.ai"
+  },
+  {
+    "id": "69c383bc-ae00-4822-9e46-e08c9cc10157",
+    "businessId": "23d9df42-8062-4eef-9c36-d3579b517981",
+    "name": "MuleSoft",
+    "originalDomain": "owler.com"
+  },
+  {
+    "id": "9869263e-1dd2-4b12-b235-fca54c96e8f1",
+    "businessId": "23d9df42-8062-4eef-9c36-d3579b517981",
+    "name": "UiPath",
+    "originalDomain": "owler.com"
+  },
+  {
+    "id": "c00c7e4e-4bfb-47d7-818b-c69db88dd6c9",
+    "businessId": "f1aa2f41-cac9-4b13-8d1b-4b396dce9f20",
+    "name": "Trello",
+    "originalDomain": "savedelete.com"
+  },
+  {
+    "id": "dd575219-0ddb-42a7-b123-1aebf1de4ed7",
+    "businessId": "f1aa2f41-cac9-4b13-8d1b-4b396dce9f20",
+    "name": "monday.com",
+    "originalDomain": "savedelete.com"
+  },
+  {
+    "id": "d1bb7046-1dbd-4943-9bba-a4414e2d6cd4",
+    "businessId": "f1aa2f41-cac9-4b13-8d1b-4b396dce9f20",
+    "name": "ClickUp",
+    "originalDomain": "softwarecompare.net"
+  },
+  {
+    "id": "b0d51ba3-0b7b-4b59-8249-73c0580c11cd",
+    "businessId": "f1aa2f41-cac9-4b13-8d1b-4b396dce9f20",
+    "name": "Jira",
+    "originalDomain": "crm.org"
+  },
+  {
+    "id": "1f2a13a4-c378-4afd-8383-f04c62a4f03f",
+    "businessId": "0f1bf7b0-1b59-4ae6-8de3-4fc51a14f4ea",
+    "name": "Monday.com",
+    "originalDomain": "champsignal.com"
+  },
+  {
+    "id": "871e4956-5b05-4f7b-bb48-9268def1108b",
+    "businessId": "0f1bf7b0-1b59-4ae6-8de3-4fc51a14f4ea",
+    "name": "Asana",
+    "originalDomain": "clickup.com"
+  }
+]
