@@ -1,5 +1,5 @@
 import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
-import { hostnameOf } from "../providers/support.js";
+import { hostnameOf, sanitizeBusinessName } from "../providers/support.js";
 import { readMemory, writeMemory } from "../memory/MemoryCoordinator.js";
 import type { Citation } from "../../types/index.js";
 
@@ -148,7 +148,12 @@ export function computeOpportunityScore(growthLevel: MarketLevel, demandLevel: M
  * shift faster than competitor positioning does).
  */
 export async function runMarketIntelligence(input: MarketIntelligenceInput): Promise<MarketIntelligenceReport> {
-  const subject = input.businessName ?? hostnameOf(input.url);
+  // Strip placeholder tokens before using the name as the market subject — an ungrounded name
+  // like "Polluxa Demo Business" otherwise leads the model to invent a market around the word
+  // "Demo" (e.g. "demo automation software"). Falls back to the domain when nothing distinctive
+  // remains, same anchor rule as buildSearchQuery.
+  const cleanName = input.businessName ? sanitizeBusinessName(input.businessName) : "";
+  const subject = cleanName || hostnameOf(input.url);
   const industry = input.industry ?? "its category";
   const dedupKey = input.businessId ?? input.url;
 
