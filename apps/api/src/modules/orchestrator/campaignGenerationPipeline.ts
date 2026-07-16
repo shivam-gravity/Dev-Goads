@@ -1,9 +1,9 @@
 import { logger } from "../logger/logger.js";
 import type { AgentPipelineResult } from "../../agents/AgentCoordinator.js";
 import { runAgentCoordinator } from "../../agents/AgentCoordinator.js";
-import type { AgentResult, BudgetAgentOutput, CampaignAgentOutput, ComplianceAgentOutput, ObjectionHandlingAgentOutput, PricingOfferAgentOutput } from "../../agents/types/index.js";
+import type { AgentResult, AudienceAgentOutput, BudgetAgentOutput, CampaignAgentOutput, ComplianceAgentOutput, CreativeAgentOutput, CriticAgentOutput, KeywordAgentOutput, ObjectionHandlingAgentOutput, PersonaAgentOutput, PricingOfferAgentOutput } from "../../agents/types/index.js";
 import type { ResearchContext } from "../../research/types/index.js";
-import { createResearchJob, runResearchOrchestrator, type RunResearchOrchestratorOptions } from "../../research/research-orchestrator/index.js";
+import { createResearchJob, findReusableResearch, runResearchOrchestrator, type RunResearchOrchestratorOptions } from "../../research/research-orchestrator/index.js";
 import { extractAndPersistCrawlFacts } from "../../research/crawl/factExtraction.js";
 import { buildAndPersistCompanyProfile } from "../../research/company-knowledge/CompanyKnowledgeBuilder.js";
 import { runDecisionEngine } from "../../research/decision/decision-engine.js";
@@ -37,6 +37,7 @@ export interface CampaignGenerationDeps {
   persistDecisionContext: typeof persistDecisionContext;
   markCompleted: typeof markCampaignGenerationCompleted;
   createResearchJob: typeof createResearchJob;
+  findReusableResearch: typeof findReusableResearch;
   runResearchOrchestrator: typeof runResearchOrchestrator;
   extractCrawlFacts: typeof extractAndPersistCrawlFacts;
   buildCompanyProfile: typeof buildAndPersistCompanyProfile;
@@ -57,6 +58,7 @@ export const defaultCampaignGenerationDeps: CampaignGenerationDeps = {
   persistDecisionContext,
   markCompleted: markCampaignGenerationCompleted,
   createResearchJob,
+  findReusableResearch,
   runResearchOrchestrator,
   extractCrawlFacts: extractAndPersistCrawlFacts,
   buildCompanyProfile: buildAndPersistCompanyProfile,
@@ -77,8 +79,25 @@ export const defaultCampaignGenerationDeps: CampaignGenerationDeps = {
 // the SAME business, not the whole pipeline.
 const CAMPAIGN_GENERATION_LOCK_TTL_MS = 10 * 60 * 1000;
 
+// A completed ResearchJob for the same (workspace, business, url) within this window is
+// reused instead of re-running Phase 1 (27 providers / ~50 searches / research-structuring
+// LLM calls). Only the research INPUT is cached — the campaign, its budget, and its name are
+// always built fresh from the reused ResearchContext in Phases 2-3. 7 days by default because
+// a business's market/competitor/pricing landscape doesn't move hour-to-hour; env-tunable.
+// Kept <= the UI's 14-day staleness horizon (CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS, router.ts)
+// so we never serve research the UI would already badge as stale. A non-finite/negative env
+// value falls back to the 7-day default rather than poisoning the lookup with an Invalid Date.
+const parsedResearchCacheTtl = Number(process.env.CAMPAIGN_RESEARCH_CACHE_TTL_MS);
+const CAMPAIGN_RESEARCH_CACHE_TTL_MS =
+  Number.isFinite(parsedResearchCacheTtl) && parsedResearchCacheTtl >= 0
+    ? parsedResearchCacheTtl
+    : 7 * 24 * 60 * 60 * 1000;
+
 export interface RunCampaignGenerationOptions {
   deps?: CampaignGenerationDeps;
+  /** When true, skip the research cache and always run fresh Phase-1 research. Sourced from
+   * the POST /campaigns/generate body flag, carried on the BullMQ payload (no DB column). */
+  forceRefresh?: boolean;
   /** Called with (completed, total, stepName) across the WHOLE pipeline (research providers +
    * agents + the campaign-build step) on one consistent 0..total scale, so a single
    * BullMQ job.updateProgress call can represent the entire Gateway -> Campaign Route ->
@@ -147,18 +166,54 @@ export async function runCampaignGenerationPipeline(
   // applies inside this nested function. ──
   async function runPhases(job: CampaignGenerationJobRecord): Promise<{ campaignId: string; strategyId: string; researchJobId: string }> {
     // ── Phase 1: Research Orchestrator -> Knowledge Aggregator ──
-    const researchJob = await deps.createResearchJob(job.workspaceId, job.url, job.businessId);
-    await markStatus("researching", { startedAt: true, researchJobId: researchJob.id });
+    // Try to reuse recent completed research for this exact (workspace, business, url) instead
+    // of paying for Phase 1 again. forceRefresh bypasses the lookup entirely.
+    const cachedResearch = options.forceRefresh
+      ? null
+      : await deps.findReusableResearch(job.workspaceId, job.businessId, job.url, CAMPAIGN_RESEARCH_CACHE_TTL_MS);
 
-    const context: ResearchContext = await withSpan("campaign_generation.research", () =>
-      deps.runResearchOrchestrator(researchJob.id, {
-        onProgress: async (completed, _total, providerName) => {
-          completedUnits = completed;
-          await reportOverall(providerName);
-        },
-      })
-    );
-    completedUnits = RESEARCH_PROVIDER_COUNT;
+    // Defense-in-depth: never trust the keyed lookup alone. If the reloaded context's OWN
+    // identity doesn't match this job, treat it as a miss and run fresh — a mismatch here means
+    // a keying/poisoning bug, so log it loudly as a tripwire (this is the exact class of bug the
+    // competitor-memory poisoning fix guarded against: wrong-business data served confidently).
+    const reusable =
+      cachedResearch && cachedResearch.context.businessId === job.businessId && cachedResearch.context.url === job.url
+        ? cachedResearch
+        : null;
+    if (cachedResearch && !reusable) {
+      logger.warn(
+        `Research cache candidate ${cachedResearch.researchJobId} rejected for campaign generation job ${jobId}: ` +
+          `reloaded context identity (businessId=${cachedResearch.context.businessId ?? "none"}, url=${cachedResearch.context.url}) ` +
+          `does not match job (businessId=${job.businessId}, url=${job.url}) — running fresh research`
+      );
+    }
+
+    let researchJobId: string;
+    let context: ResearchContext;
+    if (reusable) {
+      researchJobId = reusable.researchJobId;
+      context = reusable.context;
+      await markStatus("researching", { startedAt: true, researchJobId });
+      logger.info(
+        `Campaign generation job ${jobId} reused research job ${researchJobId} (cache hit, TTL ${CAMPAIGN_RESEARCH_CACHE_TTL_MS}ms) — skipping the 27-provider research phase`
+      );
+      completedUnits = RESEARCH_PROVIDER_COUNT;
+      await reportOverall("research-cache-hit");
+    } else {
+      const researchJob = await deps.createResearchJob(job.workspaceId, job.url, job.businessId);
+      researchJobId = researchJob.id;
+      await markStatus("researching", { startedAt: true, researchJobId });
+
+      context = await withSpan("campaign_generation.research", () =>
+        deps.runResearchOrchestrator(researchJob.id, {
+          onProgress: async (completed, _total, providerName) => {
+            completedUnits = completed;
+            await reportOverall(providerName);
+          },
+        })
+      );
+      completedUnits = RESEARCH_PROVIDER_COUNT;
+    }
     await markStatus("aggregating");
     await reportOverall("aggregating");
 
@@ -167,8 +222,16 @@ export async function runCampaignGenerationPipeline(
     // CrawlFact rows from the DB at execute time, so facts written after they start are
     // invisible to them. Still best-effort: no crawl persistence or an extraction failure
     // just means agents run un-grounded, exactly as they did before this step existed.
+    //
+    // On a cache HIT we deliberately SKIP extraction: loadVerifiedFacts() (agents/crawlFacts.ts)
+    // reads CrawlFact by context.website.crawlJobId, and the rows written during the ORIGINAL
+    // run are keyed by that same id and still persist in the DB — so the agents read identical
+    // facts. Re-running would be wrong, not just wasteful: persistCrawlFacts is a blind
+    // createMany with fresh UUIDs (no upsert/dedupe — crawlPersistence.ts), so a second pass
+    // DOUBLES every fact row, skewing the agents' top-40-by-confidence selection while paying
+    // for the very fact-extraction LLM call the cache exists to avoid.
     const crawlJobId = context.website?.crawlJobId;
-    if (crawlJobId) {
+    if (crawlJobId && !reusable) {
       await withSpan("campaign_generation.fact_extraction", () => deps.extractCrawlFacts(crawlJobId))
         .then((count) => logger.info(`Extracted ${count} crawl facts for campaign generation job ${jobId}`))
         .catch((err) => logger.warn(`Crawl fact extraction failed for campaign generation job ${jobId} — agents run without verified facts`, err));
@@ -268,6 +331,6 @@ export async function runCampaignGenerationPipeline(
       });
     }
 
-    return { campaignId: campaign.id, strategyId, researchJobId: researchJob.id };
+    return { campaignId: campaign.id, strategyId, researchJobId };
   }
 }

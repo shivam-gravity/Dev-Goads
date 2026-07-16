@@ -16,8 +16,9 @@ registerCrashReporting("polluxa-campaign-generation-worker");
 const worker = new Worker(
   CAMPAIGN_GENERATION_QUEUE,
   async (job: Job) => {
-    const { jobId } = job.data as { jobId: string };
+    const { jobId, forceRefresh } = job.data as { jobId: string; forceRefresh?: boolean };
     return runCampaignGenerationPipeline(jobId, {
+      forceRefresh,
       onProgress: async (completed, total, stepName) => {
         await job.updateProgress(Math.round((completed / total) * 100));
         if (stepName) await recordProgressStep(PROGRESS_PREFIX, jobId, stepName);

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { runCampaignGenerationPipeline, type CampaignGenerationDeps } from "../modules/orchestrator/campaignGenerationPipeline.js";
 import { LockWaitTimeoutError } from "../infra/distributedLock.js";
+import { logger } from "../modules/logger/logger.js";
 import type { CampaignGenerationJobRecord, CampaignGenerationStatus } from "../modules/orchestrator/campaignGenerationService.js";
 import type { ResearchJobRecord } from "../research/research-orchestrator/researchJobService.js";
 import type { ResearchContext } from "../research/types/index.js";
@@ -102,6 +103,7 @@ function fakeDeps(opts: {
     async persistDecisionContext(_id, decisionContext) { persistedDecisionContext = decisionContext; },
     async markCompleted() {},
     async createResearchJob() { return researchJobRecord; },
+    async findReusableResearch() { return null; }, // default: cache miss → existing tests keep the fresh path
     async runResearchOrchestrator(_jobId, options) {
       await options?.onProgress?.(9, 9);
       return fakeResearchContext();
@@ -353,4 +355,122 @@ test("campaignGenerationPipeline - proceeds successfully even when the lock need
 
   assert.deepStrictEqual(result, { campaignId: "campaign-1", strategyId: "strategy-1", researchJobId: "research-1" });
   assert.strictEqual(simulatedPollAttempts, 3);
+});
+
+// ── Research caching (Phase 1 reuse) ────────────────────────────────────────────────────
+
+/** A cached ResearchContext whose identity matches the default fake job (biz-1 / example.com)
+ * so the pipeline's defense-in-depth identity guard accepts it unless a test overrides it. */
+function fakeCachedContext(overrides: Partial<ResearchContext> = {}): ResearchContext {
+  const base = fakeResearchContext();
+  return { ...base, jobId: "cached-research-1", businessId: "biz-1", url: "https://example.com",
+    metadata: { ...base.metadata, jobId: "cached-research-1" }, ...overrides };
+}
+
+test("campaignGenerationPipeline - (a) cache HIT skips the orchestrator AND fact extraction but still builds a fresh campaign", async () => {
+  const job = fakeGenerationJob();
+  const deps = fakeDeps({ job });
+  let orchestratorCalled = false;
+  let extractCalled = false;
+  deps.runResearchOrchestrator = async () => { orchestratorCalled = true; return fakeResearchContext(); };
+  deps.extractCrawlFacts = async () => { extractCalled = true; return 0; };
+  deps.findReusableResearch = async () => ({
+    researchJobId: "cached-research-1",
+    context: fakeCachedContext({
+      website: { title: "t", description: "d", excerpt: "e", images: [], crawledPages: [], pagesDiscovered: 1, dataSource: "crawl", crawlJobId: "crawl-OLD" },
+    }),
+  });
+
+  const result = await runCampaignGenerationPipeline(job.id, { deps });
+
+  assert.strictEqual(orchestratorCalled, false, "cache hit must NOT re-run the 27-provider orchestrator");
+  assert.strictEqual(extractCalled, false, "cache hit must NOT re-extract facts (rows for the reused crawlJobId persist; re-running would duplicate them)");
+  assert.strictEqual(result.campaignId, "campaign-1", "a fresh campaign is still built from the cached research");
+  assert.strictEqual(result.researchJobId, "cached-research-1", "returns the reused research job's id");
+});
+
+test("campaignGenerationPipeline - (b) forceRefresh bypasses the cache entirely and runs fresh research", async () => {
+  const job = fakeGenerationJob();
+  const deps = fakeDeps({ job });
+  let lookupCalled = false;
+  let orchestratorCalled = false;
+  deps.findReusableResearch = async () => { lookupCalled = true; return { researchJobId: "cached-research-1", context: fakeCachedContext() }; };
+  deps.runResearchOrchestrator = async (_jobId, options) => { orchestratorCalled = true; await options?.onProgress?.(9, 9); return fakeResearchContext(); };
+
+  const result = await runCampaignGenerationPipeline(job.id, { deps, forceRefresh: true });
+
+  assert.strictEqual(lookupCalled, false, "forceRefresh must not even consult the cache");
+  assert.strictEqual(orchestratorCalled, true, "forceRefresh must run fresh research");
+  assert.strictEqual(result.researchJobId, "research-1", "returns the freshly-created research job's id");
+});
+
+test("campaignGenerationPipeline - (c) a cached context whose businessId OR url doesn't match the job is rejected (miss + tripwire warning), and fresh research runs", async () => {
+  const originalWarn = logger.warn;
+  const warnings: string[] = [];
+  (logger as unknown as { warn: (...a: unknown[]) => void }).warn = (msg: unknown) => { warnings.push(String(msg)); };
+  try {
+    for (const badContext of [fakeCachedContext({ url: "https://evil-different-url.com" }), fakeCachedContext({ businessId: "biz-OTHER" })]) {
+      const job = fakeGenerationJob();
+      const deps = fakeDeps({ job });
+      let orchestratorCalled = false;
+      deps.findReusableResearch = async () => ({ researchJobId: "cached-research-1", context: badContext });
+      deps.runResearchOrchestrator = async (_jobId, options) => { orchestratorCalled = true; await options?.onProgress?.(9, 9); return fakeResearchContext(); };
+
+      const result = await runCampaignGenerationPipeline(job.id, { deps });
+
+      assert.strictEqual(orchestratorCalled, true, "a mismatched cached context must be treated as a miss and re-researched");
+      assert.strictEqual(result.researchJobId, "research-1", "must use the fresh research job, never the rejected cached one");
+    }
+    assert.strictEqual(warnings.length, 2, "each rejection must log exactly one tripwire warning");
+    assert.ok(warnings.every((w) => /does not match/.test(w)), `tripwire warnings must explain the mismatch; got: ${warnings.join(" | ")}`);
+  } finally {
+    (logger as unknown as { warn: unknown }).warn = originalWarn;
+  }
+});
+
+test("campaignGenerationPipeline - (d) an expired/absent cache (lookup returns null) is a miss that runs fresh, and the 7-day TTL is forwarded to the lookup", async () => {
+  const job = fakeGenerationJob();
+  const deps = fakeDeps({ job });
+  let forwardedTtl: number | undefined;
+  let orchestratorCalled = false;
+  deps.findReusableResearch = async (_ws, _biz, _url, ttlMs) => { forwardedTtl = ttlMs; return null; }; // null = the WHERE-clause TTL filter matched nothing
+  deps.runResearchOrchestrator = async (_jobId, options) => { orchestratorCalled = true; await options?.onProgress?.(9, 9); return fakeResearchContext(); };
+
+  const result = await runCampaignGenerationPipeline(job.id, { deps });
+
+  assert.strictEqual(orchestratorCalled, true, "an expired/absent cache entry must run fresh research");
+  assert.strictEqual(result.researchJobId, "research-1");
+  assert.strictEqual(forwardedTtl, 7 * 24 * 60 * 60 * 1000, "the default 7-day TTL must be passed to the cache lookup");
+});
+
+test("campaignGenerationPipeline - (e) another business's cached research is NEVER served to the agents", async () => {
+  const job = fakeGenerationJob({ businessId: "biz-1" });
+  const deps = fakeDeps({ job });
+  let contextSeenByAgents: ResearchContext | undefined;
+  deps.findReusableResearch = async () => ({ researchJobId: "cached-research-OTHER", context: fakeCachedContext({ businessId: "biz-OTHER", jobId: "leaked-from-other-business" }) });
+  const innerRunAgents = deps.runAgentCoordinator;
+  deps.runAgentCoordinator = async (context, options) => { contextSeenByAgents = context; return innerRunAgents(context, options); };
+
+  const result = await runCampaignGenerationPipeline(job.id, { deps });
+
+  assert.notStrictEqual(contextSeenByAgents?.businessId, "biz-OTHER", "the cross-business context must never reach the agents");
+  assert.notStrictEqual(contextSeenByAgents?.jobId, "leaked-from-other-business");
+  assert.strictEqual(result.researchJobId, "research-1", "must fall back to fresh research for THIS business");
+});
+
+test("campaignGenerationPipeline - (f) on a cache HIT, the new request's budget and name still apply (only research is reused, never the campaign)", async () => {
+  const job = fakeGenerationJob({ dailyBudgetCents: 12345, name: "Fresh Name For This Run" });
+  const deps = fakeDeps({ job });
+  deps.findReusableResearch = async () => ({ researchJobId: "cached-research-1", context: fakeCachedContext() });
+  let capturedBudget: number | undefined;
+  let capturedName: string | undefined;
+  deps.buildCampaignFromStrategy = async (_strategyId, name, dailyBudgetCents) => {
+    capturedName = name; capturedBudget = dailyBudgetCents;
+    return { id: "campaign-1", businessId: job.businessId, strategyId: "strategy-1", name, status: "draft", networks: ["meta"], dailyBudgetCents, variants: [], createdAt: "now", updatedAt: "now" };
+  };
+
+  await runCampaignGenerationPipeline(job.id, { deps });
+
+  assert.strictEqual(capturedBudget, 12345, "budget from the new request must apply on a cache hit");
+  assert.strictEqual(capturedName, "Fresh Name For This Run", "name from the new request must apply on a cache hit");
 });

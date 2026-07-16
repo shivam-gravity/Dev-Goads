@@ -157,3 +157,33 @@ export async function createResearchSnapshot(jobId: string, context: ResearchCon
     data: { id: randomUUID(), researchJobId: jobId, version, context: context as any },
   });
 }
+
+/**
+ * A recently-completed research job for this exact (workspace, business, url) whose full
+ * persisted ResearchContext can be reused instead of re-running Phase 1's 27-provider fan-out.
+ * Only status "completed" jobs with a non-null context inside `ttlMs` are eligible; newest
+ * first. Keyed on businessId (not url alone) so one business can never match another's row —
+ * the caller still does a defense-in-depth identity re-check on the returned context (see
+ * campaignGenerationPipeline); this only performs the keyed lookup.
+ */
+export async function findReusableResearch(
+  workspaceId: string,
+  businessId: string,
+  url: string,
+  ttlMs: number
+): Promise<{ researchJobId: string; context: ResearchContext } | null> {
+  const row = await prisma.researchJob.findFirst({
+    where: {
+      workspaceId,
+      businessId,
+      url,
+      status: "completed",
+      // completedAt is null until markResearchJobCompleted runs, so this gte also excludes
+      // any job that never actually finished — a partial/aborted run can never be served.
+      completedAt: { gte: new Date(Date.now() - ttlMs) },
+    },
+    orderBy: { completedAt: "desc" },
+  });
+  if (!row || row.context == null) return null;
+  return { researchJobId: row.id, context: row.context as unknown as ResearchContext };
+}

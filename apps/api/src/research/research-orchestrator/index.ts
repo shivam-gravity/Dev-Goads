@@ -6,6 +6,7 @@ export {
   markResearchJobCompleted,
   recordProviderExecution,
   createResearchSnapshot,
+  findReusableResearch,
 } from "./researchJobService.js";
 export type { ResearchJobRecord, ResearchJobWithExecutions, ProviderExecutionRecord } from "./researchJobService.js";
 export {
