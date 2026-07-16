@@ -3,6 +3,7 @@ import { llm, runStructured } from "../../infra/llmClient.js";
 import { prisma } from "../../db/prisma.js";
 import type { AdCreative, AdNetwork, AdStrategy, AudienceAnalysis, AudiencePersona, BusinessProfile, CampaignSuggestion, CompetitorBudgetAnalysis, MarketLocationAnalysis, ProductAnalysis } from "../../types/index.js";
 import type { AudienceAgentOutput, CampaignAgentOutput, ComplianceAgentOutput, CreativeAgentOutput, CriticAgentOutput, KeywordAgentOutput, ObjectionHandlingAgentOutput, PersonaAgentOutput, PricingOfferAgentOutput } from "../../agents/types/index.js";
+import { filterPlaceholderTerms } from "../../agents/support.js";
 import type { DecisionContext } from "../../research/decision/types.js";
 import { logger } from "../logger/logger.js";
 import { truncateForPlatform, PLATFORM_COPY_LIMITS } from "./platformCopyLimits.js";
@@ -421,16 +422,18 @@ export async function createStrategyFromAgentResults(
     ...(extras?.critic ? { qualityWarning: qualityWarningFrom(businessId, extras.critic) } : {}),
     // Google Search-only: positive + negative keywords threaded to launch. adGroupSuggestions is
     // deliberately dropped — using it would require restructuring the shared ad-group grouping.
-    ...(extras?.keyword ? { googleKeywords: { primary: extras.keyword.primaryKeywords, negative: extras.keyword.negativeKeywords } } : {}),
+    // primaryKeywords filtered — a placeholder positive keyword ("Not yet researched") would waste
+    // Google spend. negativeKeywords left untouched: a stray placeholder as a negative is harmless.
+    ...(extras?.keyword ? { googleKeywords: { primary: filterPlaceholderTerms(extras.keyword.primaryKeywords), negative: extras.keyword.negativeKeywords } } : {}),
     // Meta-only: free-text interest terms from persona-agent (interests across personas) +
     // audience-agent (interestTags). Resolved to Meta interest IDs and merged into the ad set's
     // flexible_spec at launch (withAgentInterests). Attached only when non-empty; demographics
     // parsing and per-persona ad-set structure are deferred.
     ...(() => {
-      const metaInterests = [
+      const metaInterests = filterPlaceholderTerms([
         ...(extras?.persona?.personas.flatMap((p) => p.interests) ?? []),
         ...(extras?.audience?.interestTags ?? []),
-      ];
+      ]);
       return metaInterests.length ? { metaInterests } : {};
     })(),
   };

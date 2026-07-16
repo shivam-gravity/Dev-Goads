@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { computeConfidence, collectEvidence } from "../agents/support.js";
+import { computeConfidence, collectEvidence, isPlaceholderTerm, filterPlaceholderTerms } from "../agents/support.js";
 import type { ResearchContext } from "../research/types/index.js";
 
 function fixtureContext(overrides: Partial<ResearchContext> = {}): ResearchContext {
@@ -44,4 +44,48 @@ test("collectEvidence - pulls each field's dataSource label when present", () =>
     { source: "website", detail: "crawl" },
     { source: "market", detail: "market was not available in this ResearchContext" },
   ]);
+});
+
+test("filterPlaceholderTerms - drops all four degraded-output sentinel families", () => {
+  assert.deepStrictEqual(
+    filterPlaceholderTerms([
+      "Not yet researched",
+      "Insufficient research data to build named personas.",
+      "Unknown — no live research performed",
+      "Not available.",
+    ]),
+    []
+  );
+});
+
+test("filterPlaceholderTerms - keeps legitimate interest terms / keywords untouched", () => {
+  const real = ["GDPR", "AI-native CRM", "product lifecycle management"];
+  assert.deepStrictEqual(filterPlaceholderTerms(real), real);
+});
+
+test("filterPlaceholderTerms - is case-insensitive", () => {
+  assert.deepStrictEqual(filterPlaceholderTerms(["NOT YET RESEARCHED", "GDPR"]), ["GDPR"]);
+});
+
+test("filterPlaceholderTerms - drops empty, whitespace-only, and non-string entries", () => {
+  assert.deepStrictEqual(
+    filterPlaceholderTerms(["", "   ", "GDPR", null as unknown as string, undefined as unknown as string, 42 as unknown as string]),
+    ["GDPR"]
+  );
+});
+
+test("filterPlaceholderTerms - an all-placeholder list collapses to [] so the caller omits the field", () => {
+  const out = filterPlaceholderTerms(["Not yet researched", "Unknown — no live research performed"]);
+  assert.strictEqual(out.length, 0); // metaInterests.length ? {…} : {} -> field omitted
+});
+
+test("isPlaceholderTerm - tightened matching does NOT collide with real keywords that share a sentinel prefix", () => {
+  // Real ad keywords legitimately start with these words — must survive the filter.
+  for (const real of ["unknowable behavior", "unknown caller id", "unknown number lookup", "insufficient funds fee", "insufficient milk supply", "not available in stores"]) {
+    assert.strictEqual(isPlaceholderTerm(real), false, `expected "${real}" to be kept`);
+  }
+  // The actual sentinels are still caught.
+  for (const junk of ["Not yet researched", "Unknown", "Unknown — no live research performed", "Insufficient market research to score this opportunity confidently.", "Not available."]) {
+    assert.strictEqual(isPlaceholderTerm(junk), true, `expected "${junk}" to be dropped`);
+  }
 });
