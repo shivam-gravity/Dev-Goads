@@ -81,7 +81,7 @@ function evidenceForFields(context: ResearchContext, fields: (keyof ResearchCont
       }
       case "competitors": {
         const c = context.competitors;
-        if (c) evidence.push(`Competitors: intensity=${c.competitionIntensity}${c.competitors.length ? `, e.g. ${c.competitors.slice(0, 3).map((x) => x.name).join(", ")}` : ""}`);
+        if (c) evidence.push(`Competitors: intensity=${c.competitionIntensity}${c.competitors.length ? `, e.g. ${c.competitors.slice(0, 8).map((x) => x.name).join(", ")}` : ""}`);
         break;
       }
       case "audience": {
