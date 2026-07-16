@@ -173,19 +173,36 @@ session — `creative-agent`, `critic-agent`, `keyword-agent`, `persona-agent`, 
 by the campaign build: `channel-placement`, `competitor`, `forecasting-kpi`, `funnel-retargeting`,
 `landing-page`, `localization`, `market`, `product`, `seo-content`, and `seasonality-timing`.
 
-**Measured scaling bottleneck — Ollama-absent-in-prod → Groq 429s.** `infra/llmTaskConfig.ts`
-assigns all 20 agents and the 27 research-structuring steps to **Ollama** as their primary
-model, but Ollama is dev-only and **not** in `docker-compose.yml`. In a containerized deploy every
-one of those ~47 per-campaign calls fails Ollama and falls through to the shared free-tier
-**Groq** key, which has no client-side rate limiting (and the OpenAI-compatible SDK's default
-retries amplify the burst) — the root cause of the observed 429 storms (526 Groq 429s in one job;
-a live test in this session's suite also hit Groq's 100k-tokens/day ceiling). Secondary measured
-ceilings: the global **5M-token/month** LLM budget is a hard stop with no fallback (~7–16
-campaigns/month at ~300–700k tokens each), and Tavily's ~**1,000 free searches/month** (~20
-campaigns at ~50 searches each). The research cache (§5) relieves all three by not re-spending on
-repeat generations of the same business. Scraping concurrency (4 Playwright pages via
-`SCRAPER_MAX_CONCURRENT_PAGES`, single scraper-service instance) is a latency wall, not the first
-hard break.
+**Measured scaling bottleneck — Ollama-absent-in-prod → Groq 429s (the #1 operational bottleneck; next fix).**
+`infra/llmTaskConfig.ts` assigns all 20 agents and the 27 research-structuring steps to **Ollama**
+as their primary model, but Ollama is dev-only and **not** in `docker-compose.yml`. In a
+containerized deploy every one of those ~47 per-campaign calls fails Ollama and falls through to
+the shared free-tier **Groq** key, which has no client-side rate limiting (and the
+OpenAI-compatible SDK's default retries amplify the burst) — the root cause of the observed 429
+storms (526 Groq 429s in one job; a live test in this session's suite also hit Groq's
+100k-tokens/day ceiling). This was hit **three separate times today**, including a fresh
+end-to-end validation run — a `forceRefresh` `polluxa.com` generation — where **189+ Groq calls
+failed** (`rate_limit_exceeded`, retry-after ~33m) and degraded the `creative`, `critic`, and
+`persona` agents plus competitor enrichment to their placeholder fallbacks, while the grounded
+agents (`keyword`, `audience`, base `campaign` creatives) still produced real output. The
+placeholder-leak fix (`37749b6`, §5) stops those degraded strings from reaching launch targeting,
+but does not address the root cause. **This is the next fix**: give Ollama a container in
+`docker-compose.yml`, and/or reassign the agents/providers off Ollama, and/or add client-side
+Groq rate-limiting + backoff. Secondary measured ceilings: the global **5M-token/month** LLM
+budget is a hard stop with no fallback (~7–16 campaigns/month at ~300–700k tokens each), and
+Tavily's ~**1,000 free searches/month** (~20 campaigns at ~50 searches each). The research cache
+(§5) relieves all three by not re-spending on repeat generations of the same business. Scraping
+concurrency (4 Playwright pages via `SCRAPER_MAX_CONCURRENT_PAGES`, single scraper-service
+instance) is a latency wall, not the first hard break.
+
+**Competitor `domain` populated from a citation article's host, not the competitor's own site.**
+The earlier fabricated-competitor-URL guard (§5) stopped the discovery LLM from *inventing* a
+competitor URL, but the `domain` that does get stored is frequently the host of a citation/roundup
+article rather than the competitor's homepage. In this session's `polluxa.com` validation run only
+**3 of 16** enriched competitors had a `domain` at all, and all three were wrong (`PayPal →
+businesschronicler.com`, `Helcim → forbes.com`, `Adyen → champsignal.com`). Same class as the
+fabricated-URL poisoning already fixed — the citations themselves are real and verified, but the
+competitor's own domain is not being resolved from them. Not yet fixed.
 
 **Reference-only infra implementations** awaiting real backends (all behind interfaces):
 `InMemoryEventBus` (tests only; prod uses Redis Streams), `LocalFileObjectStorage` (awaits
@@ -217,13 +234,34 @@ deployed environment).
 
 ## 5. Recent significant changes (last ~20 commits)
 
+**Latest (committed `37749b6`).** **Degraded-output placeholder guard on launch-bound fields.**
+When an agent (or the upstream research provider it falls back onto) has no live model, it emits
+honest "we don't know" sentinels (`"Not yet researched"`, `"Unknown — no live research performed"`,
+`"Insufficient research data …"`, `"Not available."`). These leaked through `persona.interests` /
+`audience.interestTags` into `strategy.metaInterests` (and could reach `googleKeywords.primary`),
+where they would become a real Meta interest term or a wasted Google keyword bid. New
+`isPlaceholderTerm`/`filterPlaceholderTerms` (`agents/support.ts`) are applied where `metaInterests`
+and `googleKeywords.primary` are assembled (`strategyEngine.ts`); negatives are left untouched.
+Matching is deliberately tight (not a blanket prefix denylist) so real keywords that share a prefix
+survive — `"insufficient funds"`, `"unknown caller"`, `"not available in stores"` all pass, while
+the sentinels are dropped; an all-placeholder list collapses to `[]` so the field is omitted rather
+than attached empty. Surfaced by the `polluxa.com` validation run (see §4); adds 6 unit tests to
+`agentSupport.test.ts`.
+
+**Validation run (this session, not a code change).** A fresh `forceRefresh` campaign generation
+for `polluxa.com` (demo business) confirmed the five newly-wired outputs fire end-to-end
+(`googleKeywords` 15 primary + 27 negative and `metaInterests` were real and grounded; base
+`creatives` real). It also surfaced the two known gaps now recorded in §4: competitor `domain`
+citation-host contamination, and the Groq daily-quota exhaustion that degraded the LLM-only agents
+mid-run.
+
 **Now committed (`3d571e8`).** The batch this doc previously listed as uncommitted has since
 been committed: the **`@anthropic-ai/sdk` removal** (completing the migration off Anthropic — no
 source file imports it anymore; the runtime LLM stack is now Groq/Ollama/Mistral/Gemini
 exclusively) and the consolidation of **five deleted `docs/` architecture files** into this
 `PROJECT_STATUS.md`.
 
-**This session (uncommitted working tree).**
+**Earlier this session (now committed, `ffdda48`…`93480f7`).**
 - **Research caching on the campaign path.** `POST /campaigns/generate` no longer re-runs the
   full research pipeline for a repeat of the same (workspace, business, url): a completed
   `ResearchJob`'s `ResearchContext` is reused within a 7-day TTL (`CAMPAIGN_RESEARCH_CACHE_TTL_MS`,
@@ -234,7 +272,7 @@ exclusively) and the consolidation of **five deleted `docs/` architecture files*
   (`context.businessId`/`url` must match the job, with a tripwire warning) prevents serving
   another business's research. Adds pipeline unit tests (a–f) and a DB-backed `findReusableResearch`
   test (TTL boundary / status filter / null-context / cross-business+workspace isolation /
-  newest-first). `apps/api/src/test/findReusableResearch.test.ts` is a new untracked file.
+  newest-first), in `apps/api/src/test/findReusableResearch.test.ts`.
 - **Five more agents wired into the campaign.** `creative`, `critic`, `keyword`, `persona`, and
   `audience` agent outputs are now consumed by `createStrategyFromAgentResults`/`strategyEngine`
   (previously computed-but-unused), taking the consumed count from 5 → 10 (see §4).
@@ -248,8 +286,9 @@ exclusively) and the consolidation of **five deleted `docs/` architecture files*
   corroborated competitive set, at one extra search + extraction call per added name.
 - **`googleAdapter.test.ts` typecheck fix** — closure-captured `capturedOps` read through a typed
   local so `tsc` passes (runtime was always fine; the `tsx` test runner doesn't type-check).
-- Other working-tree changes not detailed here: Meta/Google targeting mappers, image provider,
-  `llmUsageBoundary`, and their tests.
+- Other changes in the same batch, not detailed here: Meta/Google targeting mappers, opt-in
+  multi-provider image generation (`729afe6`), the LLM-token-ledger test isolation (`b656a06`),
+  and their tests.
 
 **Also recently committed (same arc).**
 - **RedditProvider now sources via PullPush.** `RedditProvider` fetches real Reddit threads
