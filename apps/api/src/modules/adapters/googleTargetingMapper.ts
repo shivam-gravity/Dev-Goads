@@ -17,6 +17,10 @@ export interface GoogleAdGroupTargeting {
   genders: string[];
   /** Free-text interests become broad-match keywords — Search campaigns target keywords, not interest categories. */
   keywords: string[];
+  /** Google Search-only negative keywords (from KeywordAgent via withAgentKeywords) — emitted as
+   * negative ad-group criteria by googleAdapter.createAdSetContainer. Absent on the audience-only
+   * path, which has no negative-keyword source. */
+  negativeKeywords?: string[];
   // Passed as opaque JSON into AdAdapter's Record<string, unknown> targeting param.
   [key: string]: unknown;
 }
@@ -151,4 +155,38 @@ export async function resolveGoogleTargetingForWorkspace(
     logger.info(`No SavedAudience matches strategy audience "${audienceName}" — using broad default Google targeting`);
   }
   return BROAD_DEFAULT_TARGETING;
+}
+
+export interface AgentKeywordStrategy {
+  primary: string[];
+  negative: string[];
+}
+
+function dedupeKeywords(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/** Additively folds KeywordAgent's positive/negative keywords into an ad-group's targeting:
+ * positive keywords MERGE with (never replace) the audience-derived keywords, de-duped
+ * case-insensitively with the existing casing kept first; negatives become the ad-group's
+ * negative-keyword list. Returns the SAME object reference unchanged when no agent keywords are
+ * supplied, so the audience-only path is byte-identical. Google Search-only — never called on
+ * the Meta path. */
+export function withAgentKeywords(adGroup: GoogleAdGroupTargeting, agentKeywords?: AgentKeywordStrategy): GoogleAdGroupTargeting {
+  if (!agentKeywords) return adGroup;
+  return {
+    ...adGroup,
+    keywords: dedupeKeywords([...adGroup.keywords, ...agentKeywords.primary]),
+    negativeKeywords: dedupeKeywords(agentKeywords.negative),
+  };
 }

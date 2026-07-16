@@ -138,7 +138,7 @@ test("campaignGenerationPipeline - runs research -> agents -> strategy -> campai
   assert.deepStrictEqual(progressCalls[progressCalls.length - 1], [48, 48]);
 });
 
-test("campaignGenerationPipeline - passes pricing-offer/objection-handling/compliance agent results through to createStrategyFromAgentResults as extras", async () => {
+test("campaignGenerationPipeline - passes pricing-offer/objection-handling/compliance/creative/critic agent results through to createStrategyFromAgentResults as extras", async () => {
   const job = fakeGenerationJob();
   const deps = fakeDeps({
     job,
@@ -160,6 +160,31 @@ test("campaignGenerationPipeline - passes pricing-offer/objection-handling/compl
         data: { overallRisk: "medium", flags: [], restrictedCategoryConcerns: [], recommendation: "Review before launch." },
         confidence: 0.8, evidence: [], usedFallback: false, generatedAt: "now", durationMs: 1,
       },
+      "creative-agent": {
+        agent: "creative-agent", promptId: "creative-agent", promptVersion: 1,
+        data: { headlines: ["Alt A", "Alt B"], primaryTexts: ["Alt body 1"], callToAction: "Sign Up", creativeAngles: ["urgency"] },
+        confidence: 0.8, evidence: [], usedFallback: false, generatedAt: "now", durationMs: 1,
+      },
+      "critic-agent": {
+        agent: "critic-agent", promptId: "critic-agent", promptVersion: 1,
+        data: { overallScore: 55, issues: [], missingData: ["pricing"], recommendation: "Proceed with caveats." },
+        confidence: 0.8, evidence: [], usedFallback: false, generatedAt: "now", durationMs: 1,
+      },
+      "keyword-agent": {
+        agent: "keyword-agent", promptId: "keyword-agent", promptVersion: 1,
+        data: { primaryKeywords: ["running shoes"], adGroupSuggestions: ["Footwear"], negativeKeywords: ["free"] },
+        confidence: 0.8, evidence: [], usedFallback: false, generatedAt: "now", durationMs: 1,
+      },
+      "persona-agent": {
+        agent: "persona-agent", promptId: "persona-agent", promptVersion: 1,
+        data: { personas: [{ name: "Runner", ageRange: "25-34", genderSplit: "balanced", details: "d", interests: ["running"] }] },
+        confidence: 0.8, evidence: [], usedFallback: false, generatedAt: "now", durationMs: 1,
+      },
+      "audience-agent": {
+        agent: "audience-agent", promptId: "audience-agent", promptVersion: 1,
+        data: { primaryAudience: "Runners", segments: [], painPoints: [], interestTags: ["fitness"], targetingNotes: "n" },
+        confidence: 0.8, evidence: [], usedFallback: false, generatedAt: "now", durationMs: 1,
+      },
     },
   });
 
@@ -178,6 +203,11 @@ test("campaignGenerationPipeline - passes pricing-offer/objection-handling/compl
     pricingOffer: { recommendedOfferType: "Free trial", pricingPositioning: "n/a", guaranteeOrRiskReversal: "n/a", urgencyAngle: "n/a" },
     objectionHandling: { topObjections: ["Too expensive?"], rebuttalAngles: ["Cheaper than the leader."], trustSignalsToHighlight: [] },
     compliance: { overallRisk: "medium", flags: [], restrictedCategoryConcerns: [], recommendation: "Review before launch." },
+    creative: { headlines: ["Alt A", "Alt B"], primaryTexts: ["Alt body 1"], callToAction: "Sign Up", creativeAngles: ["urgency"] },
+    critic: { overallScore: 55, issues: [], missingData: ["pricing"], recommendation: "Proceed with caveats." },
+    keyword: { primaryKeywords: ["running shoes"], adGroupSuggestions: ["Footwear"], negativeKeywords: ["free"] },
+    persona: { personas: [{ name: "Runner", ageRange: "25-34", genderSplit: "balanced", details: "d", interests: ["running"] }] },
+    audience: { primaryAudience: "Runners", segments: [], painPoints: [], interestTags: ["fitness"], targetingNotes: "n" },
   });
 });
 
@@ -196,7 +226,7 @@ test("campaignGenerationPipeline - builds successfully when pricing-offer/object
 
   const result = await runCampaignGenerationPipeline(job.id, { deps });
   assert.strictEqual(result.campaignId, "campaign-1");
-  assert.deepStrictEqual(capturedExtras, { pricingOffer: undefined, objectionHandling: undefined, compliance: undefined });
+  assert.deepStrictEqual(capturedExtras, { pricingOffer: undefined, objectionHandling: undefined, compliance: undefined, creative: undefined, critic: undefined, keyword: undefined, persona: undefined, audience: undefined });
 });
 
 test("campaignGenerationPipeline - extracts crawl facts after research but BEFORE the agents run when the crawl was persisted, and skips extraction without a crawlJobId", async () => {

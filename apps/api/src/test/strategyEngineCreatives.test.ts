@@ -2,7 +2,7 @@ import { test, after } from "node:test";
 import assert from "node:assert";
 import { createStrategyFromAgentResults, createStrategyFromResearch, type ResearchStrategyInput } from "../modules/strategy/strategyEngine.js";
 import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
-import type { CampaignAgentOutput, ComplianceAgentOutput, ObjectionHandlingAgentOutput, PricingOfferAgentOutput } from "../agents/types/index.js";
+import type { CampaignAgentOutput, ComplianceAgentOutput, CreativeAgentOutput, CriticAgentOutput, ObjectionHandlingAgentOutput, PricingOfferAgentOutput } from "../agents/types/index.js";
 import type { DecisionContext } from "../research/decision/types.js";
 
 after(disconnectTestInfra);
@@ -195,4 +195,89 @@ test("createStrategyFromAgentResults - ComplianceAgent's finding is attached whe
   const lowRisk: ComplianceAgentOutput = { overallRisk: "low", flags: [], restrictedCategoryConcerns: [], recommendation: "No concerns." };
   const strategyLow = await createStrategyFromAgentResults(`biz_compliance_low_${Date.now()}`, fakeAgentOutput(8), null, { compliance: lowRisk });
   assert.strictEqual(strategyLow.complianceWarning, undefined, "a low-risk finding shouldn't surface a warning at all");
+});
+
+test("createStrategyFromAgentResults - CreativeAgent's copy pool populates AdCreative.headlines[]/primaryTexts[], deduped, capped at 5, with the creative's own headline/body first", async () => {
+  const creative: CreativeAgentOutput = {
+    // Includes the creative's own headline ("Creative 1") and a duplicate ("Alt A") to prove dedupe,
+    // plus enough distinct entries to overflow the cap of 5.
+    headlines: ["Creative 1", "Alt A", "Alt A", "Alt B", "Alt C", "Alt D", "Alt E"],
+    primaryTexts: ["Body for creative 1", "Alt body 1", "Alt body 2", "Alt body 1"],
+    callToAction: "Sign Up",
+    creativeAngles: ["urgency"],
+  };
+
+  const strategy = await createStrategyFromAgentResults(`biz_creative_${Date.now()}`, fakeAgentOutput(8), null, { creative });
+  const first = strategy.creatives[0];
+
+  assert.strictEqual(first.headlines?.[0], "Creative 1", "the creative's own headline must be the first variant (back-compat)");
+  assert.strictEqual(first.primaryTexts?.[0], "Body for creative 1", "the creative's own body must be the first primary-text variant");
+  assert.strictEqual(first.headlines?.length, 5, "headline variants must be capped at 5");
+  assert.strictEqual(new Set(first.headlines).size, first.headlines?.length, "headline variants must be de-duped (own headline + duplicate 'Alt A' collapse)");
+  assert.strictEqual(first.primaryTexts?.length, 3, "3 distinct primary texts survive after 'Alt body 1' is de-duped");
+  assert.strictEqual(new Set(first.primaryTexts).size, first.primaryTexts?.length, "primary-text variants must be de-duped");
+});
+
+test("createStrategyFromAgentResults - without the creative extra, creatives carry no headlines[]/primaryTexts[] (byte-identical to today)", async () => {
+  const agentOutput = fakeAgentOutput(8);
+  const noExtras = await createStrategyFromAgentResults(`biz_creative_none_a_${Date.now()}`, agentOutput);
+  const emptyExtras = await createStrategyFromAgentResults(`biz_creative_none_b_${Date.now()}`, agentOutput, null, {});
+
+  for (const c of noExtras.creatives) {
+    assert.strictEqual(c.headlines, undefined, "no creative extra → no headline variants");
+    assert.strictEqual(c.primaryTexts, undefined, "no creative extra → no primary-text variants");
+  }
+  // Creatives are deterministic for a given agent output (only strategy id/createdAt differ), so an
+  // empty extras object must yield the exact same creatives array as passing no extras at all.
+  assert.deepStrictEqual(emptyExtras.creatives, noExtras.creatives, "an empty extras object must produce identical creatives to passing no extras at all");
+});
+
+test("createStrategyFromAgentResults - CriticAgent's review attaches a qualityWarning when the score is below the threshold", async () => {
+  const critic: CriticAgentOutput = {
+    overallScore: 55,
+    issues: [],
+    missingData: ["pricing", "reviews"],
+    recommendation: "Proceed with caveats.",
+  };
+  const strategy = await createStrategyFromAgentResults(`biz_critic_low_${Date.now()}`, fakeAgentOutput(8), null, { critic });
+  assert.strictEqual(strategy.qualityWarning?.score, 55);
+  assert.deepStrictEqual(strategy.qualityWarning?.missingData, ["pricing", "reviews"]);
+  assert.strictEqual(strategy.qualityWarning?.recommendation, "Proceed with caveats.");
+});
+
+test("createStrategyFromAgentResults - CriticAgent's review attaches a qualityWarning when there are issues, even at a high score", async () => {
+  const critic: CriticAgentOutput = {
+    overallScore: 92,
+    issues: [{ agent: "creative-agent", severity: "medium", issue: "Headline overstates the benefit" }],
+    missingData: [],
+    recommendation: "Proceed, but soften the headline claim.",
+  };
+  const strategy = await createStrategyFromAgentResults(`biz_critic_issues_${Date.now()}`, fakeAgentOutput(8), null, { critic });
+  assert.strictEqual(strategy.qualityWarning?.score, 92);
+  assert.strictEqual(strategy.qualityWarning?.issues.length, 1);
+});
+
+test("createStrategyFromAgentResults - a clean, high-scoring critic review surfaces no qualityWarning", async () => {
+  const critic: CriticAgentOutput = {
+    overallScore: 88,
+    issues: [],
+    missingData: [],
+    recommendation: "Proceed as-is.",
+  };
+  const strategy = await createStrategyFromAgentResults(`biz_critic_clean_${Date.now()}`, fakeAgentOutput(8), null, { critic });
+  assert.strictEqual(strategy.qualityWarning, undefined, "a clean, high-scoring review shouldn't surface a warning at all");
+});
+
+test("createStrategyFromAgentResults - a damning critic review is advisory only and never gates/fails the build", async () => {
+  const critic: CriticAgentOutput = {
+    overallScore: 5,
+    issues: [{ agent: "campaign-agent", severity: "high", issue: "Recommendations not grounded in research" }],
+    missingData: ["audience", "competitors"],
+    recommendation: "Do not proceed without more research.",
+  };
+  const strategy = await createStrategyFromAgentResults(`biz_critic_severe_${Date.now()}`, fakeAgentOutput(8), null, { critic });
+  // Advisory only: the build completes and the strategy is fully formed despite a damning review.
+  assert.ok(strategy.id, "strategy must still be built");
+  assert.strictEqual(strategy.creatives.length, 8, "creatives must be unaffected by the critic review");
+  assert.strictEqual(strategy.qualityWarning?.score, 5);
 });

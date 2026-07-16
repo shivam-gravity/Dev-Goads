@@ -276,12 +276,18 @@ export async function runCampaignGenerationPipeline(
     const campaignAgentResult = pipeline.results["campaign-agent"] as AgentResult<CampaignAgentOutput> | undefined;
     if (!campaignAgentResult) throw new Error("campaign-agent did not produce a result — cannot build a campaign");
 
-    // These three previously ran alongside the other 17 agents, got persisted via
+    // These five previously ran alongside the other producer agents, got persisted via
     // persistAgentResults above, and were never read again — folding their output into the
-    // strategy (extra creatives, a compliance warning) is what actually puts them to work.
+    // strategy (extra creatives, headline/primary-text variants, a compliance warning, an
+    // advisory quality warning) is what actually puts them to work.
     const pricingOfferResult = pipeline.results["pricing-offer-agent"] as AgentResult<PricingOfferAgentOutput> | undefined;
     const objectionHandlingResult = pipeline.results["objection-handling-agent"] as AgentResult<ObjectionHandlingAgentOutput> | undefined;
     const complianceResult = pipeline.results["compliance-agent"] as AgentResult<ComplianceAgentOutput> | undefined;
+    const creativeResult = pipeline.results["creative-agent"] as AgentResult<CreativeAgentOutput> | undefined;
+    const criticResult = pipeline.results["critic-agent"] as AgentResult<CriticAgentOutput> | undefined;
+    const keywordResult = pipeline.results["keyword-agent"] as AgentResult<KeywordAgentOutput> | undefined;
+    const personaResult = pipeline.results["persona-agent"] as AgentResult<PersonaAgentOutput> | undefined;
+    const audienceResult = pipeline.results["audience-agent"] as AgentResult<AudienceAgentOutput> | undefined;
 
     // ── Phase 3: Campaign Builder ──
     await markStatus("building_campaign");
@@ -291,6 +297,11 @@ export async function runCampaignGenerationPipeline(
         pricingOffer: pricingOfferResult?.data,
         objectionHandling: objectionHandlingResult?.data,
         compliance: complianceResult?.data,
+        creative: creativeResult?.data,
+        critic: criticResult?.data,
+        keyword: keywordResult?.data,
+        persona: personaResult?.data,
+        audience: audienceResult?.data,
       });
       await markStatus("building_campaign", { strategyId: strategy.id });
 
