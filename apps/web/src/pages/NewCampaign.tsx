@@ -347,6 +347,44 @@ function normalizeDecision(decision: DecisionContext) {
 
 const BUDGET_COLORS = ["var(--accent)", "var(--accent-2)", "#f9ab00", "#ea4335", "var(--accent-light)"];
 
+/** Keyless live thumbnail of a public URL (WordPress mShots) — a no-API-key fallback used when the
+ * backend Playwright/Firecrawl screenshot capture is unavailable, so the site preview effectively
+ * never goes blank. */
+function siteThumbnailUrl(pageUrl: string): string {
+  return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(pageUrl)}?w=1200`;
+}
+
+/**
+ * Site preview that never renders an empty box: prefer the backend capture (above-the-fold JPEG
+ * from the Playwright scraper-service or Firecrawl); if it's absent, fall back to a keyless live
+ * thumbnail of the URL; if even that fails to load, show a labeled placeholder.
+ */
+function HeroScreenshot({ url, screenshot }: { url: string; screenshot?: string }) {
+  const [stage, setStage] = useState<"primary" | "thumbnail" | "placeholder">(
+    screenshot ? "primary" : url ? "thumbnail" : "placeholder"
+  );
+
+  if (stage === "placeholder") {
+    return (
+      <div className="decision-hero-shot decision-hero-shot--placeholder">
+        <GlobeIcon />
+        <span>Site preview unavailable</span>
+      </div>
+    );
+  }
+
+  const src = stage === "primary" && screenshot ? screenshot : siteThumbnailUrl(url);
+  return (
+    <div className="decision-hero-shot">
+      <img
+        src={src}
+        alt={`Screenshot of ${url}`}
+        onError={() => setStage((s) => (s === "primary" && url ? "thumbnail" : "placeholder"))}
+      />
+    </div>
+  );
+}
+
 function DecisionContextView({ decision: raw, url }: { decision: DecisionContext; url: string }) {
   const decision = normalizeDecision(raw);
   const simByStrategy = new Map(decision.simulations.map((s) => [s.strategyId, s]));
@@ -376,11 +414,7 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
       <AssistantTag time={decision.generatedAt} />
 
       <div className="decision-hero">
-        {decision.websiteScreenshot && (
-          <div className="decision-hero-shot">
-            <img src={decision.websiteScreenshot} alt={`Screenshot of ${url}`} />
-          </div>
-        )}
+        <HeroScreenshot url={url} screenshot={decision.websiteScreenshot} />
         <div className="decision-hero-body">
           <p className="decision-hero-eyebrow">{url || "Your page"}</p>
           <p className="decision-hero-summary">{decision.businessSummary}</p>
