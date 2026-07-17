@@ -29,10 +29,10 @@ const POLL_INTERVAL_MS = 1500;
  * review the result in the Campaign Builder before actually launching it.
  */
 const PHASE_ORDER: { key: CampaignGenerationPipelineStatus; label: string; icon: typeof TargetIcon }[] = [
-  { key: "researching", label: "Researching the business across 9 parallel research providers", icon: GlobeIcon },
-  { key: "aggregating", label: "Fusing research into one confidence-scored context", icon: TargetIcon },
-  { key: "running_agents", label: "Ranking recommendations and simulating campaign strategies", icon: LightningIcon },
-  { key: "building_campaign", label: "Building your campaign and generating real ad creative", icon: SparkleIcon },
+  { key: "researching", label: "Comprehensive product, audience & market analysis", icon: GlobeIcon },
+  { key: "aggregating", label: "Fusing intelligence across all sources with confidence scoring", icon: TargetIcon },
+  { key: "running_agents", label: "Mining Meta Ads interests, validating keywords & simulating strategies", icon: LightningIcon },
+  { key: "building_campaign", label: "Generating publication-ready ad creative & campaign structure", icon: SparkleIcon },
 ];
 
 function phaseIndex(status: CampaignGenerationPipelineStatus): number {
@@ -46,22 +46,35 @@ function phaseIndex(status: CampaignGenerationPipelineStatus): number {
 const PHASE_SUBLINES: Record<CampaignGenerationPipelineStatus, string[]> = {
   pending: [],
   researching: [
-    "Crawling the site, screenshotting pages, and reading competitor + market signals…",
-    "Cross-checking sources for conflicting claims…",
-    "Gathering audience, keyword, and news data in parallel…",
+    "Analyzing product positioning, features, pricing and use cases…",
+    "Analyzing target audience profile and buyer personas…",
+    "Analyzing competitors and calculating daily budget recommendations…",
+    "Analyzing global market trends and regional growth patterns for target location recommendations…",
+    "Comparing advertising platform performance to recommend optimal channel mix…",
+    "Mining Meta Ads audience interest keywords from multiple dimensions…",
+    "Crawling landing pages and extracting verified facts…",
+    "Reading customer reviews and social signals…",
   ],
   aggregating: [
-    "Merging 9 providers into one confidence-scored context…",
-    "Resolving conflicts between sources…",
+    "Validating product-related and competitor interest keywords in Meta Ads audience database…",
+    "Validating user occupation and industry interest keywords…",
+    "Validating professional interest and content consumption keywords…",
+    "Validating extended competitor and business function keywords…",
+    "Merging 27 research sources into one confidence-scored context…",
   ],
   running_agents: [
-    "Scoring and ranking candidate recommendations…",
-    "Simulating 3 campaign strategies head-to-head…",
-    "Picking the strategy with the best expected ROI…",
+    "Based on product analysis, mining Meta Ads audience interest keywords from multiple perspectives…",
+    "Scoring and ranking 5 candidate recommendations head-to-head…",
+    "Simulating 3 campaign strategies with real market data…",
+    "Calculating genuine budget recommendation based on CPC benchmarks and competition…",
+    "Building 6 audience personas with interest targeting…",
+    "Analyzing opportunities, risks, and competitive gaps…",
   ],
   building_campaign: [
-    "Generating real ad copy and creative…",
-    "Assembling the campaign for review…",
+    "Generating publication-ready ad headlines and body copy…",
+    "Building Meta & Google Ads campaign structure…",
+    "Validating ad copy against platform character limits…",
+    "Output Audience Profile Data…",
   ],
   completed: [],
   failed: [],
@@ -78,55 +91,55 @@ function phaseSubline(key: CampaignGenerationPipelineStatus): string {
 // back to the raw name for anything added on the backend before this map is updated, so a
 // new provider/agent shows up as slightly-less-polished text instead of nothing.
 const STEP_LABELS: Record<string, string> = {
-  website: "Reading your website",
-  company: "Researching your company",
-  market: "Analyzing the market",
-  technology: "Detecting your tech stack",
-  competitor: "Searching competitors",
-  seo: "Finding keywords",
-  audience: "Building your audience profile",
-  news: "Checking recent news",
-  "social-media": "Checking social presence",
-  reviews: "Reading customer reviews",
-  funding: "Checking funding signals",
-  "hiring-signals": "Checking hiring activity",
-  "content-marketing": "Analyzing content marketing",
-  "backlink-authority": "Checking domain authority",
-  "app-store": "Checking app store presence",
-  "video-presence": "Checking video presence",
-  "local-presence": "Checking local presence",
-  partnerships: "Checking partnerships",
-  "legal-regulatory": "Checking legal & regulatory risk",
-  search: "Searching the web",
-  product: "Crawling product & pricing pages",
-  navigation: "Mapping your site structure",
-  "search-ranking": "Checking real search rankings",
-  "ad-library": "Checking competitor ad libraries",
-  autocomplete: "Checking search autocomplete",
-  "serp-features": "Checking related searches",
-  reddit: "Checking community discussion",
-  aggregating: "Fusing research into one context",
-  "product-agent": "Defining your product positioning",
-  "audience-agent": "Refining your audience",
-  "competitor-agent": "Mapping competitive differentiation",
-  "market-agent": "Scoring market opportunity",
-  "keyword-agent": "Building keyword strategy",
-  "creative-agent": "Writing ad creative",
-  "budget-agent": "Calculating your budget",
-  "persona-agent": "Building personas",
-  "campaign-agent": "Synthesizing your campaign strategy",
-  "landing-page-agent": "Reviewing your landing page",
-  "pricing-offer-agent": "Analyzing pricing",
-  "localization-agent": "Planning localization",
-  "seo-content-agent": "Planning SEO content",
-  "seasonality-timing-agent": "Timing your launch",
-  "channel-placement-agent": "Choosing ad placements",
-  "funnel-retargeting-agent": "Planning your funnel",
-  "objection-handling-agent": "Preparing objection handling",
-  "forecasting-kpi-agent": "Forecasting performance",
-  "critic-agent": "Reviewing for quality",
-  "compliance-agent": "Reviewing for compliance",
-  "campaign-built": "Assembling your campaign",
+  website: "Analyzing product positioning, features and use cases",
+  company: "Researching company background and brand identity",
+  market: "Analyzing global market trends and regional growth patterns",
+  technology: "Detecting tech stack and integration opportunities",
+  competitor: "Analyzing competitors and calculating daily budget benchmarks",
+  seo: "Mining SEO keywords and search intent data",
+  audience: "Analyzing target audience profile and behavior patterns",
+  news: "Checking recent industry news and market signals",
+  "social-media": "Analyzing social media engagement and brand sentiment",
+  reviews: "Reading customer reviews for messaging insights",
+  funding: "Checking funding signals and growth trajectory",
+  "hiring-signals": "Analyzing hiring patterns for market timing",
+  "content-marketing": "Evaluating content strategy and thought leadership",
+  "backlink-authority": "Checking domain authority and competitive standing",
+  "app-store": "Checking app store presence and ratings",
+  "video-presence": "Analyzing video content and ad creative potential",
+  "local-presence": "Checking local market presence and geo-targeting opportunities",
+  partnerships: "Mapping partnership ecosystem and co-marketing opportunities",
+  "legal-regulatory": "Checking legal & regulatory compliance for ad content",
+  search: "Searching the web for real-time market intelligence",
+  product: "Deep-crawling product pages, pricing tiers and feature comparisons",
+  navigation: "Mapping site structure for landing page recommendations",
+  "search-ranking": "Checking real search rankings vs. competitors",
+  "ad-library": "Analyzing competitor ad libraries across Meta & Google",
+  autocomplete: "Mining search autocomplete for audience intent signals",
+  "serp-features": "Analyzing SERP features and ad opportunity gaps",
+  reddit: "Mining community discussions for pain points and objections",
+  aggregating: "Fusing 27 research sources into confidence-scored context",
+  "product-agent": "Analyzing product positioning and unique selling propositions",
+  "audience-agent": "Mining Meta Ads audience interest keywords from multiple dimensions",
+  "competitor-agent": "Mapping competitive gaps and differentiation strategy",
+  "market-agent": "Comparing advertising platform performance for optimal channel recommendation",
+  "keyword-agent": "Validating interest keywords in Meta Ads audience database",
+  "creative-agent": "Generating publication-ready ad headlines and body copy",
+  "budget-agent": "Calculating genuine budget recommendation based on CPC data and competition",
+  "persona-agent": "Building 6 detailed audience personas with interest targeting",
+  "campaign-agent": "Synthesizing full campaign strategy with platform-specific structure",
+  "landing-page-agent": "Analyzing landing page conversion potential and recommendations",
+  "pricing-offer-agent": "Analyzing pricing strategy and offer positioning for ads",
+  "localization-agent": "Planning multi-market localization and geo-targeting",
+  "seo-content-agent": "Planning SEO content funnel for organic growth alongside paid",
+  "seasonality-timing-agent": "Analyzing seasonality patterns for optimal launch timing",
+  "channel-placement-agent": "Recommending ad placements across Feed, Stories, Reels, Search",
+  "funnel-retargeting-agent": "Planning retargeting funnel stages and audience segments",
+  "objection-handling-agent": "Preparing objection-handling copy for ad variations",
+  "forecasting-kpi-agent": "Forecasting KPIs: expected ROAS, CPA, reach and conversions",
+  "critic-agent": "Quality review — validating strategy coherence and ad effectiveness",
+  "compliance-agent": "Compliance review — checking Meta & Google ad policies",
+  "campaign-built": "Assembling final campaign with real ad preview data",
 };
 
 function stepLabel(step: string): string {
@@ -832,8 +845,8 @@ export default function NewCampaign() {
             <span className="new-campaign-word-accent">page</span> would you like to promote?
           </h2>
           <p className="new-campaign-subtext">
-            Paste your link below — the Research Orchestrator (9 parallel research providers) and Decision Engine
-            will analyze it and build a ranked, evidence-backed campaign strategy, then generate real ads for you.
+            Paste your link below — 27 research providers will analyze product positioning, audience, competitors, and market data in real-time.
+            The AI will mine Meta Ads interest keywords, validate them against the platform database, and generate publication-ready campaigns with genuine budget recommendations.
           </p>
 
           {error && <p className="error">{error}</p>}
@@ -857,15 +870,19 @@ export default function NewCampaign() {
           <div className="new-campaign-value-row">
             <div className="new-campaign-value-item">
               <span className="new-campaign-value-icon"><TargetIcon /></span>
-              <span>Ranked, explainable recommendations</span>
+              <span>6 audience personas with real Meta Ads interest targeting</span>
             </div>
             <div className="new-campaign-value-item">
               <span className="new-campaign-value-icon"><LightningIcon /></span>
-              <span>3 simulated strategies — the best one wins</span>
+              <span>Genuine budget based on CPC benchmarks &amp; competition</span>
             </div>
             <div className="new-campaign-value-item">
               <span className="new-campaign-value-icon"><SparkleIcon /></span>
-              <span>Real ads generated automatically</span>
+              <span>Publication-ready ads that comply with platform policies</span>
+            </div>
+            <div className="new-campaign-value-item">
+              <span className="new-campaign-value-icon"><GlobeIcon /></span>
+              <span>Scale from test to millions with tiered growth plan</span>
             </div>
           </div>
         </div>
@@ -894,10 +911,10 @@ export default function NewCampaign() {
           {isActive && (
             <div className="crawler-trace">
               <div className="crawler-trace-header">
-                <span>Generating your campaign — research, ranking, and ad creation all happen automatically.</span>
+                <span>Analyzing {pageUrl || "your page"} with comprehensive product and audience analysis.</span>
               </div>
               <p className="crawler-trace-time-note">
-                This usually takes a few minutes — feel free to browse other pages, we'll keep working in the background.
+                Deep research across 27 sources, Meta Ads interest mining, and strategy simulation in progress — this runs in the background.
               </p>
               <ul className="crawler-trace-steps">
                 {PHASE_ORDER.map((phase, i) => {

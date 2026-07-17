@@ -406,7 +406,28 @@ export default function CampaignBuilder() {
       const updated = await api.updateCampaign(campaign.id, patch);
       setCampaign(updated);
 
-      const draftData = { campaignId: campaign.id, businessId: campaign.businessId, name: campaign.name, ...patch };
+      const draftData = {
+        campaignId: updated.id,
+        businessId: updated.businessId,
+        name: updated.name,
+        status: updated.status,
+        networks: updated.networks,
+        strategyId: updated.strategyId,
+        dailyBudgetCents: updated.dailyBudgetCents,
+        conversionEvent: updated.conversionEvent,
+        finalUrl: updated.finalUrl,
+        startDate: updated.startDate,
+        locations: updated.locations,
+        advantagePlus: updated.advantagePlus,
+        metaAdAccountId: updated.metaAdAccountId,
+        pageId: updated.pageId,
+        instagramAccountId: updated.instagramAccountId,
+        pixelId: updated.pixelId,
+        googleCustomerId: updated.googleCustomerId,
+        googleConversionActionId: updated.googleConversionActionId,
+        variants: updated.variants,
+        creativeAssets: updated.creativeAssets,
+      };
       const existingDrafts = await api.listDrafts(wsId).catch(() => []);
       const existing = existingDrafts.find((d) => (d.data as { campaignId?: string })?.campaignId === campaign.id);
       if (existing) {
@@ -476,7 +497,16 @@ export default function CampaignBuilder() {
         )}
       </div>
 
-      <h2 className="campaign-builder-title">{campaign.name}</h2>
+      <div className="campaign-builder-header">
+        <h2 className="campaign-builder-title">{campaign.name}</h2>
+        <div className="campaign-builder-meta-chips">
+          {campaign.networks.map((n) => (
+            <span key={n} className={`campaign-builder-network-chip ${n}`}>{n === "meta" ? "Meta Ads" : n === "google" ? "Google Ads" : "TikTok"}</span>
+          ))}
+          <span className="campaign-builder-budget-chip">${Math.round(campaign.dailyBudgetCents / 100)}/day</span>
+          <span className="campaign-builder-variant-chip">{variants.length} ad{variants.length !== 1 ? "s" : ""}</span>
+        </div>
+      </div>
 
       <div className="campaign-builder-layout">
         <aside className="campaign-builder-sidebar card">

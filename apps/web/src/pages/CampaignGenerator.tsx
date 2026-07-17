@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, CatalogSourceResult, Draft, GenerationJob, ProductAnalysis, ProductCatalogItem } from "../api/client.js";
+import { api, CatalogSourceResult, Draft, ProductAnalysis, ProductCatalogItem } from "../api/client.js";
 import {
   ClockIcon as HistoryIcon,
   LightningIcon,
@@ -75,7 +75,7 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
   const workspaceId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
   const [countries, setCountries] = useState<string[]>([]);
-  const [channels, setChannels] = useState<string[]>(["meta"]);
+  const [channels, setChannels] = useState<string[]>(["meta", "google"]);
   const [objective, setObjective] = useState<string[]>([]);
   const [conversionEvent, setConversionEvent] = useState<string[]>([]);
 
@@ -245,15 +245,6 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
     navigate("/profile/ad-platform-connection");
   }
 
-  async function pollGenerationJob(jobId: string, timeoutMs = 120000): Promise<GenerationJob> {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const job = await api.getGenerationJob(jobId);
-      if (job.status === "done" || job.status === "failed") return job;
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
-    throw new Error("Creative generation timed out — check /studio for its status");
-  }
 
   async function handleGenerate() {
     setGenerateError(null);
@@ -272,41 +263,59 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
     }
 
     setGenerating(true);
+    const primaryProduct = products[0];
+    const url = primaryProduct.url ?? `https://example.com/${encodeURIComponent(primaryProduct.name)}`;
+
     try {
-      setGenerationStage("Generating AI strategy…");
-      const strategy = await api.generateStrategy(businessId);
+      const channelLabels = channels.map(c => c === "meta" ? "Meta Ads" : c === "google" ? "Google Ads" : c === "tiktok" ? "TikTok" : c).join(" + ");
+      setGenerationStage(`Researching product for ${channelLabels}…`);
 
-      setGenerationStage("Generating AI creative (image + copy)…");
-      const primaryProduct = products[0];
-      const job = await api.createGenerationJob(workspaceId, {
+      const genResult = await api.generateCampaign({
+        workspaceId,
         businessId,
-        productUrl: primaryProduct.url,
-        prompt: primaryProduct.url ? undefined : primaryProduct.summary,
-        wantVideo: false,
-      });
-      const completedJob = await pollGenerationJob(job.id);
-      if (completedJob.status === "failed") {
-        throw new Error(completedJob.error ?? "Creative generation failed");
-      }
-
-      setGenerationStage("Building campaign…");
-      const campaign = await api.createCampaign({
-        strategyId: strategy.id,
-        name: `Campaign Generator - ${(objective[0] ?? "sales").toUpperCase()}`,
+        url,
+        name: `${(objective[0] ?? "sales").charAt(0).toUpperCase() + (objective[0] ?? "sales").slice(1)} — ${channelLabels}`,
         dailyBudgetCents,
+        channels: channels as any[],
+        objective: objective[0],
+        countries: countries.length > 0 ? countries : undefined,
       });
 
-      if (completedJob.result) {
-        await api.applyCreativeMedia(campaign.id, {
-          imageUrl: completedJob.result.imageUrl,
-          videoUrl: completedJob.result.videoUrl,
-        });
+      if (genResult.status === "completed" && genResult.campaignId) {
+        navigate(`/campaigns/${genResult.campaignId}`);
+        return;
       }
 
-      setGenerationStage("Launching on Meta (starts paused for your review)…");
-      await api.launchCampaign(campaign.id, workspaceId);
+      setGenerationStage("Running AI agents — strategy, audience, creative…");
+      const jobId = genResult.id;
+      const start = Date.now();
+      const timeoutMs = 180000;
 
-      navigate(`/campaigns/${campaign.id}`);
+      while (Date.now() - start < timeoutMs) {
+        await new Promise((r) => setTimeout(r, 3000));
+        try {
+          const progress = await api.getCampaignGenerationProgress(jobId);
+          if (progress.completedSteps.length > 0) {
+            const lastStep = progress.completedSteps[progress.completedSteps.length - 1];
+            setGenerationStage(`${lastStep} (${progress.completedSteps.length}/${progress.total})…`);
+          }
+        } catch { /* progress endpoint optional */ }
+
+        const status = await api.getCampaignGenerationStatus(jobId);
+        if (status.status === "completed") {
+          if (status.campaignId) {
+            navigate(`/campaigns/${status.campaignId}`);
+          } else {
+            navigate("/campaigns");
+          }
+          return;
+        }
+        if (status.status === "failed") {
+          throw new Error(status.error ?? "Campaign generation failed");
+        }
+      }
+
+      throw new Error("Generation timed out — check Campaigns for status");
     } catch (err) {
       setGenerateError(err instanceof Error ? err.message : "Failed to generate campaign");
     } finally {
@@ -325,7 +334,7 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
               <circle cx="12" cy="12" r="10" />
               <polyline points="12 6 12 12 16 14" />
             </svg>
-            <span>UTC+5.5</span>
+            <span>{Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
           </div>
           <div className="header-meta-item">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -342,10 +351,10 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
             </svg>
           </div>
           <div className="header-profile-dropdown">
-            <div className="profile-avatar">SS</div>
+            <div className="profile-avatar">P</div>
             <div className="profile-info">
-              <span className="profile-name">ssrivastava</span>
-              <span className="profile-username">ssrivastava</span>
+              <span className="profile-name">My Account</span>
+              <span className="profile-username">workspace</span>
             </div>
             <span style={{ fontSize: "10px", color: "#9ca3af", marginLeft: "4px" }}>▼</span>
           </div>
@@ -481,9 +490,14 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
       {generateError && <p className="error mb-2">{generateError}</p>}
 
       <div className="gen-footer-actions">
-        {generationStage && <span className="muted-text mr-2">{generationStage}</span>}
+        {generationStage && (
+          <div className="gen-progress-indicator">
+            <span className="gen-progress-spinner" />
+            <span className="gen-progress-text">{generationStage}</span>
+          </div>
+        )}
         <button type="button" className="btn btn-primary" onClick={handleGenerate} disabled={generating}>
-          {generating ? "Generating..." : "Generate Campaign"}
+          {generating ? "Generating..." : `Generate for ${channels.map(c => c === "meta" ? "Meta" : c === "google" ? "Google" : c).join(" + ")}`}
         </button>
       </div>
 

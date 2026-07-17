@@ -50,17 +50,20 @@ export class AudienceAgent implements AIAgent<AudienceAgentOutput> {
 
   async execute(context: ResearchContext): Promise<AgentResult<AudienceAgentOutput>> {
     return runAgentStep(this.name, async () => {
-      const fields = ["audience", "market", "keywords"] as const;
+      const fields = ["audience", "market", "keywords", "competitors"] as const;
       const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
+          url: context.url ?? "",
+          productSummary: context.company?.summary ?? context.website?.description ?? "",
           audience: JSON.stringify(context.audience ?? {}),
           market: JSON.stringify(context.market ?? {}),
           keywords: JSON.stringify(context.keywords ?? {}),
+          competitors: JSON.stringify(context.competitors ?? {}),
         },
         tool: AUDIENCE_AGENT_TOOL,
         schema: audienceAgentSchema,
-        maxTokens: 768,
+        maxTokens: 1500,
         fallback: () => fallback(context),
       });
       return {

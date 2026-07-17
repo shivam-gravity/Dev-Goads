@@ -79,6 +79,7 @@ export class CampaignAgent implements AIAgent<CampaignAgentOutput> {
       const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
+          url: context.url ?? "",
           verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
           website: JSON.stringify(context.website ?? {}),
           company: JSON.stringify(context.company ?? {}),
@@ -89,7 +90,7 @@ export class CampaignAgent implements AIAgent<CampaignAgentOutput> {
         },
         tool: CAMPAIGN_AGENT_TOOL,
         schema: campaignAgentSchema,
-        maxTokens: 1280,
+        maxTokens: 2048,
         fallback: () => fallback(context),
       });
       return {

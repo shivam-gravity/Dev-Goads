@@ -43,15 +43,17 @@ export class KeywordAgent implements AIAgent<KeywordAgentOutput> {
       const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
+          url: context.url ?? "",
           keywords: JSON.stringify(context.keywords ?? {}),
           website: JSON.stringify(context.website ?? {}),
           contentMarketing: JSON.stringify(context.contentMarketing ?? {}),
           backlinkAuthority: JSON.stringify(context.backlinkAuthority ?? {}),
           searchRanking: JSON.stringify(context.searchRanking ?? {}),
+          competitors: JSON.stringify(context.competitors ?? {}),
         },
         tool: KEYWORD_AGENT_TOOL,
         schema: keywordAgentSchema,
-        maxTokens: 640,
+        maxTokens: 1500,
         fallback: () => fallback(context),
       });
       return {

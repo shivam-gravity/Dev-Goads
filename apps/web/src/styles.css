@@ -12184,8 +12184,50 @@ td {
   margin: 16px 0;
 }
 
+.campaign-builder-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
 .campaign-builder-title {
-  margin: 8px 0 16px;
+  margin: 0;
+  font-size: 1.4rem;
+}
+.campaign-builder-meta-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.campaign-builder-network-chip {
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.campaign-builder-network-chip.meta { background: #e8f0fe; color: #1877f2; }
+.campaign-builder-network-chip.google { background: #e6f4ea; color: #34a853; }
+.campaign-builder-network-chip.tiktok { background: #111; color: #fff; }
+.campaign-builder-budget-chip {
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #f3e8fd;
+  color: #7033f5;
+}
+.campaign-builder-variant-chip {
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: #f3f4f6;
+  color: #6b7280;
+  border: 1px solid #e5e7eb;
 }
 
 .campaign-builder-layout {

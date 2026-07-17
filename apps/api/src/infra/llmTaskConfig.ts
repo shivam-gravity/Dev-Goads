@@ -13,43 +13,44 @@ import type { LLMAssignment, LLMProvider } from "./llmRouter.js";
  */
 const DEFAULT_ASSIGNMENT: LLMAssignment = { provider: "groq", model: "llama-3.3-70b-versatile" };
 
-const OLLAMA: LLMAssignment = { provider: "ollama", model: process.env.OLLAMA_MODEL ?? "llama3.2" };
 const GEMINI: LLMAssignment = { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
 const MISTRAL: LLMAssignment = { provider: "mistral", model: process.env.MISTRAL_MODEL ?? "mistral-small-latest" };
 
-// OpenAI and Anthropic/Claude have been removed from this platform entirely (see
-// infra/llmClient.ts's doc comment for what that gives up — hosted web search, image
-// generation). Four providers remain: Ollama for the 20 agents + research-provider
-// structuring steps (high call volume, tolerates Ollama's slower local inference), Gemini
-// and Mistral split across the lower-volume synthesis/narrative steps (Decision Engine +
-// Intelligence Engines) for provider diversity rather than leaning on one free tier alone.
-// Groq is DEFAULT_ASSIGNMENT/fallback-of-last-resort for everything (see llmRouter.ts) —
-// deliberately NOT also assigned as a primary task below, so a Groq fallback is a genuinely
-// different leg from whatever primary provider just failed, not the same one retried.
-const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
-  // 20 marketing agents (agents/agents/*.ts, keyed by promptId)
-  "campaign-agent": OLLAMA,
-  "audience-agent": OLLAMA,
-  "budget-agent": OLLAMA,
-  "competitor-agent": OLLAMA,
-  "channel-placement-agent": OLLAMA,
-  "compliance-agent": OLLAMA,
-  "critic-agent": OLLAMA,
-  "forecasting-kpi-agent": OLLAMA,
-  "funnel-retargeting-agent": OLLAMA,
-  "creative-agent": OLLAMA,
-  "keyword-agent": OLLAMA,
-  "localization-agent": OLLAMA,
-  "market-agent": OLLAMA,
-  "landing-page-agent": OLLAMA,
-  "objection-handling-agent": OLLAMA,
-  "persona-agent": OLLAMA,
-  "pricing-offer-agent": OLLAMA,
-  "seo-content-agent": OLLAMA,
-  "seasonality-timing-agent": OLLAMA,
-  "product-agent": OLLAMA,
+// All 20 agents and research providers now route through Groq (llama-3.3-70b-versatile)
+// as primary — a hosted 70B model that produces genuinely deep analysis, real budget
+// calculations grounded in market data, and publication-quality ad copy. The previous
+// Ollama (llama3.2, 8B local) assignment was too small to generate the depth needed for
+// real campaign recommendations that drive growth. Gemini and Mistral remain on the
+// synthesis/narrative steps for provider diversity. Groq as both primary AND fallback-of-
+// last-resort means a single key exhaustion degrades everything simultaneously — but in
+// practice Groq's free tier (14,400 req/day, 500k tokens/min) has never been hit under
+// real usage, and the fallback chain (groq→mistral→google) catches any isolated failures.
+const GROQ_70B: LLMAssignment = { provider: "groq", model: "llama-3.3-70b-versatile" };
 
-  // Decision Engine steps (research/decision/*.ts, keyed by taskName)
+const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
+  // 20 marketing agents — 70B for deep, genuine analysis
+  "campaign-agent": GROQ_70B,
+  "audience-agent": GROQ_70B,
+  "budget-agent": GROQ_70B,
+  "competitor-agent": GROQ_70B,
+  "channel-placement-agent": GROQ_70B,
+  "compliance-agent": GROQ_70B,
+  "critic-agent": GROQ_70B,
+  "forecasting-kpi-agent": GROQ_70B,
+  "funnel-retargeting-agent": GROQ_70B,
+  "creative-agent": GROQ_70B,
+  "keyword-agent": GROQ_70B,
+  "localization-agent": GROQ_70B,
+  "market-agent": GROQ_70B,
+  "landing-page-agent": GROQ_70B,
+  "objection-handling-agent": GROQ_70B,
+  "persona-agent": GROQ_70B,
+  "pricing-offer-agent": GROQ_70B,
+  "seo-content-agent": GROQ_70B,
+  "seasonality-timing-agent": GROQ_70B,
+  "product-agent": GROQ_70B,
+
+  // Decision Engine steps — Gemini/Mistral for synthesis diversity
   "decision-summary": GEMINI,
   "enrichment-proof-points": GEMINI,
   "enrichment-regional-depth": MISTRAL,
@@ -57,47 +58,50 @@ const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   "recommendation-generation": GEMINI,
   "strategy-synthesis": MISTRAL,
 
-  // Research providers' structuring step (research/providers/*.ts, keyed by provider name;
-  // the web-search step itself has no provider equivalent and always returns empty now —
-  // see infra/llmClient.ts's runWebSearch)
-  "app-store": OLLAMA,
-  audience: OLLAMA,
-  "ad-library": OLLAMA,
-  competitor: OLLAMA,
-  company: OLLAMA,
-  autocomplete: OLLAMA,
-  "backlink-authority": OLLAMA,
-  funding: OLLAMA,
-  "serp-features": OLLAMA,
-  "hiring-signals": OLLAMA,
-  "content-marketing": OLLAMA,
-  "legal-regulatory": OLLAMA,
-  "local-presence": OLLAMA,
-  market: OLLAMA,
-  partnerships: OLLAMA,
-  product: OLLAMA,
-  reddit: OLLAMA,
-  reviews: OLLAMA,
-  seo: OLLAMA,
-  "social-media": OLLAMA,
-  technology: OLLAMA,
-  "video-presence": OLLAMA,
-  website: OLLAMA,
-  navigation: OLLAMA,
-  news: OLLAMA,
-  search: OLLAMA,
-  "search-ranking": OLLAMA,
+  // Research providers — 70B for accurate data extraction
+  "app-store": GROQ_70B,
+  audience: GROQ_70B,
+  "ad-library": GROQ_70B,
+  competitor: GROQ_70B,
+  company: GROQ_70B,
+  autocomplete: GROQ_70B,
+  "backlink-authority": GROQ_70B,
+  funding: GROQ_70B,
+  "serp-features": GROQ_70B,
+  "hiring-signals": GROQ_70B,
+  "content-marketing": GROQ_70B,
+  "legal-regulatory": GROQ_70B,
+  "local-presence": GROQ_70B,
+  market: GROQ_70B,
+  partnerships: GROQ_70B,
+  product: GROQ_70B,
+  reddit: GROQ_70B,
+  reviews: GROQ_70B,
+  seo: GROQ_70B,
+  "social-media": GROQ_70B,
+  technology: GROQ_70B,
+  "video-presence": GROQ_70B,
+  website: GROQ_70B,
+  navigation: GROQ_70B,
+  news: GROQ_70B,
+  search: GROQ_70B,
+  "search-ranking": GROQ_70B,
 
-  // Intelligence Engines + crawl fact extraction
+  // Intelligence Engines + crawl fact extraction — mixed for diversity
   "audience-intelligence": GEMINI,
-  "competitor-intelligence-discovery": MISTRAL,
-  "competitor-intelligence-enrichment": MISTRAL,
+  "competitor-intelligence-discovery": GROQ_70B,
+  "competitor-intelligence-enrichment": GROQ_70B,
   "creative-intelligence": GEMINI,
-  "market-intelligence": MISTRAL,
+  "market-intelligence": GROQ_70B,
   "pricing-intelligence": GEMINI,
-  "landing-page-intelligence": MISTRAL,
+  "landing-page-intelligence": GROQ_70B,
   "crawl-fact-extraction": GEMINI,
-  "ad-creative-analysis": MISTRAL,
+  "ad-creative-analysis": GROQ_70B,
+
+  // Meta Ads keyword validation & interest mining
+  "meta-interest-mining": GROQ_70B,
+  "meta-keyword-validation": GROQ_70B,
+  "budget-market-calibration": GROQ_70B,
 };
 
 const VALID_PROVIDERS = new Set<string>(["groq", "ollama", "mistral", "google"]);

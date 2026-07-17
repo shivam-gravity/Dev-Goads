@@ -49,6 +49,7 @@ export class CreativeAgent implements AIAgent<CreativeAgentOutput> {
       const { data, promptVersion, usedFallback, modelSource } = await callAgentModel({
         promptId: this.promptId,
         vars: {
+          url: context.url ?? "",
           verifiedFacts: verifiedFactsForPrompt(verifiedFacts),
           website: JSON.stringify(context.website ?? {}),
           audience: JSON.stringify(context.audience ?? {}),
@@ -58,7 +59,7 @@ export class CreativeAgent implements AIAgent<CreativeAgentOutput> {
         },
         tool: CREATIVE_AGENT_TOOL,
         schema: creativeAgentSchema,
-        maxTokens: 768,
+        maxTokens: 2048,
         fallback: () => fallback(context),
       });
       return {

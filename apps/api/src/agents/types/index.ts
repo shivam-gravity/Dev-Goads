@@ -104,7 +104,17 @@ export interface CreativeAgentOutput {
 
 export interface BudgetAgentOutput {
   recommendedDailyBudgetCents: number;
+  testBudgetCents?: number;
+  scaleBudgetCents?: number;
+  platformSplit?: { meta: number; google: number; tiktok?: number };
   reasoning: string[];
+  expectedOutcomes?: {
+    dailyClicks?: number;
+    dailyImpressions?: number;
+    estimatedCPACents?: number;
+    estimatedROAS?: number;
+    monthlyConversions?: number;
+  };
   riskFactors: string[];
 }
 

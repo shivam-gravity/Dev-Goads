@@ -57,16 +57,11 @@ const FALLBACK_CHAIN: LLMProvider[] = ["groq", "mistral", "google"];
 const FALLBACK_ENABLED = process.env.LLM_TASK_FALLBACK_ENABLED !== "false";
 
 // Ollama runs CPU-bound local inference on typical dev hardware (no GPU acceleration) —
-// genuinely slower than a hosted API, so it gets a longer budget. Mistral/Gemini are
-// hosted APIs with normal network latency, closer to Groq's own — shorter budget suffices,
-// though observed live 2026-07-16: Mistral generating a large structured-output schema
-// (e.g. AudienceIntelligenceEngine's ~2048-token personas/ICP/customerJourney object) can
-// genuinely take longer than 15s to finish, at which point this soft timeout gives up and
-// tries the next provider while the real Mistral request keeps running unseen in the
-// background (raceWithTimeout doesn't cancel it) — wasted work, and a fallback opportunity
-// lost for no real benefit since Mistral would have eventually returned real data.
+// genuinely slower than a hosted API, so it gets a longer budget. All hosted APIs (Groq,
+// Mistral, Gemini) get a generous 30s budget since structured-output schemas for the 20
+// agents and intelligence engines can genuinely take 15-25s on complex prompts.
 const OLLAMA_TIMEOUT_MS = 30_000;
-const HOSTED_ALT_TIMEOUT_MS = 20_000;
+const HOSTED_ALT_TIMEOUT_MS = 30_000;
 
 function timeoutFor(provider: LLMProvider): number {
   return provider === "ollama" ? OLLAMA_TIMEOUT_MS : HOSTED_ALT_TIMEOUT_MS;
