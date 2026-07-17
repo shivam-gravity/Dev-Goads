@@ -7,6 +7,7 @@ export {
   recordProviderExecution,
   createResearchSnapshot,
   findReusableResearch,
+  isReusableContext,
 } from "./researchJobService.js";
 export type { ResearchJobRecord, ResearchJobWithExecutions, ProviderExecutionRecord } from "./researchJobService.js";
 export {

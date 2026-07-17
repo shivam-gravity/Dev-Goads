@@ -93,6 +93,19 @@ const CAMPAIGN_RESEARCH_CACHE_TTL_MS =
     ? parsedResearchCacheTtl
     : 7 * 24 * 60 * 60 * 1000;
 
+// Cache quality-gate threshold (0-1): a cached ResearchContext whose overallConfidence is below
+// this — OR whose company identity anchor is null — is treated as a cache MISS and re-researched
+// rather than re-served (findReusableResearch / isReusableContext). Guards against re-serving a
+// run degraded by a provider-timeout storm: the 07-16 polluxa.com run scored 0.34 with a null
+// company and was confabulated as "medical device", then re-served on two later cache hits. A
+// non-finite/out-of-range env value falls back to 0.50. The company-null check is a hard
+// invariant inside isReusableContext and is NOT gated by this number.
+const parsedResearchMinConfidence = Number(process.env.CAMPAIGN_RESEARCH_MIN_CONFIDENCE);
+const CAMPAIGN_RESEARCH_MIN_CONFIDENCE =
+  Number.isFinite(parsedResearchMinConfidence) && parsedResearchMinConfidence >= 0 && parsedResearchMinConfidence <= 1
+    ? parsedResearchMinConfidence
+    : 0.5;
+
 export interface RunCampaignGenerationOptions {
   deps?: CampaignGenerationDeps;
   /** When true, skip the research cache and always run fresh Phase-1 research. Sourced from
@@ -170,7 +183,7 @@ export async function runCampaignGenerationPipeline(
     // of paying for Phase 1 again. forceRefresh bypasses the lookup entirely.
     const cachedResearch = options.forceRefresh
       ? null
-      : await deps.findReusableResearch(job.workspaceId, job.businessId, job.url, CAMPAIGN_RESEARCH_CACHE_TTL_MS);
+      : await deps.findReusableResearch(job.workspaceId, job.businessId, job.url, CAMPAIGN_RESEARCH_CACHE_TTL_MS, CAMPAIGN_RESEARCH_MIN_CONFIDENCE);
 
     // Defense-in-depth: never trust the keyed lookup alone. If the reloaded context's OWN
     // identity doesn't match this job, treat it as a miss and run fresh — a mismatch here means
