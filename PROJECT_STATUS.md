@@ -207,22 +207,44 @@ in place forever. **Fixed the persistence side (Bucket A):** the upsert now writ
 a one-time `cleanupStaleCompetitorDomains.ts` cleared the backlog the earlier migration missed —
 **80 stale citation-host domains** cleared from the relational `competitors` table (backup written;
 3 genuine brand-matching domains e.g. `airtable.com` correctly preserved), and the
-`kind:"competitor"` memory gap audited (0 to clear — see the empty-metadata anomaly below).
+`kind:"competitor"` memory gap audited (0 to clear — see the `kind:"competitor"` memory notes below).
 Detection (`domainMismatchesName`) is unit-tested and locked. **Still deferred (Bucket B):** nothing
 resolves a competitor's *actual* homepage — so new competitors now correctly store `domain=null`
 ("unknown") rather than a wrong host, but a real domain is not yet derived. The citation host also
 still mis-grounds enrichment's page crawl (`enrichment.ts` crawls `discovered.url` as if it were the
 competitor's own site).
 
-**Flagged for future investigation: 680 `kind:"competitor"` research-memory rows have empty `{}`
-metadata.** `CompetitorProvider.writeCompetitorMemory` is written to persist
-`metadata: { industry, competitors, competitionIntensity, differentiators }`, but a raw-SQL audit
-this session found **all 680** `kind:"competitor"` rows store a literally empty `{}` object
-(`metadata::text = '{}'`), while every other memory kind (`competitor-profile`, `pricing-analysis`,
-`decision-recommendation`, …) is fully populated. That means discovery.ts's "research-memory"
-source (which reads `metadata.competitors[]` from this kind) gets nothing from these rows regardless.
-Root cause not yet established (a write-path serialization bug, or a MemoryCoordinator dedup/update
-that blanks metadata). Not fixed — documented so it isn't lost.
+**The 680 empty-`{}`-metadata `kind:"competitor"` rows are test pollution, NOT a write bug — plus
+a separate open question about source-3 retrieval.** An earlier draft of this note claimed
+`CompetitorProvider` writes empty metadata; a full write-path trace this session shows that premise
+is **factually wrong**. The production path is correct: `CompetitorProvider.writeCompetitorMemory`
+passes a populated `{ industry, competitors, competitionIntensity, differentiators }`, and
+`MemoryCoordinator.writeMemory` always spreads in a `dedupKey` (`{ ...request.metadata, dedupKey }`),
+so a row written through it is at minimum `{"dedupKey":…}` — a literally-empty `{}` (`meta_len=2`)
+is structurally impossible via the real path. The populated `kind:"competitor-profile"` rows (same
+coordinator, real 1024/1536-dim embeddings, real content) prove the path works.
+
+What the 680 rows actually are: **test fixtures from `researchMemoryStore.test.ts`**, which calls
+`recordMemory()` **directly** (bypassing the coordinator, hence no `dedupKey`) with hardcoded
+`metadata: {}` and 3-dim embeddings. A raw-SQL audit confirms all 680 have `emb_len=3`,
+`*.example.com` sourceUrls, `biz-A`…`biz-halfway` businessIds, and exactly the 7 fixture content
+strings (`"Fresh entry"` ×170, `"Business A/B/C"`, …); **zero** rows resemble a real write
+(non-`example.com` + emb>100). They accumulate because that test has no teardown and runs against a
+shared dev Postgres — daily counts track how often the suite ran. Two distinct takeaways:
+
+- **(a) Test-hygiene issue (the empty-`{}` rows).** Non-isolated `kind:"competitor"` fixtures with
+  no cleanup pollute the shared dev DB (~680 orphan rows). Same class as the LLM-ledger isolation
+  work in `b656a06`. The rows are inert, not poison: `discoverFromResearchMemory` reads
+  `metadata.competitors ?? []` → `[]`, and their 3-dim embeddings can never be retrieved by a real
+  1024-dim query anyway (`cosineSimilarity` returns 0 on length mismatch, then freshness/score
+  filters drop them).
+- **(b) Separate, genuinely-worth-investigating open question.** Independent of the red-herring
+  rows: does *any real* `kind:"competitor"` memory survive retrieval to feed discovery.ts source 3?
+  In this DB there are **0** real (non-fixture) `kind:"competitor"` rows, so that half of source 3
+  contributes nothing here. Leading suspect: the OpenAI→Mistral embedding-dim switch (1536→1024)
+  aging out pre-switch rows via `cosineSimilarity`'s length-mismatch→0 rule. (Source 3 also reads
+  `kind:"competitor-profile"`, which IS populated, so source 3 isn't fully dead.) Not fixed —
+  documented so the real question isn't lost behind the empty-metadata red herring.
 
 **Reference-only infra implementations** awaiting real backends (all behind interfaces):
 `InMemoryEventBus` (tests only; prod uses Redis Streams), `LocalFileObjectStorage` (awaits
