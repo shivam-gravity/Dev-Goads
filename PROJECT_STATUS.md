@@ -173,27 +173,79 @@ session — `creative-agent`, `critic-agent`, `keyword-agent`, `persona-agent`, 
 by the campaign build: `channel-placement`, `competitor`, `forecasting-kpi`, `funnel-retargeting`,
 `landing-page`, `localization`, `market`, `product`, `seo-content`, and `seasonality-timing`.
 
-**Measured scaling bottleneck — Ollama-absent-in-prod → Groq 429s (the #1 operational bottleneck; next fix).**
-`infra/llmTaskConfig.ts` assigns all 20 agents and the 27 research-structuring steps to **Ollama**
-as their primary model, but Ollama is dev-only and **not** in `docker-compose.yml`. In a
+**Measured scaling bottleneck — Ollama-absent-in-prod → Groq 429s (the #1 operational bottleneck;
+URGENT).** `infra/llmTaskConfig.ts` assigns all 20 agents and the 27 research-structuring steps to
+**Ollama** as their primary model, but Ollama is dev-only and **not** in `docker-compose.yml`. In a
 containerized deploy every one of those ~47 per-campaign calls fails Ollama and falls through to
 the shared free-tier **Groq** key, which has no client-side rate limiting (and the
 OpenAI-compatible SDK's default retries amplify the burst) — the root cause of the observed 429
 storms (526 Groq 429s in one job; a live test in this session's suite also hit Groq's
-100k-tokens/day ceiling). This was hit **three separate times today**, including a fresh
+100k-tokens/day ceiling). This was hit **three separate times** on 07-16, including a fresh
 end-to-end validation run — a `forceRefresh` `polluxa.com` generation — where **189+ Groq calls
 failed** (`rate_limit_exceeded`, retry-after ~33m) and degraded the `creative`, `critic`, and
 `persona` agents plus competitor enrichment to their placeholder fallbacks, while the grounded
 agents (`keyword`, `audience`, base `campaign` creatives) still produced real output. The
 placeholder-leak fix (`37749b6`, §5) stops those degraded strings from reaching launch targeting,
-but does not address the root cause. **This is the next fix**: give Ollama a container in
-`docker-compose.yml`, and/or reassign the agents/providers off Ollama, and/or add client-side
-Groq rate-limiting + backoff. Secondary measured ceilings: the global **5M-token/month** LLM
-budget is a hard stop with no fallback (~7–16 campaigns/month at ~300–700k tokens each), and
-Tavily's ~**1,000 free searches/month** (~20 campaigns at ~50 searches each). The research cache
-(§5) relieves all three by not re-spending on repeat generations of the same business. Scraping
-concurrency (4 Playwright pages via `SCRAPER_MAX_CONCURRENT_PAGES`, single scraper-service
-instance) is a latency wall, not the first hard break.
+but does not address the root cause. **Elevated from "next fix" to URGENT** because the 07-17 run
+(below) proved this bottleneck doesn't just cause 429s and placeholder fallbacks — it produces
+**confidently-wrong, user-facing output**: provider timeouts under the storm left the
+company-identity anchor null, and the market provider then confabulated an entire (wrong) industry.
+The fix is unchanged: give Ollama a container in `docker-compose.yml`, and/or reassign the
+agents/providers off Ollama, and/or add client-side Groq rate-limiting + backoff. Secondary
+measured ceilings: the global **5M-token/month** LLM budget is a hard stop with no fallback (~7–16
+campaigns/month at ~300–700k tokens each), and Tavily's ~**1,000 free searches/month** (~20
+campaigns at ~50 searches each). The research cache (§5) relieves all three by not re-spending on
+repeat generations of the same business. Scraping concurrency (4 Playwright pages via
+`SCRAPER_MAX_CONCURRENT_PAGES`, single scraper-service instance) is a latency wall, not the first
+hard break.
+
+**07-17 `polluxa.com` run — a connected set of findings (traced read-only from the DB).** The
+generation classified Polluxa (an AI Enterprise OS / CRM company) as a **"medical device"**
+company (FDA/CE, surgical robots, telemedicine), even though the crawl held the correct
+description. Root-caused end to end — three distinct failures compounded:
+
+1. **The hallucination is a DIRECT symptom of the #1 Ollama/Groq bottleneck above (cause: LLM
+   invention, not mis-retrieval).** In research job `62d2fa37` (created 07-16 05:54 during a
+   timeout storm), the `company` provider **timed out on both attempts (45s each) → `context.company
+   = null`**, along with ~half the providers. With no company-identity anchor, the `market` provider's
+   structuring LLM **confabulated an entire industry**: `context.market` reads "medical equipment
+   market… 8.9% CAGR… FDA/CE… telemedicine," but its **10 citations are 0/10 medical** — they're
+   generic demand-planning / big-data / capital-markets / real-estate "2026 trends" pages. The
+   medical framing appears in **no source**; it's ungrounded schema-filling (status `success`,
+   confidence **0.45**, `usedFallback: false`). It then propagated unchecked: `context.market` →
+   `market-agent` (ran on Groq, `usedFallback: false`, copied "FDA/CE/HIPAA/IoT medical devices"
+   verbatim) → decision-engine SWOT ("cybersecurity risks of connected devices") → the strategy
+   summary. **This is why the Groq fix is urgent, not merely next** — the same timeout storm that
+   produces 429s also produces confidently-wrong industry classification in user-facing output. NOT
+   the "polluxa vs pollux" class: no source misidentified the company; there was no wrong entity
+   retrieved, only invention over generic sources.
+
+2. **NEW gap — the cache amplified it (cross-ref §5 research caching).** This degraded 07-16 05:54
+   research was frozen into `ResearchContext` and **re-served on the 07-17 run as a cache hit**
+   (`findReusableResearch`, within the 7-day TTL), so a fabrication produced during a timeout storm
+   persisted a day past the conditions that created it — and, per cache-hit design, fact-extraction
+   was skipped too. **The caching layer has no quality gate: it reuses ANY `status:"completed"`
+   research regardless of grounding confidence or degradation.** The "skip reusing a heavily-degraded
+   run" gate noted-but-deferred in the original caching plan is now justified — cache-eligibility
+   should require a minimum grounding confidence **AND** presence of the company-identity anchor
+   (`context.company != null`), so a null-identity/low-confidence run like this one is re-researched
+   rather than re-served.
+
+3. **NEW gap — no identity revalidation, and the conflict signal is ignored.** A fabricated
+   `context.market` is never cross-checked against the **correct** `context.website` identity (the
+   real PLM/CRM/ERP crawl). The pipeline even **self-detected the incoherence** — `context.metadata`
+   logged a **high-severity market↔competitor conflict** — but nothing gates on that conflict signal,
+   nor on the market provider's 0.45 confidence. Both were surfaced and then ignored; the wrong
+   framing flowed straight through to the campaign.
+
+4. **Competitors — a separate, already-known failure (not the hallucination).** The same run's
+   competitors — "River Island, Storylane, Arcade, Loom, Vidyard, ngram" (retail + demo-tool
+   companies, not Polluxa's real rivals) — came from `context.competitors` (`dataSource:
+   "direct-search + alternatives-search"`, 30 real citations). These are **genuine mis-retrieval**:
+   "alternatives to polluxa" searches surfaced retail/demo-tool roundups that the extractor accepted.
+   This is the **competitor-discovery relevance gap** already tracked above (same family as the
+   citation-host `domain` issue), landing in the same run as the market hallucination but independent
+   of it.
 
 **Competitor `domain` populated from a citation article's host, not the competitor's own site
 (Bucket A cleaned; Bucket B deferred).** The earlier fabricated-competitor-URL guard (§5) stopped
@@ -314,7 +366,11 @@ exclusively) and the consolidation of **five deleted `docs/` architecture files*
   (`context.businessId`/`url` must match the job, with a tripwire warning) prevents serving
   another business's research. Adds pipeline unit tests (a–f) and a DB-backed `findReusableResearch`
   test (TTL boundary / status filter / null-context / cross-business+workspace isolation /
-  newest-first), in `apps/api/src/test/findReusableResearch.test.ts`.
+  newest-first), in `apps/api/src/test/findReusableResearch.test.ts`. **Known gap (see §4, 07-17
+  run finding #2): no quality gate** — it reuses any `status:"completed"` research regardless of
+  grounding confidence or degradation, so a run produced during a Groq timeout storm (null
+  company-identity, confabulated market) can be cached and re-served. A confidence-/identity-anchor
+  eligibility gate is the justified-but-deferred follow-up.
 - **Five more agents wired into the campaign.** `creative`, `critic`, `keyword`, `persona`, and
   `audience` agent outputs are now consumed by `createStrategyFromAgentResults`/`strategyEngine`
   (previously computed-but-unused), taking the consumed count from 5 → 10 (see §4).
