@@ -1,5 +1,3 @@
-import type { SavedAudience } from "../audience/savedAudienceService.js";
-import { listSavedAudiences } from "../audience/savedAudienceService.js";
 import { logger } from "../logger/logger.js";
 
 const GRAPH_VERSION = "v22.0";
@@ -12,8 +10,19 @@ export interface MetaTargetingSpec {
   geo_locations: { countries: string[] };
   flexible_spec?: { interests: { id: string }[] }[];
   exclusions?: { interests: { id: string }[] };
-  // Passed as opaque JSON into AdAdapter's Record<string, unknown> targeting param.
   [key: string]: unknown;
+}
+
+export interface SavedAudience {
+  id: string;
+  workspaceId: string;
+  name: string;
+  ageMin: number;
+  ageMax: number;
+  gender: "all" | "male" | "female";
+  locations: string[];
+  interests: string[];
+  exclusions: string[];
 }
 
 const GENDER_CODES: Record<SavedAudience["gender"], number[] | undefined> = {
@@ -28,7 +37,7 @@ const GENDER_CODES: Record<SavedAudience["gender"], number[] | undefined> = {
  * best-effort: an interest with no match is dropped (logged) rather than failing the
  * whole campaign launch over one unresolvable term.
  */
-async function resolveInterests(accessToken: string, freeTextInterests: string[]): Promise<{ id: string; name: string }[]> {
+export async function resolveInterests(accessToken: string, freeTextInterests: string[]): Promise<{ id: string; name: string }[]> {
   const resolved: { id: string; name: string }[] = [];
   for (const term of freeTextInterests) {
     try {
@@ -46,13 +55,6 @@ async function resolveInterests(accessToken: string, freeTextInterests: string[]
   return resolved;
 }
 
-/**
- * Maps a SavedAudience (age/gender/location/free-text interests) into a Meta Ad Set
- * `targeting` spec. Pass `accessToken: null` for mock/offline mode (no connected ad
- * account yet) — interest resolution requires a live Graph API call, so it's skipped
- * and the spec falls back to age/gender/geo only, same reduced-fidelity mock pattern
- * every other adapter in this codebase already uses.
- */
 export async function buildMetaTargetingSpec(accessToken: string | null, audience: SavedAudience): Promise<MetaTargetingSpec> {
   const [includeInterests, excludeInterests] = accessToken
     ? await Promise.all([
@@ -67,8 +69,6 @@ export async function buildMetaTargetingSpec(accessToken: string | null, audienc
     genders: GENDER_CODES[audience.gender],
     geo_locations: { countries: audience.locations.length ? audience.locations : ["US"] },
   };
-  // flexible_spec/exclusions only accept {"id": "..."} — Meta rejects extra fields like
-  // `name` on an interest object, so the search result's name is dropped here.
   if (includeInterests.length) spec.flexible_spec = [{ interests: includeInterests.map((i) => ({ id: i.id })) }];
   if (excludeInterests.length) spec.exclusions = { interests: excludeInterests.map((i) => ({ id: i.id })) };
   return spec;
@@ -80,7 +80,6 @@ export interface ReachEstimate {
   source: "meta" | "heuristic";
 }
 
-/** Real reach estimate via Meta's delivery_estimate endpoint, once the workspace has a connected ad account. */
 export async function fetchMetaReachEstimate(accessToken: string, adAccountId: string, targeting: MetaTargetingSpec): Promise<ReachEstimate> {
   const url = `${GRAPH_BASE}/act_${adAccountId}/delivery_estimate?${new URLSearchParams({
     targeting_spec: JSON.stringify(targeting),
@@ -94,101 +93,6 @@ export async function fetchMetaReachEstimate(accessToken: string, adAccountId: s
   return { usersLowerBound: row.estimate_mau_lower_bound, usersUpperBound: row.estimate_mau_upper_bound, source: "meta" };
 }
 
-const BROAD_DEFAULT_TARGETING: MetaTargetingSpec = {
-  age_min: 18,
-  age_max: 65,
-  geo_locations: { countries: ["US"] },
-};
-
-/**
- * Strategy-generated variants carry a free-text `audienceName` (e.g. "Lookalike of
- * existing customers") that isn't structurally linked to a SavedAudience record — the
- * strategy engine and the audience library evolved separately. Best-effort bridge: if a
- * SavedAudience in this workspace happens to share the name, use its real targeting;
- * otherwise fall back to a broad default rather than failing the whole campaign launch.
- */
-export async function resolveAudienceTargetingForWorkspace(
-  workspaceId: string,
-  audienceName: string | undefined,
-  accessToken: string | null
-): Promise<MetaTargetingSpec> {
-  if (audienceName) {
-    const audiences = await listSavedAudiences(workspaceId);
-    const match = audiences.find((a) => a.name.toLowerCase() === audienceName.toLowerCase());
-    if (match) return buildMetaTargetingSpec(accessToken, match);
-    logger.info(`No SavedAudience matches strategy audience "${audienceName}" — using broad default targeting`);
-  }
-  return BROAD_DEFAULT_TARGETING;
-}
-
-// Bounds the serial Graph interest-search calls per ad set — persona.interests across up to 6
-// personas plus audience.interestTags can total ~70 terms; only the first N (after case-insensitive
-// string-dedupe) are resolved. 10 mirrors a sensible Meta flexible_spec interest count and keeps
-// targeting from over-broadening.
-const MAX_AGENT_INTEREST_TERMS = 10;
-
-type InterestResolver = (accessToken: string, terms: string[]) => Promise<{ id: string; name: string }[]>;
-
-function dedupeStringsCapped(values: string[], cap: number): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const value of values) {
-    const trimmed = value.trim();
-    if (!trimmed) continue;
-    const key = trimmed.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(trimmed);
-    if (out.length >= cap) break;
-  }
-  return out;
-}
-
-/**
- * Additively merges agent-derived free-text interests (persona.interests + audience.interestTags)
- * into an existing Meta targeting spec's flexible_spec, resolving them to real Meta interest IDs via
- * the same best-effort search resolver buildMetaTargetingSpec already uses. Returns the SAME spec
- * reference unchanged when there are no agent interests, in mock/offline mode (no accessToken —
- * resolution needs a live Graph call), or when nothing resolves. De-dupes by RESOLVED interest id
- * (not free text), so two terms that resolve to the same Meta interest — or an agent term matching an
- * id already present from the SavedAudience — collapse to one. Best-effort: unresolvable terms, a
- * search failure, or a throwing resolver are dropped/logged and never fail the launch. Google-only
- * paths never call this. `resolve` is injectable for deterministic testing (defaults to the real one).
- */
-export async function withAgentInterests(
-  spec: MetaTargetingSpec,
-  agentInterests: string[] | undefined,
-  accessToken: string | null,
-  resolve: InterestResolver = resolveInterests
-): Promise<MetaTargetingSpec> {
-  const terms = dedupeStringsCapped(agentInterests ?? [], MAX_AGENT_INTEREST_TERMS);
-  if (!terms.length || !accessToken) return spec;
-
-  let resolved: { id: string; name: string }[];
-  try {
-    resolved = await resolve(accessToken, terms);
-  } catch (err) {
-    logger.warn("withAgentInterests: interest resolution failed — leaving the targeting spec unchanged", err);
-    return spec;
-  }
-  if (!resolved.length) return spec;
-
-  // Existing (already-resolved) SavedAudience interest ids in the spec, unioned with the agent's
-  // resolved ids and de-duped by id — this is where "two different terms -> same id" collapses.
-  const existingIds = (spec.flexible_spec ?? []).flatMap((group) => group.interests.map((i) => i.id));
-  const seen = new Set<string>();
-  const mergedIds: string[] = [];
-  for (const id of [...existingIds, ...resolved.map((r) => r.id)]) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    mergedIds.push(id);
-  }
-  if (!mergedIds.length) return spec;
-
-  return { ...spec, flexible_spec: [{ interests: mergedIds.map((id) => ({ id })) }] };
-}
-
-/** Heuristic fallback when no Meta ad account is connected yet — clearly labeled as an estimate, not a real query. */
 export function estimateReachHeuristic(audience: SavedAudience): ReachEstimate {
   const ageSpan = Math.max(1, audience.ageMax - audience.ageMin);
   const specificityPenalty = audience.interests.length * 1.5 + audience.exclusions.length * 1 + (audience.locations.length || 1) * 0.5;
