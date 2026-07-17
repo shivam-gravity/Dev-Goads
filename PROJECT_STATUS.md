@@ -220,16 +220,24 @@ description. Root-caused end to end — three distinct failures compounded:
    the "polluxa vs pollux" class: no source misidentified the company; there was no wrong entity
    retrieved, only invention over generic sources.
 
-2. **NEW gap — the cache amplified it (cross-ref §5 research caching).** This degraded 07-16 05:54
-   research was frozen into `ResearchContext` and **re-served on the 07-17 run as a cache hit**
-   (`findReusableResearch`, within the 7-day TTL), so a fabrication produced during a timeout storm
-   persisted a day past the conditions that created it — and, per cache-hit design, fact-extraction
-   was skipped too. **The caching layer has no quality gate: it reuses ANY `status:"completed"`
-   research regardless of grounding confidence or degradation.** The "skip reusing a heavily-degraded
-   run" gate noted-but-deferred in the original caching plan is now justified — cache-eligibility
-   should require a minimum grounding confidence **AND** presence of the company-identity anchor
-   (`context.company != null`), so a null-identity/low-confidence run like this one is re-researched
-   rather than re-served.
+2. **Cache amplified it — READ-GATE NOW SHIPPED (cross-ref §5 research caching).** This degraded
+   07-16 05:54 research was frozen into `ResearchContext` and **re-served on both 07-17 runs as cache
+   hits** (`findReusableResearch`, within the 7-day TTL), so a fabrication produced during a timeout
+   storm persisted a day past the conditions that created it (and, per cache-hit design,
+   fact-extraction was skipped too). The caching layer previously reused ANY `status:"completed"`
+   research regardless of grounding. **Fixed (read-side):** `findReusableResearch` now applies a
+   quality-gate (`isReusableContext`) that rejects a candidate — treating it as a cache miss and
+   re-researching — when `context.company == null` (hard invariant: the missing identity anchor is
+   what let the market provider confabulate) **OR** `context.metadata.overallConfidence` is below a
+   threshold (env `CAMPAIGN_RESEARCH_MIN_CONFIDENCE`, default **0.50**; boundary inclusive). The
+   poisoned run (`company=null`, 0.34) is now rejected, and the gate also filters the degraded
+   historical backlog (of 22 completed `polluxa.com` research runs, ~13 score below 0.50 and are
+   skipped; the newest passing run, 0.64, is served instead). The one poisoned entry `62d2fa37` was
+   also explicitly invalidated (`status="invalidated"`, `invalidateResearchJob.ts`) as belt-and-
+   suspenders. **Deferred follow-up (needs a migration):** a WRITE-side `cacheable` boolean flag set
+   at `markResearchJobCompleted` (degraded → `cacheable=false`) so the gate is evaluated once at
+   write time rather than on every read — redundant with the read-gate for correctness, so deferred;
+   the read-gate is the complete fix for re-serving.
 
 3. **NEW gap — no identity revalidation, and the conflict signal is ignored.** A fabricated
    `context.market` is never cross-checked against the **correct** `context.website` identity (the
@@ -366,11 +374,15 @@ exclusively) and the consolidation of **five deleted `docs/` architecture files*
   (`context.businessId`/`url` must match the job, with a tripwire warning) prevents serving
   another business's research. Adds pipeline unit tests (a–f) and a DB-backed `findReusableResearch`
   test (TTL boundary / status filter / null-context / cross-business+workspace isolation /
-  newest-first), in `apps/api/src/test/findReusableResearch.test.ts`. **Known gap (see §4, 07-17
-  run finding #2): no quality gate** — it reuses any `status:"completed"` research regardless of
-  grounding confidence or degradation, so a run produced during a Groq timeout storm (null
-  company-identity, confabulated market) can be cached and re-served. A confidence-/identity-anchor
-  eligibility gate is the justified-but-deferred follow-up.
+  newest-first), in `apps/api/src/test/findReusableResearch.test.ts`. **Quality-gate now shipped
+  (read-side; see §4, 07-17 run finding #2):** `findReusableResearch` takes a `minConfidence` param
+  (env `CAMPAIGN_RESEARCH_MIN_CONFIDENCE`, default 0.50) and rejects a candidate via
+  `isReusableContext` — cache miss → re-research — when `context.company == null` (hard invariant)
+  OR `overallConfidence < minConfidence`, so a run degraded by a Groq/Ollama timeout storm is no
+  longer re-served. `isReusableContext` is unit-tested (null-company / low-confidence / healthy /
+  boundary / param-driven) plus DB-backed wiring tests. **Deferred (needs a migration):** a
+  WRITE-side `cacheable` flag at `markResearchJobCompleted` so the gate is evaluated once at write
+  time rather than on every read.
 - **Five more agents wired into the campaign.** `creative`, `critic`, `keyword`, `persona`, and
   `audience` agent outputs are now consumed by `createStrategyFromAgentResults`/`strategyEngine`
   (previously computed-but-unused), taking the consumed count from 5 → 10 (see §4).

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../db/prisma.js";
+import { logger } from "../../modules/logger/logger.js";
 import type { ProviderResult, ResearchContext, ResearchJobStatus } from "../types/index.js";
 
 export interface ResearchJobRecord {
@@ -159,18 +160,49 @@ export async function createResearchSnapshot(jobId: string, context: ResearchCon
 }
 
 /**
+ * Cache quality-gate: is a persisted ResearchContext trustworthy enough to REUSE, or was it
+ * produced by a degraded run that should be re-researched rather than re-served? Pure logic on
+ * the context (no DB, no LLM), so it's deterministically unit-testable. Two independent checks:
+ *
+ *   - company identity anchor: `context.company == null` means the company provider produced
+ *     nothing (e.g. it timed out under a Groq/Ollama storm). This is a HARD invariant, not
+ *     tunable — a run with no company identity is exactly what let the market provider
+ *     confabulate a wrong industry (the 07-16 `polluxa.com` "medical device" hallucination that
+ *     two later cache hits re-served). `== null` catches both null and undefined.
+ *   - grounding confidence: `context.metadata.overallConfidence` (0-1, failed providers count
+ *     as 0) below `minConfidence` means too little of the research was really grounded. The
+ *     poisoned run scored 0.34; a healthy run where most providers succeed sits well above the
+ *     0.50 default. Boundary is inclusive: exactly `minConfidence` passes, just-below fails.
+ *
+ * Returns true only if BOTH pass. Kept separate from the DB lookup so both the predicate and its
+ * wiring into findReusableResearch can be tested independently.
+ */
+export function isReusableContext(context: ResearchContext, minConfidence: number): boolean {
+  if (context.company == null) return false;
+  const overallConfidence = context.metadata?.overallConfidence ?? 0;
+  return overallConfidence >= minConfidence;
+}
+
+/**
  * A recently-completed research job for this exact (workspace, business, url) whose full
  * persisted ResearchContext can be reused instead of re-running Phase 1's 27-provider fan-out.
  * Only status "completed" jobs with a non-null context inside `ttlMs` are eligible; newest
  * first. Keyed on businessId (not url alone) so one business can never match another's row —
  * the caller still does a defense-in-depth identity re-check on the returned context (see
  * campaignGenerationPipeline); this only performs the keyed lookup.
+ *
+ * `minConfidence` is passed in (like `ttlMs`), not read from env here, so env parsing stays in
+ * the pipeline. A row that matches the key but fails the quality-gate (isReusableContext) is
+ * treated as a cache MISS — the caller then runs fresh research rather than re-serving degraded
+ * output. This is the READ-side gate; a WRITE-side `cacheable` flag is a deferred follow-up
+ * (see PROJECT_STATUS §4/§5) since it would need a schema migration.
  */
 export async function findReusableResearch(
   workspaceId: string,
   businessId: string,
   url: string,
-  ttlMs: number
+  ttlMs: number,
+  minConfidence: number
 ): Promise<{ researchJobId: string; context: ResearchContext } | null> {
   const row = await prisma.researchJob.findFirst({
     where: {
@@ -185,5 +217,16 @@ export async function findReusableResearch(
     orderBy: { completedAt: "desc" },
   });
   if (!row || row.context == null) return null;
-  return { researchJobId: row.id, context: row.context as unknown as ResearchContext };
+
+  const context = row.context as unknown as ResearchContext;
+  if (!isReusableContext(context, minConfidence)) {
+    // Tripwire, mirroring the pipeline's identity-mismatch warning: a keyed row exists but is
+    // too degraded to reuse, so we're deliberately taking a cache miss and re-researching.
+    logger.warn(
+      `Research cache candidate ${row.id} rejected by quality-gate (company=${context.company == null ? "null" : "present"}, ` +
+        `overallConfidence=${context.metadata?.overallConfidence ?? 0}, minConfidence=${minConfidence}) — running fresh research`
+    );
+    return null;
+  }
+  return { researchJobId: row.id, context };
 }
