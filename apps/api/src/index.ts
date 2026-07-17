@@ -1,12 +1,23 @@
 import "dotenv/config";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express, { type Request } from "express";
 import cors from "cors";
 import { router, authEntryRouter } from "./gateway/router.js";
 import { metaOAuthRoutes } from "./gateway/metaOAuthRoutes.js";
 import { googleOAuthRoutes } from "./gateway/googleOAuthRoutes.js";
+import { tiktokOAuthRoutes } from "./gateway/tiktokOAuthRoutes.js";
+import { shopifyOAuthRoutes } from "./gateway/shopifyOAuthRoutes.js";
+import { shopifyWebhookRoutes } from "./gateway/shopifyWebhookRoutes.js";
+import { metaLeadWebhookRoutes } from "./gateway/metaLeadWebhookRoutes.js";
+import { adsDataRoutes } from "./gateway/adsDataRoutes.js";
+import { sseStreamRoutes } from "./gateway/sseStreamRoutes.js";
 import { crmInternalAuth } from "./gateway/middleware/crmInternalAuth.js";
 import { apiRateLimiter } from "./gateway/middleware/rateLimit.js";
 import { requireAuth } from "./gateway/middleware/auth.js";
+import { registerEventHandlers } from "./infra/eventHandlers.js";
+import { attachWebSocketServer } from "./infra/websocketServer.js";
+import { startRealtimeBridge } from "./infra/realtimeBridge.js";
 import { prisma } from "./db/prisma.js";
 import { redisClient } from "./infra/redisClient.js";
 import { logger } from "./modules/logger/logger.js";
@@ -15,13 +26,24 @@ import { initErrorTracking, registerCrashReporting, captureError } from "./infra
 initErrorTracking("polluxa-api");
 registerCrashReporting("polluxa-api");
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT ?? 4000);
 
+registerEventHandlers();
+
 app.use(cors());
+// Stashes the raw request body before JSON-parsing it, so the Meta leadgen webhook
+// route (below) can verify its X-Hub-Signature-256 HMAC over the exact bytes Meta
+// sent — re-serializing the parsed body would not reliably reproduce the same bytes.
 app.use(express.json({ verify: (req: Request & { rawBody?: Buffer }, _res, buf) => { req.rawBody = buf; } }));
 app.use(apiRateLimiter);
 
+// Real connectivity checks, not a static "ok" — a gateway that can't reach Postgres or
+// Redis is not actually healthy even though the Express process itself is up, and a
+// load balancer/orchestrator relying on this endpoint needs to know that to route traffic
+// (or restart the pod) accordingly. Each check is independent so one down dependency's
+// failure doesn't throw before the other is checked.
 app.get("/health", async (_req, res) => {
   const checks: Record<string, "ok" | "error"> = { postgres: "ok", redis: "ok" };
 
@@ -43,12 +65,30 @@ app.get("/health", async (_req, res) => {
   res.status(healthy ? 200 : 503).json({ status: healthy ? "ok" : "degraded", checks });
 });
 
-// OAuth callbacks (unauthenticated — platform redirects carry no bearer token)
+// Serves blobs written via LocalFileObjectStorage (src/infra/objectStorage.ts) — a real
+// S3/GCS/R2-backed implementation drops this static route in favor of signed URLs.
+app.use("/objects", express.static(path.resolve(__dirname, "../data/objects")));
+
+// Unauthenticated — Facebook's/Google's/TikTok's OAuth redirects carry no bearer token (see the respective routes files).
 app.use("/api/integrations/meta/oauth", metaOAuthRoutes);
 app.use("/api/integrations/google/oauth", googleOAuthRoutes);
+app.use("/api/integrations/tiktok/oauth", tiktokOAuthRoutes);
+app.use("/api/integrations/shopify/oauth", shopifyOAuthRoutes);
 
-// Register/login: no bearer token yet
+// Unauthenticated at the HTTP layer by necessity (Meta/Shopify call these directly) —
+// authenticity is instead verified per-request via each platform's own HMAC scheme (see
+// the respective route files).
+app.use("/api/webhooks/meta", metaLeadWebhookRoutes);
+app.use("/api/webhooks/shopify", shopifyWebhookRoutes);
+
+// Server-to-server only: sales_tech_backend (the CRM) proxies its browser requests here
+// with a shared secret (see crmInternalAuth) — never called directly from a browser.
+app.use("/api/crm", crmInternalAuth, adsDataRoutes);
+
+// Register/login/google: no bearer token exists yet when calling these, so they're
+// mounted ahead of requireAuth (falls through to the gated router below if unmatched).
 app.use("/api", authEntryRouter);
+app.use("/api", requireAuth, sseStreamRoutes);
 app.use("/api", requireAuth, router);
 
 app.use((_req, res) => {
@@ -62,8 +102,46 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
 
 const server = app.listen(PORT, () => {
   console.log(`Polluxa API gateway listening on http://localhost:${PORT}`);
+  warnIfRunningEveryAdNetworkInMockMode();
 });
 
+// Real-time layer: WebSocket server on the same HTTP port, plus Redis Pub/Sub
+// bridge that forwards worker-emitted events to connected browsers.
+attachWebSocketServer(server);
+const stopRealtimeBridge = startRealtimeBridge();
+
+/**
+ * A workspace "connecting" Meta/Google/TikTok when no app credentials are registered
+ * completes a clearly-labeled mock connection (see metaOAuth.ts/googleOAuth.ts/
+ * tiktokOAuth.ts's own mock-connect fallbacks) rather than erroring — reasonable for local
+ * dev/demo, but a real production deployment running with every network unconfigured means
+ * no ad account a user "connects" is ever real, which is worth a loud operator-facing
+ * signal instead of only being discoverable by a confused user noticing "(mock)" in an
+ * account name. Not a hard error — an operator may genuinely intend a mock-only demo
+ * deployment — just a warning that can't be missed in the startup log.
+ */
+function warnIfRunningEveryAdNetworkInMockMode(): void {
+  if (process.env.NODE_ENV !== "production") return;
+  const hasAnyRealAdNetworkApp = Boolean(
+    (process.env.META_APP_ID && process.env.META_APP_SECRET) ||
+    (process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET) ||
+    (process.env.TIKTOK_APP_ID && process.env.TIKTOK_APP_SECRET)
+  );
+  if (!hasAnyRealAdNetworkApp) {
+    logger.warn(
+      "STARTUP WARNING: NODE_ENV=production but no Meta/Google/TikTok app credentials are configured — " +
+      "every workspace's ad-network 'Connect' button will complete a mock connection, not a real one. " +
+      "Set META_APP_ID/META_APP_SECRET, GOOGLE_OAUTH_CLIENT_ID/GOOGLE_OAUTH_CLIENT_SECRET, and/or " +
+      "TIKTOK_APP_ID/TIKTOK_APP_SECRET if real ad-account connections are expected in this deployment."
+    );
+  }
+}
+
+// Stop accepting new connections and let in-flight requests finish before exiting —
+// without this, a deploy/restart (SIGTERM) or Ctrl+C (SIGINT) kills requests mid-flight,
+// which for this gateway can mean a client never learns whether a campaign launch or
+// research job it just triggered actually started. A second signal (or the timeout)
+// still forces the process down rather than hanging forever on one stuck connection.
 const SHUTDOWN_FORCE_EXIT_MS = 10_000;
 let shuttingDown = false;
 
@@ -81,6 +159,7 @@ function gracefulShutdown(signal: string) {
   }, SHUTDOWN_FORCE_EXIT_MS);
   forceExit.unref();
 
+  stopRealtimeBridge();
   server.close((err) => {
     if (err) logger.error("Error while closing HTTP server", err);
     process.exit(err ? 1 : 0);

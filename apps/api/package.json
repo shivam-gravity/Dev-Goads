@@ -48,6 +48,7 @@
     "@opentelemetry/semantic-conventions": "^1.43.0",
     "@prisma/client": "^6.19.3",
     "@sentry/node": "^10.65.0",
+    "@types/ws": "^8.18.1",
     "bullmq": "^5.34.5",
     "cheerio": "^1.2.0",
     "cors": "^2.8.5",
@@ -58,6 +59,7 @@
     "jsonwebtoken": "^9.0.2",
     "openai": "^6.45.0",
     "undici": "^7.28.0",
+    "ws": "^8.21.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

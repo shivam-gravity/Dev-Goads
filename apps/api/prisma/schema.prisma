@@ -909,6 +909,30 @@ model AdCreativeAnalysis {
   @@map("ad_creative_analyses")
 }
 
+// ── Wallet / Prepaid Balance ──
+// One row per workspace (id = workspaceId, upserted) holding the current balance
+// and metadata; WalletTransaction is the append-only ledger of every credit/debit.
+
+model Wallet {
+  id          String   @id // = workspaceId
+  workspaceId String   @unique
+  data        Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id          String   @id
+  workspaceId String
+  data        Json
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("wallet_transactions")
+}
+
 // The 6 ranked, fully-specified campaign packages the Campaign Recommendation Engine
 // (research/campaign-recommendation/CampaignRecommendationEngine.ts) assembles from
 // already-computed strategies/simulations + real agent creatives + the landing-page

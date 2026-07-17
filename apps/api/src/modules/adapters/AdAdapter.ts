@@ -1,0 +1,112 @@
+import type { AdCreative, AdNetwork, CampaignVariant, PerformanceMetric } from "../../types/index.js";
+
+export interface LaunchVariantInput {
+  campaignId: string;
+  variantId: string;
+  creative: AdCreative;
+  dailyBudgetCents: number;
+  audience?: string;
+}
+
+export interface LaunchVariantResult {
+  externalId: string;
+  status: CampaignVariant["status"];
+}
+
+export interface SetBudgetInput {
+  externalId: string;
+  dailyBudgetCents: number;
+}
+
+export interface AdAdapter {
+  readonly network: AdNetwork;
+  launchVariant(input: LaunchVariantInput): Promise<LaunchVariantResult>;
+  pauseVariant(externalId: string): Promise<void>;
+  activateVariant(externalId: string): Promise<void>;
+  setBudget(input: SetBudgetInput): Promise<void>;
+  fetchInsights(externalId: string, date: string): Promise<Omit<PerformanceMetric, "id" | "campaignId" | "variantId" | "network" | "date">>;
+}
+
+/**
+ * Credentials for a workspace's connected Meta ad account (see integrationService.getMetaCredentials).
+ * Optional on every hierarchy method below: when omitted, metaAdapter falls back to the
+ * global META_ACCESS_TOKEN/META_AD_ACCOUNT_ID env vars, then to mock IDs if neither is set —
+ * same three-tier fallback the rest of the adapters already use.
+ */
+export interface MetaCredentials {
+  accessToken: string;
+  adAccountId: string;
+  pageId?: string;
+  /** Ad account's billing currency — Meta's minor-unit conversion varies by currency (see metaAdapter's divisor table). */
+  currency: string;
+}
+
+export interface CampaignContainerInput {
+  name: string;
+  /** Meta: campaign objective enum (e.g. OUTCOME_TRAFFIC). Google: ignored, channel type is fixed. */
+  objective: string;
+  /** Google only: budget is campaign-level there (shared across ad groups), unlike Meta's ad-set budgets. */
+  dailyBudgetCents?: number;
+  /** Google only: campaign-level geo/language criteria (from the first audience group — see googleTargetingMapper). */
+  targeting?: Record<string, unknown>;
+  /** Google only, set by the campaign builder — full resource name (customers/{id}/conversionActions/{id}) attached as a CampaignConversionGoal after creation. Best-effort: Search-campaign conversion-goal mutations have real API constraints, so a failure here doesn't fail the whole launch. */
+  conversionActionResourceName?: string;
+}
+
+export interface AdSetContainerInput {
+  campaignExternalId: string;
+  name: string;
+  /** Meta: this ad set's daily budget. Google: informational only — budget already set on the campaign. */
+  dailyBudgetCents: number;
+  targeting: Record<string, unknown>;
+  /** Meta only, set by the campaign builder — conversion event tied to a Pixel. Switches optimization_goal to OFFSITE_CONVERSIONS when present. */
+  promotedObject?: { pixelId: string; customEventType: string };
+  /** Meta only, ISO date strings from the campaign builder's Schedule field. */
+  startTime?: string;
+  endTime?: string;
+  /** Meta only — maps to targeting_automation.advantage_audience. */
+  advantagePlus?: boolean;
+  /** Frequency cap: max impressions per user within a time window. */
+  frequencyCap?: {
+    maxImpressions: number;
+    intervalDays: number; // 1 = daily, 7 = weekly
+  };
+  /** Campaign-level objective — used to derive ad-set optimization_goal. */
+  objective?: string;
+}
+
+export interface CreativeUploadInput {
+  imageUrl?: string;
+  videoUrl?: string;
+}
+
+export interface CreativeUploadResult {
+  imageHash?: string;
+  videoId?: string;
+}
+
+export interface HierarchyAdInput {
+  adSetExternalId: string;
+  name: string;
+  creative: AdCreative;
+  landingPageUrl: string;
+  imageHash?: string;
+  videoId?: string;
+  /** Meta only, set by the campaign builder — publishes the ad to this Instagram business account alongside the Page. */
+  instagramActorId?: string;
+}
+
+/**
+ * Optional real object-graph path (Campaign -> Ad Set/Ad Group -> Creative -> Ad) for
+ * networks that support it. metaAdapter and googleAdapter implement this; tiktok stays on
+ * the flat launchVariant path above until it gets the same depth in a follow-up.
+ * Credentials are typed `unknown` here (each concrete adapter narrows to its own shape —
+ * MetaCredentials vs GoogleAdsCredentials — since method-shorthand params are checked
+ * bivariantly, this is a safe way to share one interface across differently-shaped adapters).
+ */
+export interface HierarchyCapableAdapter {
+  createCampaignContainer?(input: CampaignContainerInput, credentials?: unknown): Promise<{ externalId: string }>;
+  createAdSetContainer?(input: AdSetContainerInput, credentials?: unknown): Promise<{ externalId: string }>;
+  uploadCreativeAsset?(input: CreativeUploadInput, credentials?: unknown): Promise<CreativeUploadResult>;
+  createHierarchyAd?(input: HierarchyAdInput, credentials?: unknown): Promise<LaunchVariantResult>;
+}

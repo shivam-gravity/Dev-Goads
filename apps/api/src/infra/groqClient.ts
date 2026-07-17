@@ -75,3 +75,41 @@ export async function runText(opts: { model?: string; maxTokens: number; system?
 export function isGroqConfigured(): boolean {
   return groq !== null;
 }
+
+/**
+ * Streaming chat completion — invokes the onChunk callback with each token as it arrives,
+ * then returns the full assembled text. Used by the SSE chat endpoint for real-time
+ * token-by-token delivery to the browser.
+ */
+export async function streamChat(
+  system: string,
+  messages: ChatMessage[],
+  onChunk: (chunk: string) => void,
+): Promise<string> {
+  if (!groq) throw new Error("GROQ_API_KEY is not set");
+  assertGlobalLlmUsageAvailable();
+
+  const model = GROQ_DEFAULT_MODEL;
+  const stream = await groq.chat.completions.create({
+    model,
+    max_tokens: 1024,
+    stream: true,
+    messages: [
+      { role: "system" as const, content: system },
+      ...messages,
+    ],
+  });
+
+  let fullText = "";
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta?.content;
+    if (delta) {
+      fullText += delta;
+      onChunk(delta);
+    }
+  }
+
+  recordTokens({ provider: "groq", model, kind: "text", inputTokens: 0, outputTokens: fullText.length / 4 });
+  recordGlobalLlmUsage(Math.ceil(fullText.length / 4));
+  return fullText;
+}
