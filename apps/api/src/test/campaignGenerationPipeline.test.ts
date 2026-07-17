@@ -208,6 +208,7 @@ test("campaignGenerationPipeline - passes pricing-offer/objection-handling/compl
     keyword: { primaryKeywords: ["running shoes"], adGroupSuggestions: ["Footwear"], negativeKeywords: ["free"] },
     persona: { personas: [{ name: "Runner", ageRange: "25-34", genderSplit: "balanced", details: "d", interests: ["running"] }] },
     audience: { primaryAudience: "Runners", segments: [], painPoints: [], interestTags: ["fitness"], targetingNotes: "n" },
+    identityConflicts: null, // fakeResearchContext has no metadata.fusion → null
   });
 });
 
@@ -226,7 +227,26 @@ test("campaignGenerationPipeline - builds successfully when pricing-offer/object
 
   const result = await runCampaignGenerationPipeline(job.id, { deps });
   assert.strictEqual(result.campaignId, "campaign-1");
-  assert.deepStrictEqual(capturedExtras, { pricingOffer: undefined, objectionHandling: undefined, compliance: undefined, creative: undefined, critic: undefined, keyword: undefined, persona: undefined, audience: undefined });
+  assert.deepStrictEqual(capturedExtras, { pricingOffer: undefined, objectionHandling: undefined, compliance: undefined, creative: undefined, critic: undefined, keyword: undefined, persona: undefined, audience: undefined, identityConflicts: null });
+});
+
+test("campaignGenerationPipeline - threads metadata.fusion.conflicts into the strategy extras as identityConflicts", async () => {
+  const job = fakeGenerationJob();
+  const deps = fakeDeps({ job });
+  const conflicts = [{ kind: "identity-vertical-mismatch" as const, severity: "high" as const, description: "site vs market disjoint", sources: ["website", "market"] }];
+  deps.runResearchOrchestrator = async () => ({
+    ...fakeResearchContext(),
+    metadata: { ...fakeResearchContext().metadata, fusion: { authorityByProvider: {}, fusedConfidenceByProvider: {}, overallFusedConfidence: 0, conflicts, explainability: [] } },
+  });
+
+  let capturedExtras: any;
+  deps.createStrategyFromAgentResults = async (businessId, output, decisionContext, extras) => {
+    capturedExtras = extras;
+    return { id: "strategy-1", businessId, summary: "s", recommendedNetworks: ["meta"], budgetSplit: { meta: 1 }, audiences: ["Everyone"], creatives: [{ headline: "Hi", body: "Body", callToAction: "Go" }], createdAt: "now" };
+  };
+
+  await runCampaignGenerationPipeline(job.id, { deps });
+  assert.deepStrictEqual(capturedExtras.identityConflicts, conflicts, "the fusion conflicts must reach strategy assembly so the identity qualityWarning can fire");
 });
 
 test("campaignGenerationPipeline - extracts crawl facts after research but BEFORE the agents run when the crawl was persisted, and skips extraction without a crawlJobId", async () => {

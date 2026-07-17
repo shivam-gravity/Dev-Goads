@@ -315,6 +315,9 @@ export async function runCampaignGenerationPipeline(
         keyword: keywordResult?.data,
         persona: personaResult?.data,
         audience: audienceResult?.data,
+        // Knowledge Fusion conflicts — a high-severity identity-vertical-mismatch attaches an
+        // advisory qualityWarning + downgrades the strategy score (Fix #3, Option C).
+        identityConflicts: context.metadata?.fusion?.conflicts ?? null,
       });
       await markStatus("building_campaign", { strategyId: strategy.id });
 

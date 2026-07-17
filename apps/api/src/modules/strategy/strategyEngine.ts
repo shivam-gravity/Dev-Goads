@@ -335,6 +335,45 @@ function qualityWarningFrom(businessId: string, critic: CriticAgentOutput): AdSt
   return { score: critic.overallScore, issues: critic.issues, missingData: critic.missingData, recommendation: critic.recommendation };
 }
 
+// Fix #3, Option C (flag + downgrade, never hard-suppress): a high-severity identity-vertical
+// mismatch from Knowledge Fusion (site describes one industry, market research another) is
+// surfaced as an advisory qualityWarning issue so the confabulated market framing isn't presented
+// confidently. Merges into any existing critic-agent qualityWarning rather than clobbering it:
+// the identity issue is appended, and the displayed score is downgraded to the lower of the
+// critic's score and IDENTITY_MISMATCH_SCORE_CAP so a "medical device"-for-a-CRM strategy can't
+// read as high-quality. When there's no critic warning at all, a minimal one is created.
+const IDENTITY_MISMATCH_SCORE_CAP = 40;
+
+function mergeIdentityConflictWarning(
+  existing: AdStrategy["qualityWarning"],
+  identityConflicts: AgentStrategyExtras["identityConflicts"],
+  businessId: string
+): AdStrategy["qualityWarning"] {
+  const mismatch = identityConflicts?.find((c) => c.kind === "identity-vertical-mismatch" && c.severity === "high");
+  if (!mismatch) return existing;
+
+  logger.warn(`Identity-vertical mismatch flagged for business ${businessId} — market research may not match the site's actual industry: ${mismatch.description}`);
+  const identityIssue = {
+    agent: "knowledge-fusion",
+    severity: "high" as const,
+    issue: `Market analysis may not match this business's actual industry. ${mismatch.description} Review before launch.`,
+  };
+
+  if (!existing) {
+    return {
+      score: IDENTITY_MISMATCH_SCORE_CAP,
+      issues: [identityIssue],
+      missingData: [],
+      recommendation: "Verify the business's industry against the website before relying on the market analysis.",
+    };
+  }
+  return {
+    ...existing,
+    score: Math.min(existing.score, IDENTITY_MISMATCH_SCORE_CAP),
+    issues: [...existing.issues, identityIssue],
+  };
+}
+
 export interface AgentStrategyExtras {
   pricingOffer?: PricingOfferAgentOutput | null;
   objectionHandling?: ObjectionHandlingAgentOutput | null;
@@ -344,6 +383,11 @@ export interface AgentStrategyExtras {
   keyword?: KeywordAgentOutput | null;
   persona?: PersonaAgentOutput | null;
   audience?: AudienceAgentOutput | null;
+  /** Knowledge Fusion conflicts (context.metadata.fusion.conflicts) — read for a high-severity
+   * identity-vertical-mismatch, which attaches an advisory qualityWarning (Fix #3, Option C:
+   * flag + downgrade, never hard-suppress context.market). Threaded from the pipeline since
+   * createStrategyFromAgentResults takes businessId, not the full ResearchContext. */
+  identityConflicts?: { kind: string; severity: "low" | "medium" | "high"; description: string; sources: string[] }[] | null;
 }
 
 /**
@@ -419,7 +463,17 @@ export async function createStrategyFromAgentResults(
     audiences,
     creatives: sanitizeCreatives([...baseCreatives, ...extraCreatives]),
     ...(extras?.compliance ? { complianceWarning: complianceWarningFrom(businessId, extras.compliance) } : {}),
-    ...(extras?.critic ? { qualityWarning: qualityWarningFrom(businessId, extras.critic) } : {}),
+    // qualityWarning: the critic's review (if any), then merged with a high-severity
+    // identity-vertical-mismatch from Knowledge Fusion (Fix #3, Option C). The merge can also
+    // CREATE the warning when there's no critic result, so it's computed outside the critic guard.
+    ...(() => {
+      const merged = mergeIdentityConflictWarning(
+        extras?.critic ? qualityWarningFrom(businessId, extras.critic) : undefined,
+        extras?.identityConflicts,
+        businessId
+      );
+      return merged ? { qualityWarning: merged } : {};
+    })(),
     // Google Search-only: positive + negative keywords threaded to launch. adGroupSuggestions is
     // deliberately dropped — using it would require restructuring the shared ad-group grouping.
     // primaryKeywords filtered — a placeholder positive keyword ("Not yet researched") would waste

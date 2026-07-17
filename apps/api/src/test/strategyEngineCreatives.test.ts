@@ -281,3 +281,73 @@ test("createStrategyFromAgentResults - a damning critic review is advisory only 
   assert.strictEqual(strategy.creatives.length, 8, "creatives must be unaffected by the critic review");
   assert.strictEqual(strategy.qualityWarning?.score, 5);
 });
+
+// ── identity-vertical-mismatch → qualityWarning (Fix #3 Part 2, Option C: flag + downgrade) ──
+
+const IDENTITY_CONFLICT = {
+  kind: "identity-vertical-mismatch",
+  severity: "high" as const,
+  description: "The website's own description and the market research describe different industries — their vertical vocabulary is nearly disjoint (overlap 0%).",
+  sources: ["website", "market"],
+};
+
+test("createStrategyFromAgentResults - a high-severity identity-vertical-mismatch attaches a qualityWarning even with no critic result", async () => {
+  const strategy = await createStrategyFromAgentResults(`biz_identity_only_${Date.now()}`, fakeAgentOutput(8), null, {
+    identityConflicts: [IDENTITY_CONFLICT],
+  });
+  assert.ok(strategy.qualityWarning, "an identity mismatch alone must surface a qualityWarning");
+  assert.strictEqual(strategy.qualityWarning!.score, 40, "created warning is capped at the identity-mismatch score");
+  assert.ok(strategy.qualityWarning!.issues.some((i) => i.agent === "knowledge-fusion" && /industry/i.test(i.issue)), "the identity issue is present");
+});
+
+test("createStrategyFromAgentResults - no qualityWarning when there is neither a critic result nor an identity conflict", async () => {
+  const strategy = await createStrategyFromAgentResults(`biz_identity_none_${Date.now()}`, fakeAgentOutput(8), null, {
+    identityConflicts: [],
+  });
+  assert.strictEqual(strategy.qualityWarning, undefined, "no critic + no identity conflict → no warning");
+});
+
+test("createStrategyFromAgentResults - a non-high or non-identity conflict does NOT attach an identity warning", async () => {
+  const strategy = await createStrategyFromAgentResults(`biz_identity_lowsev_${Date.now()}`, fakeAgentOutput(8), null, {
+    identityConflicts: [
+      { ...IDENTITY_CONFLICT, severity: "medium" }, // right kind, wrong severity
+      { kind: "market-competitor-intensity-mismatch", severity: "high", description: "x", sources: ["market", "competitor"] }, // high, wrong kind
+    ],
+  });
+  assert.strictEqual(strategy.qualityWarning, undefined, "only a HIGH-severity identity-vertical-mismatch triggers the warning");
+});
+
+test("createStrategyFromAgentResults - identity conflict MERGES into an existing critic warning, not clobbering it (score downgraded, issues appended)", async () => {
+  const critic: CriticAgentOutput = {
+    overallScore: 88,
+    issues: [{ agent: "campaign-agent", severity: "medium", issue: "Weak differentiation" }],
+    missingData: ["pricing"],
+    recommendation: "Tighten the value prop.",
+  };
+  const strategy = await createStrategyFromAgentResults(`biz_identity_merge_${Date.now()}`, fakeAgentOutput(8), null, {
+    critic,
+    identityConflicts: [IDENTITY_CONFLICT],
+  });
+  const w = strategy.qualityWarning!;
+  assert.strictEqual(w.score, 40, "score downgraded to the identity cap (min of critic 88 and 40)");
+  assert.deepStrictEqual(w.missingData, ["pricing"], "critic's missingData is preserved (not clobbered)");
+  assert.strictEqual(w.recommendation, "Tighten the value prop.", "critic's recommendation is preserved");
+  assert.ok(w.issues.some((i) => i.agent === "campaign-agent"), "the original critic issue is kept");
+  assert.ok(w.issues.some((i) => i.agent === "knowledge-fusion"), "the identity issue is appended");
+  assert.strictEqual(w.issues.length, 2, "both issues present, none dropped");
+});
+
+test("createStrategyFromAgentResults - a critic warning already below the identity cap keeps its lower score when merged", async () => {
+  const critic: CriticAgentOutput = {
+    overallScore: 22,
+    issues: [{ agent: "campaign-agent", severity: "high", issue: "Ungrounded" }],
+    missingData: [],
+    recommendation: "Re-research.",
+  };
+  const strategy = await createStrategyFromAgentResults(`biz_identity_lowcritic_${Date.now()}`, fakeAgentOutput(8), null, {
+    critic,
+    identityConflicts: [IDENTITY_CONFLICT],
+  });
+  assert.strictEqual(strategy.qualityWarning!.score, 22, "min(22, 40) = 22 — the already-lower critic score wins");
+  assert.strictEqual(strategy.qualityWarning!.issues.length, 2, "identity issue still appended");
+});

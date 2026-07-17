@@ -239,12 +239,25 @@ description. Root-caused end to end — three distinct failures compounded:
    write time rather than on every read — redundant with the read-gate for correctness, so deferred;
    the read-gate is the complete fix for re-serving.
 
-3. **NEW gap — no identity revalidation, and the conflict signal is ignored.** A fabricated
-   `context.market` is never cross-checked against the **correct** `context.website` identity (the
-   real PLM/CRM/ERP crawl). The pipeline even **self-detected the incoherence** — `context.metadata`
-   logged a **high-severity market↔competitor conflict** — but nothing gates on that conflict signal,
-   nor on the market provider's 0.45 confidence. Both were surfaced and then ignored; the wrong
-   framing flowed straight through to the campaign.
+3. **Identity revalidation — PURE-CODE HALF SHIPPED (Fix #3, Option C).** A fabricated
+   `context.market` used to flow through un-checked against the **correct** `context.website`
+   identity. Two changes landed: (a) a new **`identity-vertical-mismatch`** conflict in
+   `KnowledgeFusionEngine.detectConflicts` — a lexical, no-LLM check that flags (high severity) when
+   the website's own vocabulary (`title`+`description`+`excerpt`) and the market vertical
+   (`tam`/`marketSize`/`competitionLevel`/`trends`) are near-disjoint (directional overlap ≤ 5%),
+   gated by a ≥8-significant-token minimum on both sides and skipped on a labeled AI-estimate market
+   fallback (conservative — a false positive would flag good data); (b) **`strategyEngine` now gates
+   on it** (Option C: flag + downgrade, never hard-suppress) — a high-severity identity mismatch
+   attaches an advisory `qualityWarning` (merged with any critic warning, not clobbering it) and caps
+   the displayed score at 40. Both halves are unit-tested, deterministic, no Groq. Note this does NOT
+   replace the pre-existing weak signal path: the market↔competitor *intensity* conflict and the
+   market provider's confidence still only apply a soft ranking penalty (`ranking-engine.ts`), not a
+   gate. **Deferred follow-ups:** (i) **Part 3 — `input.industry` wiring** (the root cause: the
+   orchestrator never sets `ResearchProviderInput.industry`, so `MarketIntelligenceEngine` defaults
+   to `"its category"` and the LLM invents a vertical; quota-independent but changes what every
+   provider receives — bigger blast radius, so deferred to its own slice); (ii) the **Groq semantic
+   industry-matching** precision layer that would catch same-vertical-different-words cases the
+   lexical check misses and further cut false positives (needs quota).
 
 4. **Competitors — a separate, already-known failure (not the hallucination).** The same run's
    competitors — "River Island, Storylane, Arcade, Loom, Vidyard, ngram" (retail + demo-tool
