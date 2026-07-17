@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { llm, runStructured } from "../../infra/llmClient.js";
 import { prisma } from "../../db/prisma.js";
 import type { AdCreative, AdNetwork, AdStrategy, AudienceAnalysis, AudiencePersona, BusinessProfile, CampaignSuggestion, CompetitorBudgetAnalysis, MarketLocationAnalysis, ProductAnalysis } from "../../types/index.js";
-import type { CampaignAgentOutput, ComplianceAgentOutput, ObjectionHandlingAgentOutput, PricingOfferAgentOutput } from "../../agents/types/index.js";
+import type { AudienceAgentOutput, CampaignAgentOutput, ComplianceAgentOutput, CreativeAgentOutput, CriticAgentOutput, KeywordAgentOutput, ObjectionHandlingAgentOutput, PersonaAgentOutput, PricingOfferAgentOutput } from "../../agents/types/index.js";
+import { filterPlaceholderTerms } from "../../agents/support.js";
 import type { DecisionContext } from "../../research/decision/types.js";
 import { logger } from "../logger/logger.js";
 import { truncateForPlatform, PLATFORM_COPY_LIMITS } from "./platformCopyLimits.js";
@@ -287,10 +288,62 @@ function complianceWarningFrom(businessId: string, compliance: ComplianceAgentOu
   return { risk: compliance.overallRisk, flags: compliance.flags, recommendation: compliance.recommendation };
 }
 
+// CreativeAgent produces a pool of alternative headlines/primary-texts; the AdCreative type
+// already carries `headlines[]`/`primaryTexts[]` for exactly this (the builder's Ad Copy
+// panel), with headline/body staying the first entry for back-compat. Cap matches that field's
+// documented "up to 5 variants".
+const MAX_COPY_VARIANTS = 5;
+
+function dedupeCapped(values: string[], cap: number): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+/** Attaches CreativeAgent's copy pool onto a base creative as the AdCreative variant arrays
+ * the builder reads. The creative's own headline/body stay first (back-compat), with the
+ * agent's distinct alternatives appended, de-duped, and capped. Headline variants get the
+ * same MAX_HEADLINE_LENGTH treatment as the singular headline (sanitizeCreatives) so the
+ * first entry matches the final launched headline; primaryTexts follow body (untruncated).
+ * Purely additive — a creative built without a CreativeAgent result is returned unchanged. */
+function withCreativeVariants(creative: AdCreative, creativeAgent: CreativeAgentOutput): AdCreative {
+  return {
+    ...creative,
+    headlines: dedupeCapped([creative.headline, ...creativeAgent.headlines].map((h) => truncateHeadline(h)), MAX_COPY_VARIANTS),
+    primaryTexts: dedupeCapped([creative.body, ...creativeAgent.primaryTexts], MAX_COPY_VARIANTS),
+  };
+}
+
+// Below this score (0-100), or whenever the critic raised any issue, a non-blocking advisory
+// warning is attached — same "surface only when noteworthy" posture as complianceWarningFrom.
+const QUALITY_WARNING_SCORE_THRESHOLD = 70;
+
+/** Non-blocking: CriticAgent's adversarial review is attached to the strategy (and logged when
+ * severely low) rather than gating the build — exact mirror of complianceWarningFrom's shape. */
+function qualityWarningFrom(businessId: string, critic: CriticAgentOutput): AdStrategy["qualityWarning"] {
+  if (critic.overallScore >= QUALITY_WARNING_SCORE_THRESHOLD && critic.issues.length === 0) return undefined;
+  if (critic.overallScore < 40) {
+    logger.warn(`CriticAgent flagged LOW quality (${critic.overallScore}/100) for business ${businessId}: ${critic.recommendation}`);
+  }
+  return { score: critic.overallScore, issues: critic.issues, missingData: critic.missingData, recommendation: critic.recommendation };
+}
+
 export interface AgentStrategyExtras {
   pricingOffer?: PricingOfferAgentOutput | null;
   objectionHandling?: ObjectionHandlingAgentOutput | null;
   compliance?: ComplianceAgentOutput | null;
+  creative?: CreativeAgentOutput | null;
+  critic?: CriticAgentOutput | null;
+  keyword?: KeywordAgentOutput | null;
+  persona?: PersonaAgentOutput | null;
+  audience?: AudienceAgentOutput | null;
 }
 
 /**
@@ -344,6 +397,13 @@ export async function createStrategyFromAgentResults(
   const offerSummary = extras?.pricingOffer ? ` Offer: ${extras.pricingOffer.recommendedOfferType} — ${extras.pricingOffer.pricingPositioning}` : "";
   const summary = (decisionContext?.recommendedPositioning ? `${output.summary} Positioning: ${decisionContext.recommendedPositioning}` : output.summary) + offerSummary;
 
+  // CreativeAgent variants are folded onto the campaign-agent creatives only (the pricing/
+  // objection extras below carry their own purpose-built copy, so they keep it). No-op when
+  // extras.creative is absent — baseCreatives is then output.creatives unchanged.
+  const baseCreatives: AdCreative[] = extras?.creative
+    ? output.creatives.map((c) => withCreativeVariants(c, extras.creative!))
+    : output.creatives;
+
   const extraCreatives: AdCreative[] = [
     ...(extras?.pricingOffer ? [offerCreativeFrom(extras.pricingOffer)] : []),
     ...(extras?.objectionHandling ? objectionCreativesFrom(extras.objectionHandling) : []),
@@ -357,8 +417,25 @@ export async function createStrategyFromAgentResults(
     recommendedNetworks,
     budgetSplit: normalizedBudgetSplit,
     audiences,
-    creatives: sanitizeCreatives([...output.creatives, ...extraCreatives]),
+    creatives: sanitizeCreatives([...baseCreatives, ...extraCreatives]),
     ...(extras?.compliance ? { complianceWarning: complianceWarningFrom(businessId, extras.compliance) } : {}),
+    ...(extras?.critic ? { qualityWarning: qualityWarningFrom(businessId, extras.critic) } : {}),
+    // Google Search-only: positive + negative keywords threaded to launch. adGroupSuggestions is
+    // deliberately dropped — using it would require restructuring the shared ad-group grouping.
+    // primaryKeywords filtered — a placeholder positive keyword ("Not yet researched") would waste
+    // Google spend. negativeKeywords left untouched: a stray placeholder as a negative is harmless.
+    ...(extras?.keyword ? { googleKeywords: { primary: filterPlaceholderTerms(extras.keyword.primaryKeywords), negative: extras.keyword.negativeKeywords } } : {}),
+    // Meta-only: free-text interest terms from persona-agent (interests across personas) +
+    // audience-agent (interestTags). Resolved to Meta interest IDs and merged into the ad set's
+    // flexible_spec at launch (withAgentInterests). Attached only when non-empty; demographics
+    // parsing and per-persona ad-set structure are deferred.
+    ...(() => {
+      const metaInterests = filterPlaceholderTerms([
+        ...(extras?.persona?.personas.flatMap((p) => p.interests) ?? []),
+        ...(extras?.audience?.interestTags ?? []),
+      ]);
+      return metaInterests.length ? { metaInterests } : {};
+    })(),
   };
 
   return persistStrategy(strategy);

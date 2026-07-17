@@ -8,8 +8,10 @@ import type { CompetitorIntelligenceReport, CompetitorProfile } from "./types.js
 
 // Cost/latency ceiling — each enriched competitor is one real web search + one structured
 // extraction call. Discovery can surface a dozen+ names across 3 sources; only the most
-// independently-corroborated ones get the expensive deep-dive.
-const MAX_ENRICHED_COMPETITORS = 6;
+// independently-corroborated ones get the expensive deep-dive. Set to 8 so the competitive set
+// shown to the user clears a meaningful bar (each extra name past 6 adds one search + one
+// extraction call).
+const MAX_ENRICHED_COMPETITORS = 8;
 const MEMORY_KIND = "competitor-profile";
 
 export type CompetitorIntelligenceInput = DiscoveryInput;

@@ -4,8 +4,8 @@ import { metaAdapter } from "../adapters/metaAdapter.js";
 import { googleAdapter } from "../adapters/googleAdapter.js";
 import { tiktokAdapter } from "../adapters/tiktokAdapter.js";
 import type { AdAdapter, HierarchyCapableAdapter } from "../adapters/AdAdapter.js";
-import { resolveAudienceTargetingForWorkspace } from "../adapters/metaTargetingMapper.js";
-import { resolveGoogleTargetingForWorkspace, buildGoogleCampaignTargetingFromLocations } from "../adapters/googleTargetingMapper.js";
+import { resolveAudienceTargetingForWorkspace, withAgentInterests } from "../adapters/metaTargetingMapper.js";
+import { resolveGoogleTargetingForWorkspace, buildGoogleCampaignTargetingFromLocations, withAgentKeywords } from "../adapters/googleTargetingMapper.js";
 import { getMetaCredentials } from "../integrations/integrationService.js";
 import { getGoogleAdsCredentials } from "../integrations/googleOAuth.js";
 import type { AdNetwork, Campaign, CampaignSuggestion, CampaignVariant, CreativeAssetRef } from "../../types/index.js";
@@ -93,6 +93,8 @@ export async function buildCampaignFromStrategy(strategyId: string, name: string
     variants,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    ...(strategy.googleKeywords ? { googleKeywords: strategy.googleKeywords } : {}),
+    ...(strategy.metaInterests ? { metaInterests: strategy.metaInterests } : {}),
   };
 
   await saveCampaign(campaign);
@@ -187,7 +189,8 @@ async function launchMetaHierarchy(
 
   for (const [audienceName, groupVariants] of groups) {
     try {
-      const targeting = await resolveAudienceTargetingForWorkspace(workspaceId, audienceName, accessToken);
+      const baseTargeting = await resolveAudienceTargetingForWorkspace(workspaceId, audienceName, accessToken);
+      const targeting = await withAgentInterests(baseTargeting, campaign.metaInterests, accessToken);
       const adSet = await metaAdapter.createAdSetContainer!(
         {
           campaignExternalId,
@@ -294,7 +297,7 @@ async function launchGoogleHierarchy(
           campaignExternalId,
           name: `${campaign.name} — ${audienceName}`,
           dailyBudgetCents: perVariantBudgetCents * groupVariants.length,
-          targeting: targeting.adGroup,
+          targeting: withAgentKeywords(targeting.adGroup, campaign.googleKeywords),
         },
         credentials
       );

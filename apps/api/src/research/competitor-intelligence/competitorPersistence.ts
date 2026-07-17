@@ -33,7 +33,14 @@ export async function persistCompetitorIntelligenceReport(
           discoverySources: [], // discovery.ts's per-source mentionedBy isn't surfaced on CompetitorProfile — captured via sourcesUsed at the report level instead
           lastEnrichedAt: new Date(),
         },
-        update: { domain: domain ?? undefined, lastEnrichedAt: new Date() },
+        // Write the freshly-computed domain, null INCLUDED — a re-enrichment that resolves no
+        // trustworthy domain must CLEAR a previously-stored one, not silently keep it. The old
+        // `domain ?? undefined` skipped the column on null (Prisma treats undefined as "leave
+        // unchanged"), which froze stale citation-host domains in place forever (a re-run could
+        // never heal them). No run currently produces a *good* domain (homepage resolution is
+        // deferred — see Bucket B), so `?? undefined` only ever preserved garbage; and even once
+        // real domains exist, latest-wins is still the wanted behavior.
+        update: { domain, lastEnrichedAt: new Date() },
       });
 
       await prisma.competitorProfile.create({

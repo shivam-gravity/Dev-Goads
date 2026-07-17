@@ -378,7 +378,7 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
     const adGroupResourceName = adGroupJson?.results?.[0]?.resourceName;
     if (!adGroupResourceName) throw new Error(`Google ad group creation failed: ${JSON.stringify(adGroupJson)}`);
 
-    const targeting = input.targeting as { ageRanges?: string[]; genders?: string[]; keywords?: string[] } | undefined;
+    const targeting = input.targeting as { ageRanges?: string[]; genders?: string[]; keywords?: string[]; negativeKeywords?: string[] } | undefined;
     // Note: age/gender ad-group criteria are only honored by Google for Display/Video
     // campaigns — on a Search campaign (what this adapter creates) Google will reject
     // them. Left in place so this adapter is ready once channel type becomes configurable;
@@ -387,6 +387,11 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
       ...(targeting?.ageRanges ?? []).map((type) => ({ create: { adGroup: adGroupResourceName, ageRange: { type } } })),
       ...(targeting?.genders ?? []).map((type) => ({ create: { adGroup: adGroupResourceName, gender: { type } } })),
       ...(targeting?.keywords ?? []).map((text) => ({ create: { adGroup: adGroupResourceName, keyword: { text, matchType: "BROAD" } } })),
+      // Negative keywords (net-new) — same adGroupCriteria resource + BROAD match, flagged
+      // negative. Produced only for a non-empty list, and it rides the single mutate + try/catch
+      // below alongside the positive keywords, so a rejected negative can't fail the launch (the
+      // ad group already exists; a criteria failure is logged and swallowed).
+      ...(targeting?.negativeKeywords ?? []).map((text) => ({ create: { adGroup: adGroupResourceName, negative: true, keyword: { text, matchType: "BROAD" } } })),
     ];
     if (criteriaOps.length) {
       try {

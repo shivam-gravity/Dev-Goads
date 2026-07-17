@@ -1028,12 +1028,14 @@ const campaignGenerateSchema = z.object({
   url: z.string().min(1),
   name: z.string().min(1).optional(),
   dailyBudgetCents: z.number().int().positive().max(MAX_BUDGET_CENTS).optional(),
+  // Bypass the research cache and force a fresh 27-provider run for this generation.
+  forceRefresh: z.boolean().optional(),
 });
 
 router.post("/campaigns/generate", requireWorkspaceMember("body", "workspaceId"), asyncHandler(async (req, res) => {
   const parsed = campaignGenerateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { workspaceId, businessId, url, name, dailyBudgetCents } = parsed.data;
+  const { workspaceId, businessId, url, name, dailyBudgetCents, forceRefresh } = parsed.data;
 
   const business = await getBusiness(businessId);
   if (!business) return res.status(404).json({ error: "Business not found" });
@@ -1046,7 +1048,9 @@ router.post("/campaigns/generate", requireWorkspaceMember("body", "workspaceId")
 
   try {
     const job = await createCampaignGenerationJob({ workspaceId, businessId, url, name, dailyBudgetCents });
-    await campaignGenerationQueue.add("campaign-generate", { jobId: job.id });
+    // forceRefresh rides the BullMQ payload only — deliberately NOT persisted on the job
+    // record, so this whole feature needs zero schema migration.
+    await campaignGenerationQueue.add("campaign-generate", { jobId: job.id, forceRefresh: forceRefresh ?? false });
     res.status(202).json(job);
   } catch (err) {
     sendError(res, err, 422, "Failed to start campaign generation");

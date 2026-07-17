@@ -1,8 +1,22 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Detect a test run so the suite never consumes — or trips — the real production ledger. Every test
+// file shares one process (tsx --test) and LEDGER_PATH/MONTHLY_TOKEN_BUDGET are captured once at
+// module load, so a single accidental accumulation to the cap would otherwise break every
+// subsequent LLM-backed test until the ledger is hand-reset (exactly what happened once). In a test
+// run the ledger is redirected to a throwaway temp file and the cap is effectively disabled. An
+// explicit LLM_USAGE_LEDGER_PATH / LLM_MONTHLY_TOKEN_BUDGET still wins, so a test can opt back in to
+// exercising the boundary directly.
+const IS_TEST_RUN =
+  process.env.NODE_ENV === "test" ||
+  process.env.npm_lifecycle_event === "test" ||
+  process.argv.includes("--test") ||
+  process.execArgv.includes("--test");
 
 /**
  * A single hard ceiling on combined LLM token usage across ALL FOUR providers (OpenAI,
@@ -23,13 +37,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * ceiling — the whole reason to have both is that they answer different questions.
  */
 
-const LEDGER_PATH = process.env.LLM_USAGE_LEDGER_PATH ?? path.resolve(__dirname, "../../data", "llm-usage.json");
+const DEFAULT_LEDGER_PATH = IS_TEST_RUN
+  ? path.join(os.tmpdir(), "polluxa-test-llm-usage.json")
+  : path.resolve(__dirname, "../../data", "llm-usage.json");
+const LEDGER_PATH = process.env.LLM_USAGE_LEDGER_PATH ?? DEFAULT_LEDGER_PATH;
 
 // Deliberately generous relative to any single provider's own cap — this exists to catch
 // runaway usage (a retry storm, an unexpectedly large batch), not to be the primary lever
 // for day-to-day cost control (that's openaiBudget.ts's job for OpenAI, and routing most
 // tasks to free Ollama/Gemini for everything else).
-const MONTHLY_TOKEN_BUDGET = Number(process.env.LLM_MONTHLY_TOKEN_BUDGET ?? 5_000_000);
+const DEFAULT_MONTHLY_TOKEN_BUDGET = IS_TEST_RUN ? Number.MAX_SAFE_INTEGER : 5_000_000;
+const MONTHLY_TOKEN_BUDGET = Number(process.env.LLM_MONTHLY_TOKEN_BUDGET ?? DEFAULT_MONTHLY_TOKEN_BUDGET);
 
 interface Ledger {
   month: string; // "YYYY-MM", UTC

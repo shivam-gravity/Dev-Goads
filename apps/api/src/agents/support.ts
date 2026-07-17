@@ -63,6 +63,45 @@ export function collectEvidence(context: ResearchContext, fields: ContextFieldKe
   });
 }
 
+/**
+ * Degraded-output placeholder guard — see strategyEngine.ts's metaInterests/googleKeywords
+ * assembly. When an agent (or the upstream research provider whose output it falls back onto)
+ * has no live model / no real research, it emits honest "we don't know" sentinels
+ * ("Not yet researched", "Unknown — no live research performed", "Insufficient research
+ * data …", "Not available."). Those read fine to a human but must never be threaded into a
+ * machine-consumed field like Meta interest targeting or Google positive keywords, where they
+ * become a real interest term / a wasted keyword bid.
+ *
+ * Matching is deliberately TIGHT, not a blanket prefix denylist, because real ad keywords
+ * legitimately start with some of these words — "insufficient funds", "unknown caller",
+ * "not available in stores" are genuine search terms. Each family is matched only by the
+ * shape that can't collide with a real term:
+ *   - "not yet researched" / "not available"  -> exact (after trimming trailing punctuation)
+ *   - "unknown"                                -> exact, OR the em-dash marker "unknown — …"
+ *                                                 (no real term carries a "— no live research" clause)
+ *   - "insufficient …"                         -> only when it also mentions "research" (every
+ *                                                 sentinel does: "Insufficient {research data,
+ *                                                 competitor research, market research} …");
+ *                                                 "insufficient funds" has no "research" and passes.
+ */
+export function isPlaceholderTerm(value: unknown): boolean {
+  if (typeof value !== "string") return true; // non-strings are never a real term
+  const s = value.trim().toLowerCase().replace(/[.\s]+$/, ""); // drop trailing "." / whitespace
+  if (s.length === 0) return true; // empty / whitespace-only
+  if (s === "not yet researched" || s === "not available" || s === "unknown") return true;
+  if (s.startsWith("unknown —")) return true; // "Unknown — no live research performed", …
+  if (s.startsWith("insufficient") && s.includes("research")) return true;
+  return false;
+}
+
+/** Drops degraded-output placeholders (and empty/non-string entries) from a term list, so a
+ * machine-consumed field (Meta interests, Google positive keywords) never carries a sentinel.
+ * An all-placeholder input returns [] — the caller then omits the field entirely rather than
+ * attaching junk (strategyEngine.ts's `metaInterests.length ? … : {}`). */
+export function filterPlaceholderTerms(terms: readonly string[]): string[] {
+  return terms.filter((t) => !isPlaceholderTerm(t));
+}
+
 interface CallAgentModelOptions<T> {
   promptId: string;
   vars: Record<string, string>;

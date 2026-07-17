@@ -57,6 +57,31 @@ export function isRelevantCitation(citation: { url?: string; title?: string }, t
   return false;
 }
 
+// Placeholder/seed tokens and legal suffixes that carry no search signal — stripped before a
+// business name is used as a live search anchor, so a fixture like "Polluxa Demo Business" doesn't
+// become the exact-phrase query `"Polluxa Demo Business"` (which matches nothing on the web) or seed
+// a market-engine hallucination off the word "Demo". If nothing distinctive survives, callers fall
+// back to the domain instead.
+const NAME_NOISE_WORDS = new Set([
+  "demo", "test", "sample", "example", "the", "business", "company", "inc", "llc", "ltd", "co", "corp", "corporation",
+]);
+
+/**
+ * Returns the distinctive part of a business name with generic/placeholder/legal-suffix tokens
+ * removed (case-insensitive, trailing punctuation ignored), or "" when nothing distinctive is left
+ * (e.g. "Demo Business" -> ""). "Polluxa Demo Business" -> "Polluxa"; "Acme Inc." -> "Acme".
+ */
+export function sanitizeBusinessName(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter((word) => {
+      const normalized = word.toLowerCase().replace(/[.,]/g, "").trim();
+      return normalized.length > 0 && !NAME_NOISE_WORDS.has(normalized);
+    })
+    .join(" ")
+    .trim();
+}
+
 /**
  * Generic 0-1 confidence score computed from signals every provider already reports —
  * deliberately provider-agnostic (no provider-specific branching) so a 10th provider gets

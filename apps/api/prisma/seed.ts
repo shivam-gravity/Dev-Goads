@@ -35,16 +35,22 @@ async function main() {
   // A default Business (BusinessProfile) so the app never has to show the onboarding
   // wizard just to reach the dashboard — apps/web's AuthContext defaults businessId to
   // this id the same way it defaults workspaceId to "demo-workspace".
+  // A realistic default Business (real name + domain, not a "Demo Business" placeholder) so the
+  // research pipeline has a genuine web-search anchor out of the box — a seeded name like
+  // "Polluxa Demo Business" would be searched as an exact phrase that matches nothing, collapsing
+  // every live provider to its "no research performed" fallback (see research/providers/searchQuery.ts).
   await prisma.business.upsert({
     where: { id: "demo-business" },
     create: {
       id: "demo-business",
       workspaceId: "demo-workspace",
+      domain: "polluxa.com",
       createdAt: now,
       data: {
         id: "demo-business",
-        name: "Polluxa Demo Business",
-        industry: "General",
+        name: "Polluxa",
+        website: "https://polluxa.com",
+        industry: "AI SaaS / CRM",
         monthlyBudgetCents: 100000,
         goals: ["Leads"],
       },

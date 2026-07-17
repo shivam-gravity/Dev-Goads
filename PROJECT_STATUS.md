@@ -98,6 +98,7 @@ swap, not a redesign). Notable relational models:
 - Decision Engine — deterministic scoring/ranking/tradeoffs/SWOT + simulated strategies. ✅ Working.
 - Campaign Builder — strategy → campaign + 6 ranked recommendation packages. ✅ Working.
 - Crawl + fact extraction — real crawler (Playwright/cheerio + Firecrawl fallback), honors robots.txt. ✅ Working.
+- Research caching (campaign path) — a completed `ResearchJob`'s `ResearchContext` is reused for a repeat generation of the same (workspace, business, url) within a 7-day TTL (`CAMPAIGN_RESEARCH_CACHE_TTL_MS`), skipping the 27-provider fan-out + fact re-extraction while still building the campaign fresh. `forceRefresh: true` in the request body bypasses it; a defense-in-depth identity check prevents ever serving another business's research. ✅ Working (new this session; see §5).
 
 **Ad-network + e-commerce integrations** (all real API clients with a credential-gated fallback to mock)
 - Meta — real Graph API OAuth, ad create, reach estimate, lead sync, webhook HMAC. ✅ Real when configured.
@@ -163,10 +164,87 @@ confuse; the top-level folder is dead.
 - Facebook/Google **product catalog** sources are demo-only ("until Phase 5"); only
   Shopify/WooCommerce have live adapters.
 
-**Agent output that runs but isn't consumed.** All 20 agents run and are persisted, but only
-`campaign-agent` (required), `budget-agent`, `pricing-offer-agent`, `objection-handling-agent`,
-and `compliance-agent` are read downstream into the strategy. The other 15 — including
-`critic-agent` — are computed and persisted but **not currently consumed** by the campaign build.
+**Agent output: 10 of 20 now consumed.** All 20 agents run and are persisted. As of this
+session **10** are read downstream into the strategy (`createStrategyFromAgentResults`, plus
+`budget-agent` feeding the daily budget): `campaign-agent` (required), `budget-agent`,
+`pricing-offer-agent`, `objection-handling-agent`, `compliance-agent`, and — newly wired this
+session — `creative-agent`, `critic-agent`, `keyword-agent`, `persona-agent`, and
+`audience-agent`. The remaining **10** are computed and persisted but **not currently consumed**
+by the campaign build: `channel-placement`, `competitor`, `forecasting-kpi`, `funnel-retargeting`,
+`landing-page`, `localization`, `market`, `product`, `seo-content`, and `seasonality-timing`.
+
+**Measured scaling bottleneck — Ollama-absent-in-prod → Groq 429s (the #1 operational bottleneck; next fix).**
+`infra/llmTaskConfig.ts` assigns all 20 agents and the 27 research-structuring steps to **Ollama**
+as their primary model, but Ollama is dev-only and **not** in `docker-compose.yml`. In a
+containerized deploy every one of those ~47 per-campaign calls fails Ollama and falls through to
+the shared free-tier **Groq** key, which has no client-side rate limiting (and the
+OpenAI-compatible SDK's default retries amplify the burst) — the root cause of the observed 429
+storms (526 Groq 429s in one job; a live test in this session's suite also hit Groq's
+100k-tokens/day ceiling). This was hit **three separate times today**, including a fresh
+end-to-end validation run — a `forceRefresh` `polluxa.com` generation — where **189+ Groq calls
+failed** (`rate_limit_exceeded`, retry-after ~33m) and degraded the `creative`, `critic`, and
+`persona` agents plus competitor enrichment to their placeholder fallbacks, while the grounded
+agents (`keyword`, `audience`, base `campaign` creatives) still produced real output. The
+placeholder-leak fix (`37749b6`, §5) stops those degraded strings from reaching launch targeting,
+but does not address the root cause. **This is the next fix**: give Ollama a container in
+`docker-compose.yml`, and/or reassign the agents/providers off Ollama, and/or add client-side
+Groq rate-limiting + backoff. Secondary measured ceilings: the global **5M-token/month** LLM
+budget is a hard stop with no fallback (~7–16 campaigns/month at ~300–700k tokens each), and
+Tavily's ~**1,000 free searches/month** (~20 campaigns at ~50 searches each). The research cache
+(§5) relieves all three by not re-spending on repeat generations of the same business. Scraping
+concurrency (4 Playwright pages via `SCRAPER_MAX_CONCURRENT_PAGES`, single scraper-service
+instance) is a latency wall, not the first hard break.
+
+**Competitor `domain` populated from a citation article's host, not the competitor's own site
+(Bucket A cleaned; Bucket B deferred).** The earlier fabricated-competitor-URL guard (§5) stopped
+the discovery LLM from *inventing* a competitor URL, but the `domain` that got stored was
+frequently the host of a citation/roundup article rather than the competitor's homepage — same
+class as the fabricated-URL poisoning. Investigated end-to-end this session: `competitor.domain`
+derives solely from `discovered.url`, which post-fix can only come from research-memory; a
+non-clearing `domain ?? undefined` upsert then froze stale pre-fix (07-14) citation-host domains
+in place forever. **Fixed the persistence side (Bucket A):** the upsert now writes the computed
+`domain` including `null` so a re-enrichment clears a stale value (`competitorPersistence.ts`), and
+a one-time `cleanupStaleCompetitorDomains.ts` cleared the backlog the earlier migration missed —
+**80 stale citation-host domains** cleared from the relational `competitors` table (backup written;
+3 genuine brand-matching domains e.g. `airtable.com` correctly preserved), and the
+`kind:"competitor"` memory gap audited (0 to clear — see the `kind:"competitor"` memory notes below).
+Detection (`domainMismatchesName`) is unit-tested and locked. **Still deferred (Bucket B):** nothing
+resolves a competitor's *actual* homepage — so new competitors now correctly store `domain=null`
+("unknown") rather than a wrong host, but a real domain is not yet derived. The citation host also
+still mis-grounds enrichment's page crawl (`enrichment.ts` crawls `discovered.url` as if it were the
+competitor's own site).
+
+**The 680 empty-`{}`-metadata `kind:"competitor"` rows are test pollution, NOT a write bug — plus
+a separate open question about source-3 retrieval.** An earlier draft of this note claimed
+`CompetitorProvider` writes empty metadata; a full write-path trace this session shows that premise
+is **factually wrong**. The production path is correct: `CompetitorProvider.writeCompetitorMemory`
+passes a populated `{ industry, competitors, competitionIntensity, differentiators }`, and
+`MemoryCoordinator.writeMemory` always spreads in a `dedupKey` (`{ ...request.metadata, dedupKey }`),
+so a row written through it is at minimum `{"dedupKey":…}` — a literally-empty `{}` (`meta_len=2`)
+is structurally impossible via the real path. The populated `kind:"competitor-profile"` rows (same
+coordinator, real 1024/1536-dim embeddings, real content) prove the path works.
+
+What the 680 rows actually are: **test fixtures from `researchMemoryStore.test.ts`**, which calls
+`recordMemory()` **directly** (bypassing the coordinator, hence no `dedupKey`) with hardcoded
+`metadata: {}` and 3-dim embeddings. A raw-SQL audit confirms all 680 have `emb_len=3`,
+`*.example.com` sourceUrls, `biz-A`…`biz-halfway` businessIds, and exactly the 7 fixture content
+strings (`"Fresh entry"` ×170, `"Business A/B/C"`, …); **zero** rows resemble a real write
+(non-`example.com` + emb>100). They accumulate because that test has no teardown and runs against a
+shared dev Postgres — daily counts track how often the suite ran. Two distinct takeaways:
+
+- **(a) Test-hygiene issue (the empty-`{}` rows).** Non-isolated `kind:"competitor"` fixtures with
+  no cleanup pollute the shared dev DB (~680 orphan rows). Same class as the LLM-ledger isolation
+  work in `b656a06`. The rows are inert, not poison: `discoverFromResearchMemory` reads
+  `metadata.competitors ?? []` → `[]`, and their 3-dim embeddings can never be retrieved by a real
+  1024-dim query anyway (`cosineSimilarity` returns 0 on length mismatch, then freshness/score
+  filters drop them).
+- **(b) Separate, genuinely-worth-investigating open question.** Independent of the red-herring
+  rows: does *any real* `kind:"competitor"` memory survive retrieval to feed discovery.ts source 3?
+  In this DB there are **0** real (non-fixture) `kind:"competitor"` rows, so that half of source 3
+  contributes nothing here. Leading suspect: the OpenAI→Mistral embedding-dim switch (1536→1024)
+  aging out pre-switch rows via `cosineSimilarity`'s length-mismatch→0 rule. (Source 3 also reads
+  `kind:"competitor-profile"`, which IS populated, so source 3 isn't fully dead.) Not fixed —
+  documented so the real question isn't lost behind the empty-metadata red herring.
 
 **Reference-only infra implementations** awaiting real backends (all behind interfaces):
 `InMemoryEventBus` (tests only; prod uses Redis Streams), `LocalFileObjectStorage` (awaits
@@ -198,18 +276,72 @@ deployed environment).
 
 ## 5. Recent significant changes (last ~20 commits)
 
-**Uncommitted working-tree changes (this session).** HEAD is unchanged (`50580e4`), so the
-following are staged-in-working-tree only, not yet committed:
-- **`@anthropic-ai/sdk` removed** from `apps/api/package.json` (+ `package-lock.json`),
-  completing the migration off Anthropic — no source file imports it anymore. This is the
-  dependency-level finish of the earlier OpenAI→Groq facade swap; the runtime LLM stack is now
-  Groq/Ollama/Mistral/Gemini exclusively.
-- **Five architecture/roadmap docs deleted** from `docs/`: `CURRENT_ARCHITECTURE.md`,
-  `GAP_ANALYSIS_AND_ROADMAP.md`, `architecture-roadmap.md`, `architecture-spec.json`,
-  `meta-app-review.md`. This `PROJECT_STATUS.md` was created to consolidate/replace them as the
-  single quick-context reference.
-- Runtime/build artifacts touched: `apps/api/data/llm-usage.json` (token-usage ledger),
-  `apps/web/tsconfig.tsbuildinfo`.
+**Latest (committed `37749b6`).** **Degraded-output placeholder guard on launch-bound fields.**
+When an agent (or the upstream research provider it falls back onto) has no live model, it emits
+honest "we don't know" sentinels (`"Not yet researched"`, `"Unknown — no live research performed"`,
+`"Insufficient research data …"`, `"Not available."`). These leaked through `persona.interests` /
+`audience.interestTags` into `strategy.metaInterests` (and could reach `googleKeywords.primary`),
+where they would become a real Meta interest term or a wasted Google keyword bid. New
+`isPlaceholderTerm`/`filterPlaceholderTerms` (`agents/support.ts`) are applied where `metaInterests`
+and `googleKeywords.primary` are assembled (`strategyEngine.ts`); negatives are left untouched.
+Matching is deliberately tight (not a blanket prefix denylist) so real keywords that share a prefix
+survive — `"insufficient funds"`, `"unknown caller"`, `"not available in stores"` all pass, while
+the sentinels are dropped; an all-placeholder list collapses to `[]` so the field is omitted rather
+than attached empty. Surfaced by the `polluxa.com` validation run (see §4); adds 6 unit tests to
+`agentSupport.test.ts`.
+
+**Validation run (this session, not a code change).** A fresh `forceRefresh` campaign generation
+for `polluxa.com` (demo business) confirmed the five newly-wired outputs fire end-to-end
+(`googleKeywords` 15 primary + 27 negative and `metaInterests` were real and grounded; base
+`creatives` real). It also surfaced the two known gaps now recorded in §4: competitor `domain`
+citation-host contamination, and the Groq daily-quota exhaustion that degraded the LLM-only agents
+mid-run.
+
+**Now committed (`3d571e8`).** The batch this doc previously listed as uncommitted has since
+been committed: the **`@anthropic-ai/sdk` removal** (completing the migration off Anthropic — no
+source file imports it anymore; the runtime LLM stack is now Groq/Ollama/Mistral/Gemini
+exclusively) and the consolidation of **five deleted `docs/` architecture files** into this
+`PROJECT_STATUS.md`.
+
+**Earlier this session (now committed, `ffdda48`…`93480f7`).**
+- **Research caching on the campaign path.** `POST /campaigns/generate` no longer re-runs the
+  full research pipeline for a repeat of the same (workspace, business, url): a completed
+  `ResearchJob`'s `ResearchContext` is reused within a 7-day TTL (`CAMPAIGN_RESEARCH_CACHE_TTL_MS`,
+  `findReusableResearch`), skipping the 27-provider fan-out **and** crawl-fact re-extraction
+  (`persistCrawlFacts` is a non-idempotent `createMany`, so re-running would double fact rows),
+  while still building the campaign fresh. `forceRefresh: true` (request body → BullMQ payload →
+  pipeline option, zero schema migration) bypasses it; a defense-in-depth identity check
+  (`context.businessId`/`url` must match the job, with a tripwire warning) prevents serving
+  another business's research. Adds pipeline unit tests (a–f) and a DB-backed `findReusableResearch`
+  test (TTL boundary / status filter / null-context / cross-business+workspace isolation /
+  newest-first), in `apps/api/src/test/findReusableResearch.test.ts`.
+- **Five more agents wired into the campaign.** `creative`, `critic`, `keyword`, `persona`, and
+  `audience` agent outputs are now consumed by `createStrategyFromAgentResults`/`strategyEngine`
+  (previously computed-but-unused), taking the consumed count from 5 → 10 (see §4).
+- **Placeholder/demo business-name search guard.** `sanitizeBusinessName`
+  (`research/providers/support.ts`) strips generic/placeholder/legal tokens ("Polluxa Demo
+  Business" → "Polluxa") before a name anchors a live search, so seed/demo records don't produce
+  empty exact-phrase queries or seed a market-engine hallucination off the word "Demo"; falls
+  back to the domain when nothing distinctive remains. Applied in `buildSearchQuery` and
+  `MarketIntelligenceEngine`.
+- **Competitor enrichment cap raised 6 → 8** (`CompetitorIntelligenceEngine.ts`) — a larger
+  corroborated competitive set, at one extra search + extraction call per added name.
+- **`googleAdapter.test.ts` typecheck fix** — closure-captured `capturedOps` read through a typed
+  local so `tsc` passes (runtime was always fine; the `tsx` test runner doesn't type-check).
+- Other changes in the same batch, not detailed here: Meta/Google targeting mappers, opt-in
+  multi-provider image generation (`729afe6`), the LLM-token-ledger test isolation (`b656a06`),
+  and their tests.
+
+**Also recently committed (same arc).**
+- **RedditProvider now sources via PullPush.** `RedditProvider` fetches real Reddit threads
+  through `infra/pullpushClient.ts` (`searchRedditThreads`) instead of Firecrawl. (`searchRedditComments`
+  in that client remains unused — see §4.)
+- **Fabricated-competitor-URL guard + one-time migration.** Competitor discovery (`discovery.ts`)
+  no longer lets the name-extraction LLM invent a `url` for a discovered competitor — it
+  consistently attached the citation page's URL (g2.com/forbes.com/owler.com), not the
+  competitor's own site. `scripts/migrateCompetitorMemoryUrls.ts` is the idempotent one-time
+  cleanup that nulls those fabricated URLs on existing `research_memory_entries` rows (76/76
+  flagged), writing a timestamped JSON backup first (`data/migrations/competitor-memory-url-backup-*.json`).
 
 **Committed history** — the recent commits center on a **major research-architecture buildout
 and an LLM-provider swap**:
@@ -257,7 +389,10 @@ and an LLM-provider swap**:
 
 **Net direction:** the platform has moved from an OpenAI/Claude-centric MVP toward a
 multi-provider, research-heavy, fact-grounded pipeline with production-hardening (ownership
-checks, robots.txt, dead-letter queues, telemetry) layered on. The next natural work items are
-consuming the currently-unused agent outputs, retiring the legacy `ResearchSession` pipeline and
-the empty `campaign-intelligence/` folder, wiring real image generation + real revenue tracking,
-and reconciling the stale "10 agents / 9 providers / OpenAI" comments with reality.
+checks, robots.txt, dead-letter queues, telemetry) layered on, and — this session — a research
+cache that starts to address the measured scaling ceilings. The next natural work items are
+fixing the Ollama-absent-in-prod → Groq 429 root cause (run Ollama in prod or reassign primaries
+off the free Groq key; see §4), consuming the remaining 10 unused agent outputs, retiring the
+legacy `ResearchSession` pipeline and the empty `campaign-intelligence/` folder, wiring real
+image generation + real revenue tracking, and reconciling the stale "10 agents / 9 providers /
+OpenAI" comments with reality.

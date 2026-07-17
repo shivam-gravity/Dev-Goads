@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import path from "node:path";
 import os from "node:os";
+import { getGlobalLlmMonthlyBudget } from "../infra/llmUsageBoundary.js";
 
 // Set before any import touches groqClient.ts/mistralClient.ts (module-load-time env
 // reads, same cache-busting-avoidance convention as scrapeFallback.test.ts) — lets these
@@ -15,6 +16,14 @@ process.env.MISTRAL_API_KEY = "test-mistral-key";
 // would make this file's "an groq assignment calls Groq directly" style assertions fail
 // nondeterministically depending on what state happens to be on disk.
 process.env.LLM_USAGE_LEDGER_PATH = path.join(os.tmpdir(), "test-llm-usage-llmRouter.json");
+
+// Regression guard for the ledger-isolation fix: a test run must NOT use the production 5M/month
+// cap (llmUsageBoundary.ts detects the test runner and uses an effectively-unlimited budget + a
+// temp ledger), so the suite's own real LLM calls can never exhaust the real monthly budget and
+// break every subsequent LLM-backed test — which is exactly what happened once.
+test("llmUsageBoundary - a test run uses an effectively-unlimited budget, isolating the real monthly cap", () => {
+  assert.ok(getGlobalLlmMonthlyBudget() > 5_000_000, "test run must not use the production 5M token cap");
+});
 
 // The Groq/Ollama SDKs (both use the OpenAI SDK pointed at a different baseURL) capture
 // `fetch` once at client-construction time (`this.fetch = options.fetch ?? Shims.getDefaultFetch()`),

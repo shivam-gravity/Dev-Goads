@@ -171,6 +171,26 @@ export interface AdStrategy {
     flags: { severity: "low" | "medium" | "high"; issue: string; suggestion: string }[];
     recommendation: string;
   };
+  /** Set only when CriticAgent's adversarial review scored below the quality threshold or
+   * raised issues — advisory only (never gates/fails the build), mirroring complianceWarning
+   * above. Undefined for strategies built without a CriticAgent result at all (older
+   * pipelines/tests) or when the review was clean. */
+  qualityWarning?: {
+    score: number;
+    issues: { agent: string; severity: "low" | "medium" | "high"; issue: string }[];
+    missingData: string[];
+    recommendation: string;
+  };
+  /** Google Search-only keyword strategy from KeywordAgent — positive keywords merge into the
+   * ad-group's keyword criteria at launch, negatives become negative criteria (see
+   * googleTargetingMapper.withAgentKeywords). Undefined without a KeywordAgent result; the Meta
+   * path never reads it. adGroupSuggestions is deliberately not carried. */
+  googleKeywords?: { primary: string[]; negative: string[] };
+  /** Meta-only free-text interest terms from persona-agent (interests) + audience-agent
+   * (interestTags), resolved to Meta interest IDs and merged into the ad set's flexible_spec at
+   * launch (see metaTargetingMapper.withAgentInterests). Undefined without those agents; the
+   * Google path never reads it. Persona demographics parsing is deliberately not carried. */
+  metaInterests?: string[];
 }
 
 /** One of 6+ distinct campaign angles generated from a completed research session — the user
@@ -240,6 +260,13 @@ export interface Campaign {
   googleConversionActionId?: string;
   /** Capped at 10 — enforced where assets are appended, not just in the UI. */
   creativeAssets?: CreativeAssetRef[];
+  /** Google Search-only keyword sets from KeywordAgent, threaded strategy -> build -> launch
+   * (see launchGoogleHierarchy). Undefined for campaigns built without a KeywordAgent result,
+   * and ignored entirely by the Meta path (keywords aren't a Meta concept). */
+  googleKeywords?: { primary: string[]; negative: string[] };
+  /** Meta-only free-text interest terms from persona/audience agents, threaded strategy -> build
+   * -> launch (see launchMetaHierarchy). Resolved to Meta interest IDs at launch; ignored by Google. */
+  metaInterests?: string[];
   /**
    * Real per-platform campaign-level IDs, set once launchMetaHierarchy/launchGoogleHierarchy
    * actually create the campaign container on that network — grouped under one object

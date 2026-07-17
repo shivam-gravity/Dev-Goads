@@ -12,6 +12,8 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace apps/api & npm run dev --workspace apps/web",
+    "start:all": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/start-all.ps1",
+    "stop:all": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/stop-all.ps1",
     "dev:api": "npm run dev --workspace apps/api",
     "dev:web": "npm run dev --workspace apps/web",
     "dev:auth-service": "npm run dev --workspace apps/auth-service",

@@ -121,6 +121,73 @@ export async function resolveAudienceTargetingForWorkspace(
   return BROAD_DEFAULT_TARGETING;
 }
 
+// Bounds the serial Graph interest-search calls per ad set — persona.interests across up to 6
+// personas plus audience.interestTags can total ~70 terms; only the first N (after case-insensitive
+// string-dedupe) are resolved. 10 mirrors a sensible Meta flexible_spec interest count and keeps
+// targeting from over-broadening.
+const MAX_AGENT_INTEREST_TERMS = 10;
+
+type InterestResolver = (accessToken: string, terms: string[]) => Promise<{ id: string; name: string }[]>;
+
+function dedupeStringsCapped(values: string[], cap: number): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+/**
+ * Additively merges agent-derived free-text interests (persona.interests + audience.interestTags)
+ * into an existing Meta targeting spec's flexible_spec, resolving them to real Meta interest IDs via
+ * the same best-effort search resolver buildMetaTargetingSpec already uses. Returns the SAME spec
+ * reference unchanged when there are no agent interests, in mock/offline mode (no accessToken —
+ * resolution needs a live Graph call), or when nothing resolves. De-dupes by RESOLVED interest id
+ * (not free text), so two terms that resolve to the same Meta interest — or an agent term matching an
+ * id already present from the SavedAudience — collapse to one. Best-effort: unresolvable terms, a
+ * search failure, or a throwing resolver are dropped/logged and never fail the launch. Google-only
+ * paths never call this. `resolve` is injectable for deterministic testing (defaults to the real one).
+ */
+export async function withAgentInterests(
+  spec: MetaTargetingSpec,
+  agentInterests: string[] | undefined,
+  accessToken: string | null,
+  resolve: InterestResolver = resolveInterests
+): Promise<MetaTargetingSpec> {
+  const terms = dedupeStringsCapped(agentInterests ?? [], MAX_AGENT_INTEREST_TERMS);
+  if (!terms.length || !accessToken) return spec;
+
+  let resolved: { id: string; name: string }[];
+  try {
+    resolved = await resolve(accessToken, terms);
+  } catch (err) {
+    logger.warn("withAgentInterests: interest resolution failed — leaving the targeting spec unchanged", err);
+    return spec;
+  }
+  if (!resolved.length) return spec;
+
+  // Existing (already-resolved) SavedAudience interest ids in the spec, unioned with the agent's
+  // resolved ids and de-duped by id — this is where "two different terms -> same id" collapses.
+  const existingIds = (spec.flexible_spec ?? []).flatMap((group) => group.interests.map((i) => i.id));
+  const seen = new Set<string>();
+  const mergedIds: string[] = [];
+  for (const id of [...existingIds, ...resolved.map((r) => r.id)]) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    mergedIds.push(id);
+  }
+  if (!mergedIds.length) return spec;
+
+  return { ...spec, flexible_spec: [{ interests: mergedIds.map((id) => ({ id })) }] };
+}
+
 /** Heuristic fallback when no Meta ad account is connected yet — clearly labeled as an estimate, not a real query. */
 export function estimateReachHeuristic(audience: SavedAudience): ReachEstimate {
   const ageSpan = Math.max(1, audience.ageMax - audience.ageMin);
