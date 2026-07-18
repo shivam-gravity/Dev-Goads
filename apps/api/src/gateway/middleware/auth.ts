@@ -4,6 +4,8 @@ import { JWT_SECRET } from "../../infra/env.js";
 
 export interface AuthedRequest extends Request {
   userId?: string;
+  workspaceId?: string;
+  businessId?: string;
 }
 
 // Seeded in apps/api/prisma/seed.ts as a real WorkspaceMember (owner) of demo-workspace
@@ -30,8 +32,10 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
 
   const token = header.replace(/^Bearer\s+/i, "");
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { sub: string };
+    const decoded = jwt.verify(token, JWT_SECRET) as { sub: string; workspaceId?: string; businessId?: string };
     req.userId = decoded.sub;
+    if (decoded.workspaceId) req.workspaceId = decoded.workspaceId;
+    if (decoded.businessId) req.businessId = decoded.businessId;
     next();
   } catch {
     res.status(401).json({ error: "Invalid or expired token" });

@@ -49,7 +49,7 @@ const CLIENTS = {
 
 // Tried in order (skipping whatever was already attempted) whenever the first attempt
 // fails or is unconfigured. Ollama deliberately excluded — see the file-level doc comment.
-const FALLBACK_CHAIN: LLMProvider[] = ["groq", "mistral", "google"];
+const FALLBACK_CHAIN: LLMProvider[] = ["mistral", "groq", "google"];
 
 // Kill switch — set to "false" to disable the fallback-to-Groq safety net and let an
 // assigned non-Groq provider fail outright instead, mirroring SCRAPE_FALLBACK_ENABLED's

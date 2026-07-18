@@ -23,9 +23,31 @@ model User {
   name         String
   avatar       String?
   googleId     String?  @unique
+  isExternal   Boolean  @default(false)
+  crmUserId    String?  @unique
+  crmBusinessId String?
+  crmPartnerId  String?
   createdAt    DateTime @default(now())
 
+  refreshTokens RefreshToken[]
+
   @@map("users")
+}
+
+model RefreshToken {
+  id         String    @id
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  family     String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedBy String?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([family])
+  @@map("refresh_tokens")
 }
 
 model Workspace {

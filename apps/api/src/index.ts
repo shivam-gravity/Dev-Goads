@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Request } from "express";
 import cors from "cors";
+import helmet from "helmet";
 import { router, authEntryRouter } from "./gateway/router.js";
 import { metaOAuthRoutes } from "./gateway/metaOAuthRoutes.js";
 import { googleOAuthRoutes } from "./gateway/googleOAuthRoutes.js";
@@ -32,10 +33,14 @@ const PORT = Number(process.env.PORT ?? 4000);
 
 registerEventHandlers();
 
-app.use(cors());
-// Stashes the raw request body before JSON-parsing it, so the Meta leadgen webhook
-// route (below) can verify its X-Hub-Signature-256 HMAC over the exact bytes Meta
-// sent — re-serializing the parsed body would not reliably reproduce the same bytes.
+app.use(helmet());
+
+const IS_PROD = process.env.NODE_ENV === "production";
+const ALLOWED_ORIGINS = IS_PROD
+  ? [process.env.PUBLIC_ORIGIN, process.env.CRM_ORIGIN].filter(Boolean) as string[]
+  : true;
+app.use(cors(IS_PROD ? { origin: ALLOWED_ORIGINS, credentials: true } : { origin: true, credentials: true }));
+
 app.use(express.json({ verify: (req: Request & { rawBody?: Buffer }, _res, buf) => { req.rawBody = buf; } }));
 app.use(apiRateLimiter);
 

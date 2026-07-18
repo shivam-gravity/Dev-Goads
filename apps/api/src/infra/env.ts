@@ -15,3 +15,4 @@ function requireSecretInProduction(name: string, devFallback: string): string {
 }
 
 export const JWT_SECRET = requireSecretInProduction("JWT_SECRET", "dev-secret-change-me");
+export const CRM_JWT_SHARED_SECRET = requireSecretInProduction("CRM_JWT_SHARED_SECRET", "dev-crm-shared-secret");

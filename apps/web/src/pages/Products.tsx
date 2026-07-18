@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import PolluxaHeader from "../components/PolluxaHeader.js";
+import { useAuth } from "../context/AuthContext.js";
 import { api, CatalogSourceResult, ProductAnalysis, ProductCatalogItem, ProductCatalogSource } from "../api/client.js";
 import {
   SearchIcon,
@@ -20,11 +21,24 @@ import {
 interface ProductRow {
   id: string;
   name: string;
+  category: string;
   source: string;
   updatedAt: number;
 }
 
 type AddStep = "choose" | "shopify" | "facebook" | "google" | "url" | "manual";
+
+const STORAGE_KEY = "polluxa_products";
+
+function loadProducts(): ProductRow[] {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+  } catch { return []; }
+}
+
+function saveProducts(products: ProductRow[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
+}
 
 const SYNC_METHODS: { step: "shopify" | "facebook" | "google"; source: ProductCatalogSource; title: string; description: string; icon: React.ReactNode }[] = [
   { step: "shopify", source: "shopify", title: "Sync from Shopify", description: "Automatically import and update all your products from Shopify", icon: <ShopifyIcon /> },
@@ -38,9 +52,10 @@ function formatDate(ts: number) {
 
 export default function Products() {
   const navigate = useNavigate();
-  const workspaceId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
+  const { workspaceId: authWsId } = useAuth();
+  const workspaceId = authWsId ?? localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
-  const [products, setProducts] = useState<ProductRow[]>([]);
+  const [products, setProducts] = useState<ProductRow[]>(loadProducts);
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [step, setStep] = useState<AddStep>("choose");
@@ -61,6 +76,8 @@ export default function Products() {
   const filtered = products.filter((p) => p.name.toLowerCase().includes(search.trim().toLowerCase()));
   const activeSyncMethod = SYNC_METHODS.find((m) => m.step === step);
 
+  useEffect(() => { saveProducts(products); }, [products]);
+
   useEffect(() => {
     if (!modalOpen || !activeSyncMethod) return;
     let cancelled = false;
@@ -69,18 +86,10 @@ export default function Products() {
     setCatalogError(null);
     api
       .listProductCatalog(workspaceId, activeSyncMethod.source)
-      .then((result) => {
-        if (!cancelled) setCatalog(result[0] ?? null);
-      })
-      .catch((err) => {
-        if (!cancelled) setCatalogError(err instanceof Error ? err.message : "Couldn't load products");
-      })
-      .finally(() => {
-        if (!cancelled) setCatalogLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((result) => { if (!cancelled) setCatalog(result[0] ?? null); })
+      .catch((err) => { if (!cancelled) setCatalogError(err instanceof Error ? err.message : "Couldn't load products"); })
+      .finally(() => { if (!cancelled) setCatalogLoading(false); });
+    return () => { cancelled = true; };
   }, [modalOpen, step, workspaceId]);
 
   function openAddModal() {
@@ -108,7 +117,7 @@ export default function Products() {
       const site = await api.scrapeWebsite(url.trim());
       const analysis: ProductAnalysis = await api.analyzeProduct(site);
       setProducts((prev) => [
-        { id: `${Date.now()}`, name: analysis.productName, source: url.trim(), updatedAt: Date.now() },
+        { id: `${Date.now()}`, name: analysis.productName, category: analysis.category, source: url.trim(), updatedAt: Date.now() },
         ...prev,
       ]);
       setUrl("");
@@ -127,12 +136,12 @@ export default function Products() {
       return;
     }
     setError(null);
-    const parts = [manualCategory.trim(), manualPrice.trim() ? `$${manualPrice.trim()}` : ""].filter(Boolean);
     setProducts((prev) => [
       {
         id: `manual-${Date.now()}`,
         name: manualName.trim(),
-        source: manualUrl.trim() || (parts.length > 0 ? parts.join(" · ") : "Manual entry"),
+        category: manualCategory.trim() || "—",
+        source: manualUrl.trim() || (manualPrice.trim() ? `$${manualPrice.trim()}` : "Manual entry"),
         updatedAt: Date.now(),
       },
       ...prev,
@@ -148,7 +157,7 @@ export default function Products() {
     setProducts((prev) => {
       const id = `catalog-${item.id}`;
       if (prev.some((p) => p.id === id)) return prev;
-      return [{ id, name: item.name, source: item.url, updatedAt: Date.now() }, ...prev];
+      return [{ id, name: item.name, category: item.category, source: item.url, updatedAt: Date.now() }, ...prev];
     });
   }
 
@@ -177,7 +186,8 @@ export default function Products() {
 
       <div className="polluxa-table-card">
         <div className="polluxa-table-row polluxa-table-head">
-          <span>Products</span>
+          <span>Product</span>
+          <span>Category</span>
           <span>Source</span>
           <span>Updated</span>
           <span>Actions</span>
@@ -186,13 +196,14 @@ export default function Products() {
         {filtered.length === 0 ? (
           <div className="polluxa-table-empty">
             <InboxIcon />
-            <p>No data</p>
+            <p>No products yet. Add one to get started.</p>
           </div>
         ) : (
           filtered.map((p) => (
             <div key={p.id} className="polluxa-table-row">
               <span className="polluxa-table-row-name">{p.name}</span>
-              <span className="polluxa-table-row-source">{p.source}</span>
+              <span className="polluxa-table-row-source">{p.category}</span>
+              <span className="polluxa-table-row-source">{p.source.length > 40 ? p.source.slice(0, 40) + "…" : p.source}</span>
               <span>{formatDate(p.updatedAt)}</span>
               <span>
                 <button

@@ -1,12 +1,7 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api, Draft } from "../api/client.js";
 
-const PLATFORMS: { key: string; label: string; icon: string; enabled: boolean }[] = [
-  { key: "meta", label: "Meta", icon: "meta", enabled: true },
-  { key: "google", label: "Google", icon: "google", enabled: true },
-  { key: "tiktok", label: "Tiktok", icon: "tiktok", enabled: false },
-  { key: "bing", label: "Bing", icon: "bing", enabled: false },
-];
 
 interface DraftVariant { network?: string; audienceName?: string }
 
@@ -31,49 +26,27 @@ function draftBudget(data: Record<string, unknown>): string {
 function draftAudience(data: Record<string, unknown>): string {
   const variants = Array.isArray(data.variants) ? (data.variants as DraftVariant[]) : [];
   const names = [...new Set(variants.map((v) => v.audienceName).filter((n): n is string => Boolean(n)))];
-  if (names.length) return names.join(", ");
+  if (names.length === 1) return names[0];
+  if (names.length > 1) return `${names[0]} +${names.length - 1} more`;
   if (typeof data.audience === "string") return data.audience;
   return "—";
 }
 
 function draftCreativeCount(data: Record<string, unknown>): number | "—" {
-  if (Array.isArray(data.creativeAssets)) return data.creativeAssets.length;
-  if (Array.isArray(data.creatives)) return data.creatives.length;
+  if (Array.isArray(data.creativeAssets) && data.creativeAssets.length) return data.creativeAssets.length;
+  if (Array.isArray(data.variants) && data.variants.length) return data.variants.length;
+  if (Array.isArray(data.creatives) && data.creatives.length) return data.creatives.length;
   return "—";
 }
 
 function draftProduct(data: Record<string, unknown>, fallbackName: string): string {
   if (typeof data.product === "string") return data.product;
+  if (typeof data.finalUrl === "string") return data.finalUrl;
   if (typeof data.goal === "string") return data.goal;
   return fallbackName;
 }
 
-type BudgetKey = "dailyBudgetCents" | "dailyBudget" | "budget";
 
-/** Mirrors draftBudget's duck-typing, but returns the raw editable value + which
- * key it came from, so saving writes back to the same field instead of adding a
- * second, conflicting budget key alongside the one the draft's producer already uses. */
-function draftEditableFields(data: Record<string, unknown>): { budgetKey: BudgetKey; budgetDollars: string; audience: string; product: string } {
-  let budgetKey: BudgetKey = "dailyBudgetCents";
-  let budgetDollars = "";
-  if (typeof data.dailyBudgetCents === "number") { budgetKey = "dailyBudgetCents"; budgetDollars = String(data.dailyBudgetCents / 100); }
-  else if (typeof data.dailyBudget === "number") { budgetKey = "dailyBudget"; budgetDollars = String(data.dailyBudget); }
-  else if (typeof data.budget === "number") { budgetKey = "budget"; budgetDollars = String(data.budget); }
-  const audience = typeof data.audience === "string" ? data.audience : "";
-  const product = typeof data.product === "string" ? data.product : typeof data.goal === "string" ? data.goal : "";
-  return { budgetKey, budgetDollars, audience, product };
-}
-
-const ICON_ITEMS = [
-  { key: "products", label: "Products", icon: "cart", cls: "dap-icon-products" },
-  { key: "cta", label: "CTA", icon: "cursor", cls: "dap-icon-cta" },
-  { key: "interest", label: "Interest", icon: "target", cls: "dap-icon-interest" },
-  { key: "creatives", label: "Creatives", icon: "palette", cls: "dap-icon-creatives" },
-  { key: "adcopy", label: "Ad Copy", icon: "type", cls: "dap-icon-adcopy" },
-  { key: "age", label: "Age", icon: "cake", cls: "dap-icon-age" },
-  { key: "gender", label: "Gender", icon: "users", cls: "dap-icon-gender" },
-  { key: "locations", label: "Locations", icon: "pin", cls: "dap-icon-locations" },
-];
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
   const common = {
@@ -221,21 +194,148 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
   }
 }
 
+interface DraftVariantFull {
+  id?: string;
+  network?: string;
+  status?: string;
+  audienceName?: string;
+  landingPageUrl?: string;
+  creative?: {
+    headline?: string;
+    body?: string;
+    callToAction?: string;
+    imageUrl?: string;
+    videoUrl?: string;
+    headlines?: string[];
+    primaryTexts?: string[];
+  };
+}
+
+interface DraftCreativeAsset {
+  id?: string;
+  url?: string;
+  type?: string;
+  source?: string;
+}
+
+function DraftCampaignDetail({ data }: { data: Record<string, unknown> }) {
+  const variants = Array.isArray(data.variants) ? (data.variants as DraftVariantFull[]) : [];
+  const creativeAssets = Array.isArray(data.creativeAssets) ? (data.creativeAssets as DraftCreativeAsset[]) : [];
+  const locations = Array.isArray(data.locations) ? (data.locations as string[]) : [];
+  const networks = Array.isArray(data.networks) ? (data.networks as string[]) : draftNetworks(data);
+
+  return (
+    <div className="dap-detail">
+      <div className="dap-detail-grid">
+        {/* Campaign Settings */}
+        <div className="dap-detail-section">
+          <h4>Campaign Settings</h4>
+          <dl className="dap-detail-dl">
+            {!!data.name && <><dt>Name</dt><dd>{String(data.name)}</dd></>}
+            {!!data.dailyBudgetCents && <><dt>Daily Budget</dt><dd>${(Number(data.dailyBudgetCents) / 100).toFixed(2)}</dd></>}
+            {!!data.conversionEvent && <><dt>Conversion Event</dt><dd>{String(data.conversionEvent)}</dd></>}
+            {!!data.finalUrl && <><dt>Final URL</dt><dd>{String(data.finalUrl)}</dd></>}
+            {!!data.startDate && <><dt>Start Date</dt><dd>{String(data.startDate)}</dd></>}
+            <dt>Networks</dt><dd>{networks.join(", ") || "—"}</dd>
+            {locations.length > 0 && <><dt>Locations</dt><dd>{locations.join(", ")}</dd></>}
+            {!!data.advantagePlus && <><dt>Advantage+</dt><dd>Enabled</dd></>}
+          </dl>
+        </div>
+
+        {/* Ad Account Settings */}
+        {!!(data.metaAdAccountId || data.pageId || data.googleCustomerId) && (
+          <div className="dap-detail-section">
+            <h4>Ad Account</h4>
+            <dl className="dap-detail-dl">
+              {!!data.metaAdAccountId && <><dt>Meta Ad Account</dt><dd>{String(data.metaAdAccountId)}</dd></>}
+              {!!data.pageId && <><dt>Page ID</dt><dd>{String(data.pageId)}</dd></>}
+              {!!data.instagramAccountId && <><dt>Instagram Account</dt><dd>{String(data.instagramAccountId)}</dd></>}
+              {!!data.pixelId && <><dt>Pixel ID</dt><dd>{String(data.pixelId)}</dd></>}
+              {!!data.googleCustomerId && <><dt>Google Customer</dt><dd>{String(data.googleCustomerId)}</dd></>}
+              {!!data.googleConversionActionId && <><dt>Google Conv. Action</dt><dd>{String(data.googleConversionActionId)}</dd></>}
+            </dl>
+          </div>
+        )}
+      </div>
+
+      {/* Creative Assets */}
+      {creativeAssets.length > 0 && (
+        <div className="dap-detail-section">
+          <h4>Creative Assets ({creativeAssets.length})</h4>
+          <div className="dap-detail-assets">
+            {creativeAssets.map((a, idx) => (
+              <div key={a.id ?? idx} className="dap-detail-asset">
+                {a.type === "image" && a.url && <img src={a.url} alt={`Asset ${idx + 1}`} />}
+                {a.type === "video" && a.url && <video src={a.url} controls />}
+                <span className="dap-detail-asset-badge">{a.source ?? "upload"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Ad Variants */}
+      {variants.length > 0 && (
+        <div className="dap-detail-section">
+          <h4>Ad Variants ({variants.length})</h4>
+          <div className="dap-detail-variants">
+            {variants.map((v, idx) => {
+              const c = v.creative;
+              const headlines = c?.headlines?.length ? c.headlines : c?.headline ? [c.headline] : [];
+              const primaryTexts = c?.primaryTexts?.length ? c.primaryTexts : c?.body ? [c.body] : [];
+              return (
+                <div key={v.id ?? idx} className="dap-detail-variant-card">
+                  <div className="dap-detail-variant-header">
+                    <span className="dap-detail-variant-network">{v.network ?? "meta"}</span>
+                    <span className="dap-detail-variant-status">{v.status ?? "draft"}</span>
+                    {v.audienceName && <span className="dap-detail-variant-audience">{v.audienceName}</span>}
+                  </div>
+                  {headlines.length > 0 && (
+                    <div className="dap-detail-variant-field">
+                      <strong>Headlines</strong>
+                      <ul>{headlines.map((h, hi) => <li key={hi}>{h || <em className="muted-text">empty</em>}</li>)}</ul>
+                    </div>
+                  )}
+                  {primaryTexts.length > 0 && (
+                    <div className="dap-detail-variant-field">
+                      <strong>Primary Text</strong>
+                      <ul>{primaryTexts.map((t, ti) => <li key={ti}>{t || <em className="muted-text">empty</em>}</li>)}</ul>
+                    </div>
+                  )}
+                  {c?.callToAction && (
+                    <div className="dap-detail-variant-field">
+                      <strong>CTA</strong>
+                      <span>{c.callToAction}</span>
+                    </div>
+                  )}
+                  {v.landingPageUrl && (
+                    <div className="dap-detail-variant-field">
+                      <strong>Landing Page</strong>
+                      <span>{v.landingPageUrl}</span>
+                    </div>
+                  )}
+                  {c?.imageUrl && (
+                    <div className="dap-detail-variant-field">
+                      <img src={c.imageUrl} alt="Ad creative" className="dap-detail-variant-img" />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Drafts({ businessId }: { businessId: string }) {
+  const navigate = useNavigate();
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [platform, setPlatform] = useState("meta");
   const [autoPublish, setAutoPublish] = useState(() => localStorage.getItem("polluxa_auto_publish") === "1");
-
-  const [editingDraft, setEditingDraft] = useState<Draft | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editBudgetKey, setEditBudgetKey] = useState<BudgetKey>("dailyBudgetCents");
-  const [editBudget, setEditBudget] = useState("");
-  const [editAudience, setEditAudience] = useState("");
-  const [editProduct, setEditProduct] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
+  const [expandedDraftId, setExpandedDraftId] = useState<string | null>(null);
 
   const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
@@ -284,46 +384,17 @@ export default function Drafts({ businessId }: { businessId: string }) {
     }
   }
 
-  function handleOpenEdit(draft: Draft) {
-    const fields = draftEditableFields((draft.data ?? {}) as Record<string, unknown>);
-    setEditingDraft(draft);
-    setEditName(draft.name);
-    setEditBudgetKey(fields.budgetKey);
-    setEditBudget(fields.budgetDollars);
-    setEditAudience(fields.audience);
-    setEditProduct(fields.product);
-    setEditError(null);
-  }
-
-  function handleCloseEdit() {
-    setEditingDraft(null);
-    setEditError(null);
-  }
-
-  async function handleSaveEdit() {
-    if (!editingDraft) return;
-    if (!editName.trim()) { setEditError("Name is required."); return; }
-    const budgetValue = editBudget.trim() ? Number(editBudget) : NaN;
-    if (!Number.isFinite(budgetValue) || budgetValue < 0) { setEditError("Daily budget must be a positive number."); return; }
-
-    setSaving(true);
-    setEditError(null);
-    try {
-      const existingData = (editingDraft.data ?? {}) as Record<string, unknown>;
-      const data: Record<string, unknown> = { ...existingData, audience: editAudience, product: editProduct };
-      data[editBudgetKey] = editBudgetKey === "dailyBudgetCents" ? Math.round(budgetValue * 100) : budgetValue;
-
-      const updated = await api.updateDraft(editingDraft.id, { name: editName.trim(), data });
-      setDrafts(prev => prev.map(d => (d.id === updated.id ? updated : d)));
-      setEditingDraft(null);
-    } catch (err) {
-      setEditError(err instanceof Error ? err.message : "Failed to update draft.");
-    } finally {
-      setSaving(false);
+  function handleEdit(draft: Draft) {
+    const data = (draft.data ?? {}) as Record<string, unknown>;
+    const campaignId = data.campaignId as string | undefined;
+    if (campaignId) {
+      navigate(`/campaigns/${campaignId}/builder`);
+    } else {
+      setError("This draft has no linked campaign to edit.");
     }
   }
 
-  const unpublished = drafts.filter(d => d.status !== "published" && draftNetworks((d.data ?? {}) as Record<string, unknown>).includes(platform));
+  const unpublished = drafts.filter(d => d.status !== "published");
   const recommendationsCount = drafts.filter(d => d.score !== undefined && d.status !== "published").length;
   const publishedCount = drafts.filter(d => d.status === "published").length;
 
@@ -336,18 +407,9 @@ export default function Drafts({ businessId }: { businessId: string }) {
       </div>
 
       <div className="dap-tabs">
-        {PLATFORMS.map(p => (
-          <button
-            key={p.key}
-            type="button"
-            className={`dap-tab ${platform === p.key ? "active" : ""}`}
-            disabled={!p.enabled}
-            onClick={() => p.enabled && setPlatform(p.key)}
-          >
-            <Icon name={p.icon} size={16} />
-            {p.label}
-          </button>
-        ))}
+        <button type="button" className="dap-tab active">
+          All Platforms
+        </button>
       </div>
 
       <div className="dap-rec-card">
@@ -391,21 +453,9 @@ export default function Drafts({ businessId }: { businessId: string }) {
         </div>
 
         <div className="dap-icon-grid-wrap">
-          <div className="dap-icon-grid">
-            {ICON_ITEMS.map(item => (
-              <div key={item.key} className="dap-icon-item">
-                <span className={`dap-icon-circle ${item.cls}`}>
-                  <Icon name={item.icon} size={18} />
-                </span>
-                <span className="dap-icon-label">{item.label}</span>
-              </div>
-            ))}
-          </div>
-
           <p className="dap-info-text">
-            <strong>24 hours</strong> after your first campaign is published, We&apos;ll recommend new campaigns based on performance.
-            <br />
-            Turn on <strong>Auto-publish ↗</strong> CRM Ads will launch them automatically at the best time.
+            AI recommendations appear <strong>24 hours</strong> after your first campaign is published, based on real performance data.
+            {autoPublish && <> Auto-publish is <strong>active</strong> — top drafts will launch automatically.</>}
           </p>
         </div>
       </div>
@@ -449,21 +499,31 @@ export default function Drafts({ businessId }: { businessId: string }) {
                 ) : (
                   unpublished.map((d, i) => {
                     const data = (d.data ?? {}) as Record<string, unknown>;
+                    const isExpanded = expandedDraftId === d.id;
                     return (
-                      <tr key={d.id}>
-                        <td>{i + 1}</td>
-                        <td>{d.name}</td>
-                        <td>{draftBudget(data)}</td>
-                        <td>{draftAudience(data)}</td>
-                        <td>{draftCreativeCount(data)}</td>
-                        <td>{draftProduct(data, d.name)}</td>
-                        <td>{new Date(d.updatedAt).toLocaleString()}</td>
-                        <td className="dap-row-actions">
-                          <button type="button" className="dap-row-btn" onClick={() => handleOpenEdit(d)}>Edit</button>
-                          <button type="button" className="dap-row-btn" onClick={() => handlePublish(d.id)}>Publish</button>
-                          <button type="button" className="dap-row-btn dap-row-btn-danger" onClick={() => handleDelete(d.id)}>Delete</button>
-                        </td>
-                      </tr>
+                      <Fragment key={d.id}>
+                        <tr className={`dap-row-clickable ${isExpanded ? "dap-row-expanded" : ""}`} onClick={() => setExpandedDraftId(isExpanded ? null : d.id)}>
+                          <td>{i + 1}</td>
+                          <td>{d.name}</td>
+                          <td>{draftBudget(data)}</td>
+                          <td>{draftAudience(data)}</td>
+                          <td>{draftCreativeCount(data)}</td>
+                          <td>{draftProduct(data, d.name)}</td>
+                          <td>{new Date(d.updatedAt).toLocaleString()}</td>
+                          <td className="dap-row-actions" onClick={(e) => e.stopPropagation()}>
+                            <button type="button" className="dap-row-btn" onClick={() => handleEdit(d)}>Edit</button>
+                            <button type="button" className="dap-row-btn" onClick={() => handlePublish(d.id)}>Publish</button>
+                            <button type="button" className="dap-row-btn dap-row-btn-danger" onClick={() => handleDelete(d.id)}>Delete</button>
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr className="dap-expanded-row">
+                            <td colSpan={8}>
+                              <DraftCampaignDetail data={data} />
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     );
                   })
                 )}
@@ -473,39 +533,6 @@ export default function Drafts({ businessId }: { businessId: string }) {
         </div>
       </div>
 
-      {editingDraft && (
-        <div className="polluxa-modal-overlay" onClick={handleCloseEdit}>
-          <div className="polluxa-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="polluxa-modal-header">
-              <h2>Edit Draft</h2>
-              <button type="button" className="polluxa-modal-close" onClick={handleCloseEdit} aria-label="Close">×</button>
-            </div>
-
-            {editError && <p className="error">{editError}</p>}
-
-            <label className="polluxa-modal-field">
-              <span>Name</span>
-              <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} autoFocus />
-            </label>
-            <label className="polluxa-modal-field">
-              <span>Daily budget (USD)</span>
-              <input type="number" min="0" step="0.01" value={editBudget} onChange={(e) => setEditBudget(e.target.value)} />
-            </label>
-            <label className="polluxa-modal-field">
-              <span>Audience</span>
-              <input type="text" value={editAudience} onChange={(e) => setEditAudience(e.target.value)} placeholder="e.g. Lookalike — Purchasers" />
-            </label>
-            <label className="polluxa-modal-field">
-              <span>Product</span>
-              <input type="text" value={editProduct} onChange={(e) => setEditProduct(e.target.value)} placeholder="e.g. Aurora Wireless Earbuds" />
-            </label>
-
-            <button type="button" className="btn btn-primary polluxa-modal-submit" onClick={handleSaveEdit} disabled={saving}>
-              {saving ? "Saving..." : "Save Changes"}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

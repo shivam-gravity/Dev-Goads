@@ -1,13 +1,5 @@
 const BASE_URL = "/api";
 
-// There is no login flow, so no bearer token is ever attached — every request relies on
-// the gateway/auth-service's dev-mode bypass (see apps/auth-service/src/requireUser.ts),
-// which resolves an unauthenticated request to the seeded demo user outside production.
-
-// Defense-in-depth: the backend should never send internals in an error message
-// (see docs/architecture-roadmap.md and the 2026-07-06 QA report), but if it ever
-// does — a misconfigured environment, a new endpoint that forgot the pattern —
-// this stops a raw stack trace from ending up on someone's screen.
 const LOOKS_INTERNAL = /prisma|stacktrace|\.(ts|js):\d+|at\s+\w+\s*\(/i;
 const GENERIC_ERROR = "Something went wrong. Please try again.";
 
@@ -26,14 +18,73 @@ function extractErrorMessage(error: unknown): string {
   return GENERIC_ERROR;
 }
 
+export function getAccessToken(): string | null {
+  return localStorage.getItem("polluxa_access_token");
+}
+
+export function getRefreshToken(): string | null {
+  return localStorage.getItem("polluxa_refresh_token");
+}
+
+export function setTokens(accessToken: string, refreshToken: string): void {
+  localStorage.setItem("polluxa_access_token", accessToken);
+  localStorage.setItem("polluxa_refresh_token", refreshToken);
+}
+
+export function clearTokens(): void {
+  localStorage.removeItem("polluxa_access_token");
+  localStorage.removeItem("polluxa_refresh_token");
+}
+
+let refreshPromise: Promise<string | null> | null = null;
+
+async function attemptTokenRefresh(): Promise<string | null> {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    const rt = getRefreshToken();
+    if (!rt) return null;
+    try {
+      const res = await fetch(`${BASE_URL}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: rt }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      setTokens(data.accessToken, data.refreshToken);
+      return data.accessToken as string;
+    } catch {
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string> | undefined),
+  };
+  const token = getAccessToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  let res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+
+  if (res.status === 401 && token) {
+    const newToken = await attemptTokenRefresh();
+    if (newToken) {
+      headers["Authorization"] = `Bearer ${newToken}`;
+      res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+    } else {
+      clearTokens();
+      if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+        window.location.href = "/login";
+      }
+      throw new Error("Session expired");
+    }
+  }
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -110,6 +161,15 @@ export interface AudienceAnalysis {
   consumerCharacteristics?: string; interestTags?: string[]; recommendedObjective?: string; recommendedPerformanceGoal?: string; dataSource?: string;
 }
 export interface DeepResearchResult { site: ScrapedSite; product: ProductAnalysis; audience: AudienceAnalysis; }
+export interface CompanyProfileData {
+  overview: string; products: string[]; services: string[]; features: string[];
+  pricing: string; industries: string[]; targetAudience: string;
+  icp: { summary: string; segments: { name: string; description: string }[] };
+  personas: { name: string; description: string }[];
+  technology: string[]; positioning: string; messaging: string[];
+  socialProof: string[]; faqs: { question: string; answer: string }[];
+}
+export interface CompanyProfileRecord { businessId: string; businessName: string; domain: string | null; data: CompanyProfileData; updatedAt: string; }
 
 export interface Citation { url: string; title: string; }
 export interface DeepResearchBlock<T = unknown> { key: string; label: string; citations: Citation[]; data: T; }
@@ -276,10 +336,21 @@ export interface AdInsightsResponse {
   creative: { scatter: { id: string; ctr: number; cpaCents: number }[]; topAds: CreativeInsightItem[] };
 }
 
+export interface AuthResponse { user: User; token: string; refreshToken: string; workspaceId?: string; }
+export interface CrmAuthResponse { user: User; accessToken: string; refreshToken: string; workspaceId: string; businessId: string; }
+
 // ── API methods ───────────────────────────────────────────────────────────────
 export const api = {
-  // Auth — no login/register/googleAuth: there is no login flow, every session resolves
-  // to the seeded demo user via the backend's dev-mode auth bypass.
+  // Auth
+  login: (email: string, password: string) =>
+    request<AuthResponse>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  register: (name: string, email: string, password: string) =>
+    request<AuthResponse>("/auth/register", { method: "POST", body: JSON.stringify({ name, email, password }) }),
+  googleAuth: (name: string, email: string, googleId: string) =>
+    request<AuthResponse>("/auth/google", { method: "POST", body: JSON.stringify({ name, email, googleId }) }),
+  crmLogin: (token: string) =>
+    request<CrmAuthResponse>("/auth/crm-login", { method: "POST", body: JSON.stringify({ token }) }),
+  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
   me: () => request<User>("/auth/me"),
   updateMe: (patch: { name?: string; avatar?: string }) =>
     request<User>("/auth/me", { method: "PATCH", body: JSON.stringify(patch) }),
@@ -313,7 +384,8 @@ export const api = {
     request<Asset>(`/assets/${id}/tags`, { method: "PATCH", body: JSON.stringify({ tags }) }),
 
   // AI Insights
-  listInsights: (workspaceId: string) => request<Insight[]>(`/workspaces/${workspaceId}/insights`),
+  listInsights: (workspaceId: string, businessId?: string) =>
+    request<Insight[]>(`/workspaces/${workspaceId}/insights${businessId ? `?businessId=${businessId}` : ""}`),
   generateInsights: (workspaceId: string, businessId: string) =>
     request<Insight[]>(`/workspaces/${workspaceId}/insights/generate?businessId=${businessId}`, { method: "POST" }),
   dismissInsight: (id: string) => request<Insight>(`/insights/${id}/dismiss`, { method: "PATCH" }),
@@ -395,7 +467,7 @@ export const api = {
   // Decision Intelligence campaign generation (Research Orchestrator -> Decision Engine
   // + AI Agent Coordinator -> Campaign Builder, all in one pipeline run — see
   // modules/orchestrator/campaignGenerationPipeline.ts)
-  generateCampaign: (input: { workspaceId: string; businessId: string; url: string; name?: string; dailyBudgetCents?: number }) =>
+  generateCampaign: (input: { workspaceId: string; businessId: string; url: string; name?: string; dailyBudgetCents?: number; channels?: string[]; objective?: string; countries?: string[] }) =>
     request<CampaignGenerationJobStatus>("/campaigns/generate", { method: "POST", body: JSON.stringify(input) }),
   getCampaignGenerationStatus: (id: string) => request<CampaignGenerationJobStatus>(`/campaigns/generate/${id}/status`),
   getCampaignGenerationFacts: (id: string) => request<CampaignGenerationFacts>(`/campaigns/generate/${id}/facts`),
@@ -405,9 +477,11 @@ export const api = {
   // Business
   createBusiness: (input: Omit<BusinessProfile, "id">) =>
     request<BusinessProfile>("/businesses", { method: "POST", body: JSON.stringify(input) }),
+  listBusinesses: (workspaceId: string) => request<BusinessProfile[]>(`/businesses?workspaceId=${workspaceId}`),
   getBusiness: (id: string) => request<BusinessProfile>(`/businesses/${id}`),
   updateBusiness: (id: string, patch: Partial<Omit<BusinessProfile, "id">>) =>
     request<BusinessProfile>(`/businesses/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  getCompanyProfile: (businessId: string) => request<CompanyProfileRecord>(`/businesses/${businessId}/company-profile`),
 
   // Strategy
   generateStrategy: (businessId: string) =>

@@ -191,7 +191,7 @@ test("llmRouter.runStructured - the assigned provider, Groq, and Mistral all fai
     // this test file, so it degrades to null without a network call, same as being absent.
     // Dedup to first-seen order: the OpenAI SDK (groq/ollama) auto-retries a connection
     // error a few times before giving up, so a provider may appear more than once.
-    assert.deepStrictEqual([...new Set(reached)], ["ollama", "groq", "mistral"]);
+    assert.deepStrictEqual([...new Set(reached)], ["ollama", "mistral", "groq"]);
   } finally {
     currentFetchImpl = original;
   }

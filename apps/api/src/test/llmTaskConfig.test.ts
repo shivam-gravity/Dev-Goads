@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { resolveTaskModel } from "../infra/llmTaskConfig.js";
 
-test("resolveTaskModel - no override anywhere resolves to the Groq default", () => {
+test("resolveTaskModel - no override anywhere resolves to the Mistral default", () => {
   const assignment = resolveTaskModel("some-unassigned-task");
-  assert.deepStrictEqual(assignment, { provider: "groq", model: "llama-3.3-70b-versatile" });
+  assert.deepStrictEqual(assignment, { provider: "mistral", model: "mistral-small-latest" });
 });
 
 test("resolveTaskModel - a valid env override wins over the default", () => {
@@ -41,7 +41,7 @@ test("resolveTaskModel - an unrecognized provider in the env override is ignored
   process.env.LLM_TASK_TEST_AGENT = "bogus-provider:some-model";
   try {
     const assignment = resolveTaskModel("test-agent");
-    assert.deepStrictEqual(assignment, { provider: "groq", model: "llama-3.3-70b-versatile" });
+    assert.deepStrictEqual(assignment, { provider: "mistral", model: "mistral-small-latest" });
   } finally {
     delete process.env.LLM_TASK_TEST_AGENT;
   }
@@ -51,7 +51,7 @@ test("resolveTaskModel - a malformed env override (no colon at all) is ignored, 
   process.env.LLM_TASK_TEST_AGENT = "ollama-no-separator";
   try {
     const assignment = resolveTaskModel("test-agent");
-    assert.deepStrictEqual(assignment, { provider: "groq", model: "llama-3.3-70b-versatile" });
+    assert.deepStrictEqual(assignment, { provider: "mistral", model: "mistral-small-latest" });
   } finally {
     delete process.env.LLM_TASK_TEST_AGENT;
   }
@@ -61,7 +61,7 @@ test("resolveTaskModel - an env override with an empty model name is ignored, fa
   process.env.LLM_TASK_TEST_AGENT = "ollama:";
   try {
     const assignment = resolveTaskModel("test-agent");
-    assert.deepStrictEqual(assignment, { provider: "groq", model: "llama-3.3-70b-versatile" });
+    assert.deepStrictEqual(assignment, { provider: "mistral", model: "mistral-small-latest" });
   } finally {
     delete process.env.LLM_TASK_TEST_AGENT;
   }

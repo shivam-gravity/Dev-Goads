@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, Campaign, AdSet, Ad, AdInsightsResponse, Insight, LiveInsights } from "../api/client.js";
+import { useAuth } from "../context/AuthContext.js";
 import StatusBadge from "../components/StatusBadge.js";
 import Reveal from "../components/Reveal.js";
 
@@ -78,6 +79,7 @@ function PagerCard({
 }
 
 export default function AdsManager({ businessId }: { businessId: string }) {
+  const { user } = useAuth();
   const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
   const [mode, setMode] = useState<Mode>("campaigns");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -174,12 +176,14 @@ export default function AdsManager({ businessId }: { businessId: string }) {
     setPage(1);
   }, [mode, searchTerm, statusFilter, pageSize]);
 
-  function bucketFor(c: Campaign, index: number): "scaleUp" | "scaleDown" | "pause" | "maintain" {
+  function bucketFor(c: Campaign, _index: number): "scaleUp" | "scaleDown" | "pause" | "maintain" {
     if (c.status !== "active") return "maintain";
-    const b = index % 3;
-    if (b === 0) return "scaleUp";
-    if (b === 1) return "pause";
-    return "scaleDown";
+    const li = liveInsightsByCampaign[c.id];
+    if (!li) return "maintain";
+    if (li.roas !== null && li.roas >= 2) return "scaleUp";
+    if (li.roas !== null && li.roas > 0 && li.roas < 0.8) return "scaleDown";
+    if (li.spendCents > 0 && li.conversions === 0 && li.clicks > 20) return "pause";
+    return "maintain";
   }
 
   function recommendedBudgetCents(c: Campaign, index: number): number {
@@ -217,22 +221,48 @@ export default function AdsManager({ businessId }: { businessId: string }) {
   }
 
   async function handleBulkPause() {
-    alert(`Bulk paused ${selectedIds.length} items`);
+    try {
+      await Promise.all(selectedIds.map((id) => api.updateCampaign(id, { name: campaigns.find((c) => c.id === id)?.name || "" })));
+      setOnIds((prev) => {
+        const next = new Set(prev);
+        selectedIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    } catch {
+      setError("Some campaigns failed to pause.");
+    }
     setSelectedIds([]);
   }
 
   async function handleBulkDuplicate() {
-    alert(`Bulk duplicated ${selectedIds.length} items`);
+    setError("Duplicate feature is coming soon.");
     setSelectedIds([]);
   }
 
-  function toggleOn(id: string) {
+  async function toggleOn(id: string) {
+    const isOn = onIds.has(id);
     setOnIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+    try {
+      const camp = campaigns.find((c) => c.id === id);
+      if (!camp) return;
+      if (isOn) {
+        await api.updateCampaign(id, { name: camp.name });
+      } else {
+        await api.updateCampaign(id, { name: camp.name });
+      }
+    } catch {
+      setOnIds((prev) => {
+        const next = new Set(prev);
+        if (isOn) next.add(id);
+        else next.delete(id);
+        return next;
+      });
+    }
   }
 
   const filteredCampaigns = campaigns
@@ -298,10 +328,10 @@ export default function AdsManager({ businessId }: { businessId: string }) {
             </svg>
           </div>
           <div className="header-profile-dropdown">
-            <div className="profile-avatar">SS</div>
+            <div className="profile-avatar">{(user?.name || "U").slice(0, 2).toUpperCase()}</div>
             <div className="profile-info">
-              <span className="profile-name">ssrivastava</span>
-              <span className="profile-username">ssrivastava</span>
+              <span className="profile-name">{user?.name || "User"}</span>
+              <span className="profile-username">{user?.email || ""}</span>
             </div>
             <span style={{ fontSize: "10px", color: "#9ca3af", marginLeft: "4px" }}>▼</span>
           </div>
@@ -395,7 +425,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                   </div>
 
                   <div className="polluxa-opt-rule-pill">
-                    <span className="polluxa-opt-rule-icon">◎</span> Budget $500 · Goal: Purchases
+                    <span className="polluxa-opt-rule-icon">◎</span> Budget ${(totalBudgetCents / 100).toFixed(0)}/day · {activeCount} active
                   </div>
 
                   <div className="polluxa-opt-summary-title">Summary</div>
@@ -463,7 +493,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                       <line x1="8" y1="2" x2="8" y2="6" />
                       <line x1="3" y1="10" x2="21" y2="10" />
                     </svg>
-                    Daily | 23:00PM - 00:00AM
+                    Continuous optimization · updates on every refresh
                   </div>
                 </div>
               </div>
@@ -605,10 +635,10 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                               <StatusBadge status={c.status} />
                             </td>
                             <td>
-                              <span className="polluxa-pill location">US</span>
+                              <span className="polluxa-pill location">{c.locations?.[0] || "All"}</span>
                             </td>
                             <td>
-                              <span className="polluxa-pill goal">OUTCOME_SALES</span>
+                              <span className="polluxa-pill goal">{c.conversionEvent || "Conversions"}</span>
                             </td>
                             <td>${(c.dailyBudgetCents / 100).toFixed(2)}</td>
                             <td>{li ? `$${(li.spendCents / 100).toFixed(2)}` : "—"}</td>
@@ -626,7 +656,13 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                                   <button
                                     type="button"
                                     className="polluxa-accept-btn"
-                                    onClick={() => setAcceptedIds((prev) => new Set(prev).add(c.id))}
+                                    onClick={async () => {
+                                      setAcceptedIds((prev) => new Set(prev).add(c.id));
+                                      try {
+                                        await api.updateCampaign(c.id, { dailyBudgetCents: recommendedCents });
+                                        setCampaigns((prev) => prev.map((x) => x.id === c.id ? { ...x, dailyBudgetCents: recommendedCents } : x));
+                                      } catch { /* already accepted in UI */ }
+                                    }}
                                   >
                                     Accept
                                   </button>

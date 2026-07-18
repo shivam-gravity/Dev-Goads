@@ -44,6 +44,10 @@ import BrandProfile from "./pages/BrandProfile.js";
 import Products from "./pages/Products.js";
 import NotFound from "./pages/NotFound.js";
 import UserCenter from "./pages/UserCenter/index.js";
+import Landing from "./pages/Landing.js";
+import Login from "./pages/Login.js";
+import Register from "./pages/Register.js";
+import CrmRedirect from "./pages/CrmRedirect.js";
 import { CopilotProvider, useCopilot } from "./providers/CopilotProvider.js";
 import CopilotDrawer from "./components/Copilot/Drawer.js";
 import ErrorBoundary from "./components/ErrorBoundary.js";
@@ -361,12 +365,18 @@ function CopilotFab() {
   );
 }
 
-// There is no login flow — the only gate left is "has this workspace finished
-// onboarding (created a business) yet," not "is this user authenticated."
 function RequireAuth({ children }: { children: JSX.Element }) {
-  const { isLoading, businessId } = useAuth();
+  const { isLoading, isAuthenticated, businessId } = useAuth();
   if (isLoading) return null;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!businessId) return <Navigate to="/get-started" replace />;
+  return children;
+}
+
+function RedirectIfAuthenticated({ children }: { children: JSX.Element }) {
+  const { isLoading, isAuthenticated } = useAuth();
+  if (isLoading) return null;
+  if (isAuthenticated) return <Navigate to="/dashboard" replace />;
   return children;
 }
 
@@ -391,6 +401,10 @@ export default function App() {
         <RealtimeProvider>
           <CopilotProvider>
             <Routes>
+              <Route path="/" element={<RedirectIfAuthenticated><Landing /></RedirectIfAuthenticated>} />
+              <Route path="/login" element={<RedirectIfAuthenticated><Login /></RedirectIfAuthenticated>} />
+              <Route path="/register" element={<RedirectIfAuthenticated><Register /></RedirectIfAuthenticated>} />
+              <Route path="/auth/crm-callback" element={<CrmRedirect />} />
               <Route path="/get-started" element={<OnboardingWrapper />} />
               <Route path="/*" element={<RequireAuth><AuthenticatedApp /></RequireAuth>} />
             </Routes>

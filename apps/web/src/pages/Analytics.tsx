@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   PieChart, Pie, Cell, ResponsiveContainer,
-  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
 } from "recharts";
 import { api, AdInsightNetwork, AdInsightsResponse } from "../api/client.js";
 import Reveal from "../components/Reveal.js";
 import { MetaInfinityIcon, GoogleIcon, TikTokIcon, BingIcon } from "../components/icons.js";
 
-const AUDIENCE_COLORS = ["#7033f5", "#0e9f6e", "#f59e0b", "#9ca3af"];
+const AUDIENCE_COLORS = ["#7033f5", "#0e9f6e", "#f59e0b", "#ef4444", "#9ca3af"];
 const PAGE_COLORS = ["#3b82f6", "#22d3ee", "#a5b4fc", "#c7d2fe"];
 
 const PLATFORM_TABS: { id: AdInsightNetwork; label: string; icon: JSX.Element }[] = [
@@ -19,11 +19,23 @@ const PLATFORM_TABS: { id: AdInsightNetwork; label: string; icon: JSX.Element }[
 ];
 
 function fmtMoney(cents: number) {
-  return `$${Math.round(cents / 100).toLocaleString()}`;
+  return `$${(cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+function fmtNum(n: number) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toLocaleString();
 }
 
 function fmtCpa(cents: number | null) {
-  return cents == null ? "—" : (cents / 100).toFixed(1);
+  if (cents == null) return "—";
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+function truncate(s: string, max: number) {
+  if (s.length <= max) return s;
+  return s.slice(0, max).trimEnd() + "...";
 }
 
 function csvCell(value: string | number): string {
@@ -80,13 +92,13 @@ export default function Analytics({ businessId }: { businessId: string }) {
       <div className="page-header">
         <div>
           <h1>Ad Insights</h1>
-          <p className="subtitle">Audience, landing page, and creative performance breakdowns across your ad platforms.</p>
+          <p className="subtitle">Performance breakdown by audience, landing page, and creative.</p>
         </div>
         <div className="flex gap-2 items-center">
           {data?.isDemo && <span className="pill demo-pill">Demo</span>}
           {data && !data.isDemo && (
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => downloadInsightsCsv(network, data)}>
-              ⬇ Export CSV
+              Export CSV
             </button>
           )}
         </div>
@@ -113,32 +125,63 @@ export default function Analytics({ businessId }: { businessId: string }) {
         </div>
       ) : (
         <Reveal>
-          <div className="flex-col gap-4">
+          <div className="ai-insights-content">
             {data.isDemo && (
               <div className="demo-banner">
-                <span>Demo data only. Create your first campaign to view performance data.</span>
-                <Link to="/campaigns/new" className="btn btn-primary btn-sm">✨ Create campaign</Link>
+                <span>Demo data. Create your first campaign to view real performance.</span>
+                <Link to="/campaigns/new" className="btn btn-primary btn-sm">Create campaign</Link>
               </div>
             )}
 
-            <div className="grid-2 insight-grid">
-              {/* Audience Insight */}
-              <section className="card">
-                <h2 className="insight-section-title">Audience Insight</h2>
-                <h3 className="insight-subsection-title">Spend Distribution</h3>
-                <div className="donut-row">
-                  <div className="donut-chart-wrap">
-                    <ResponsiveContainer width="100%" height={180}>
+            {/* KPI Summary Row */}
+            <div className="ai-kpi-row">
+              <div className="ai-kpi-card">
+                <span className="ai-kpi-label">Spend</span>
+                <span className="ai-kpi-value">{fmtMoney(data.totals.spendCents)}</span>
+              </div>
+              <div className="ai-kpi-card">
+                <span className="ai-kpi-label">Impressions</span>
+                <span className="ai-kpi-value">{fmtNum(data.totals.impressions)}</span>
+              </div>
+              <div className="ai-kpi-card">
+                <span className="ai-kpi-label">Clicks</span>
+                <span className="ai-kpi-value">{fmtNum(data.totals.clicks)}</span>
+              </div>
+              <div className="ai-kpi-card">
+                <span className="ai-kpi-label">Conversions</span>
+                <span className="ai-kpi-value">{fmtNum(data.totals.conversions)}</span>
+              </div>
+              <div className="ai-kpi-card">
+                <span className="ai-kpi-label">CPA</span>
+                <span className="ai-kpi-value">{fmtCpa(data.totals.cpaCents)}</span>
+              </div>
+              <div className="ai-kpi-card">
+                <span className="ai-kpi-label">ROAS</span>
+                <span className="ai-kpi-value">{data.totals.roas != null ? `${data.totals.roas.toFixed(1)}x` : "—"}</span>
+              </div>
+            </div>
+
+            {/* Audience + Page side by side */}
+            <div className="ai-split-grid">
+              {/* Audience */}
+              <section className="ai-insight-card">
+                <div className="ai-card-header">
+                  <h2>Audience Performance</h2>
+                </div>
+
+                <div className="ai-donut-section">
+                  <div className="ai-donut-wrap">
+                    <ResponsiveContainer width="100%" height={160}>
                       <PieChart>
                         <Pie
-                          data={data.audience.distribution}
+                          data={data.audience.distribution.slice(0, 5)}
                           dataKey="sharePct"
                           nameKey="label"
-                          innerRadius={55}
-                          outerRadius={80}
+                          innerRadius={48}
+                          outerRadius={70}
                           paddingAngle={2}
                         >
-                          {data.audience.distribution.map((_, i) => (
+                          {data.audience.distribution.slice(0, 5).map((_, i) => (
                             <Cell key={i} fill={AUDIENCE_COLORS[i % AUDIENCE_COLORS.length]} />
                           ))}
                         </Pie>
@@ -146,52 +189,54 @@ export default function Analytics({ businessId }: { businessId: string }) {
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
-                  <ul className="donut-legend">
-                    {data.audience.distribution.map((slice, i) => (
+                  <ul className="ai-legend">
+                    {data.audience.distribution.slice(0, 5).map((slice, i) => (
                       <li key={slice.label}>
-                        <span className="legend-dot" style={{ background: AUDIENCE_COLORS[i % AUDIENCE_COLORS.length] }} />
-                        {slice.label}
+                        <span className="ai-legend-dot" style={{ background: AUDIENCE_COLORS[i % AUDIENCE_COLORS.length] }} />
+                        <span className="ai-legend-label">{truncate(slice.label, 30)}</span>
+                        <span className="ai-legend-pct">{slice.sharePct}%</span>
                       </li>
                     ))}
                   </ul>
                 </div>
 
-                <h3 className="insight-subsection-title mt-3">Top Audiences</h3>
-                <div className="flex-col gap-3">
-                  {data.audience.top.map((a) => (
-                    <div key={a.name} className="top-insight-item">
-                      <strong>{a.name}</strong>
-                      {a.tags.length > 0 && (
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          {a.tags.map(t => <span key={t} className="pill tag-pill">{t}</span>)}
-                        </div>
-                      )}
-                      <div className="top-insight-stats">
-                        <span className="stat-highlight">{fmtCpa(a.cpaCents)} CPA</span>
-                        <span className="muted-text">{fmtMoney(a.spendCents)} spend · {a.campaignCount} campaigns</span>
-                      </div>
+                <div className="ai-table">
+                  <div className="ai-table-header">
+                    <span className="ai-th-name">Audience</span>
+                    <span className="ai-th">CPA</span>
+                    <span className="ai-th">Spend</span>
+                    <span className="ai-th">Campaigns</span>
+                  </div>
+                  {data.audience.top.map((a, i) => (
+                    <div key={i} className="ai-table-row">
+                      <span className="ai-td-name" title={a.name}>{truncate(a.name, 35)}</span>
+                      <span className="ai-td">{fmtCpa(a.cpaCents)}</span>
+                      <span className="ai-td">{fmtMoney(a.spendCents)}</span>
+                      <span className="ai-td">{a.campaignCount}</span>
                     </div>
                   ))}
                 </div>
               </section>
 
-              {/* Page Insights */}
-              <section className="card">
-                <h2 className="insight-section-title">Page Insights</h2>
-                <h3 className="insight-subsection-title">Spend Distribution</h3>
-                <div className="donut-row">
-                  <div className="donut-chart-wrap">
-                    <ResponsiveContainer width="100%" height={180}>
+              {/* Pages */}
+              <section className="ai-insight-card">
+                <div className="ai-card-header">
+                  <h2>Landing Page Performance</h2>
+                </div>
+
+                <div className="ai-donut-section">
+                  <div className="ai-donut-wrap">
+                    <ResponsiveContainer width="100%" height={160}>
                       <PieChart>
                         <Pie
-                          data={data.pages.distribution}
+                          data={data.pages.distribution.slice(0, 4)}
                           dataKey="sharePct"
                           nameKey="label"
-                          innerRadius={55}
-                          outerRadius={80}
+                          innerRadius={48}
+                          outerRadius={70}
                           paddingAngle={2}
                         >
-                          {data.pages.distribution.map((_, i) => (
+                          {data.pages.distribution.slice(0, 4).map((_, i) => (
                             <Cell key={i} fill={PAGE_COLORS[i % PAGE_COLORS.length]} />
                           ))}
                         </Pie>
@@ -199,67 +244,94 @@ export default function Analytics({ businessId }: { businessId: string }) {
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
-                  <ul className="donut-legend">
-                    {data.pages.distribution.map((slice, i) => (
+                  <ul className="ai-legend">
+                    {data.pages.distribution.slice(0, 4).map((slice, i) => (
                       <li key={slice.label}>
-                        <span className="legend-dot" style={{ background: PAGE_COLORS[i % PAGE_COLORS.length] }} />
-                        {slice.label}
+                        <span className="ai-legend-dot" style={{ background: PAGE_COLORS[i % PAGE_COLORS.length] }} />
+                        <span className="ai-legend-label">{truncate(slice.label, 30)}</span>
+                        <span className="ai-legend-pct">{slice.sharePct}%</span>
                       </li>
                     ))}
                   </ul>
                 </div>
 
-                <h3 className="insight-subsection-title mt-3">Top Pages</h3>
-                <div className="flex-col gap-3">
-                  {data.pages.top.map((p) => (
-                    <div key={p.url} className="top-insight-item">
-                      <strong className="page-url-text">{p.url}</strong>
-                      <div className="top-insight-stats">
-                        <span className="stat-highlight">{p.cvr}% CVR</span>
-                        <span className="muted-text">{fmtMoney(p.spendCents)} spend · {p.campaignCount} campaigns</span>
-                      </div>
+                <div className="ai-table">
+                  <div className="ai-table-header">
+                    <span className="ai-th-name">Page</span>
+                    <span className="ai-th">CVR</span>
+                    <span className="ai-th">Spend</span>
+                    <span className="ai-th">Campaigns</span>
+                  </div>
+                  {data.pages.top.map((p, i) => (
+                    <div key={i} className="ai-table-row">
+                      <span className="ai-td-name" title={p.url}>{truncate(p.url, 35)}</span>
+                      <span className="ai-td">{p.cvr}%</span>
+                      <span className="ai-td">{fmtMoney(p.spendCents)}</span>
+                      <span className="ai-td">{p.campaignCount}</span>
                     </div>
                   ))}
                 </div>
               </section>
             </div>
 
-            {/* Creative Insight */}
-            <section className="card">
-              <h2 className="insight-section-title">Creative Insight</h2>
-              <h3 className="insight-subsection-title">Creative Performance</h3>
-              <ResponsiveContainer width="100%" height={260}>
-                <ScatterChart margin={{ top: 10, right: 20, bottom: 10, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis type="number" dataKey="ctr" name="CTR" unit="%" />
-                  <YAxis type="number" dataKey="cpaCentsDollars" name="CPA" />
-                  <Tooltip cursor={{ strokeDasharray: "3 3" }} formatter={(v: any, name: any) => name === "CTR" ? `${v}%` : v} />
-                  <Scatter
-                    data={data.creative.scatter.map(s => ({ ...s, cpaCentsDollars: Math.round(s.cpaCents / 100 * 10) / 10 }))}
-                    fill="#c2ee00"
-                    stroke="#0d031f"
-                    strokeWidth={1}
-                  />
-                </ScatterChart>
-              </ResponsiveContainer>
+            {/* Creative Section */}
+            <section className="ai-insight-card">
+              <div className="ai-card-header">
+                <h2>Creative Performance</h2>
+                <span className="ai-card-badge">{data.creative.scatter.length} creatives</span>
+              </div>
 
-              <h3 className="insight-subsection-title mt-3">Top Ads</h3>
-              <div className="top-ads-grid">
-                {data.creative.topAds.map((ad) => (
-                  <div key={ad.id} className="ad-creative-card">
-                    <div className="ad-creative-stats">
-                      <span className="stat-highlight">{ad.ctr}% CTR</span>
-                      <span className="muted-text">{fmtCpa(ad.cpaCents)} CPA · {ad.campaignCount} campaigns</span>
+              {/* CTR Bar Chart */}
+              <div className="ai-ctr-chart">
+                <h3 className="ai-sub-heading">Click-Through Rate Comparison</h3>
+                <ResponsiveContainer width="100%" height={Math.max(180, data.creative.topAds.length * 60 + 40)}>
+                  <BarChart
+                    data={data.creative.topAds.map((ad, i) => ({
+                      name: truncate(ad.headline, 28),
+                      ctr: ad.ctr,
+                      fill: i === 0 ? "#7033f5" : i === 1 ? "#0e9f6e" : "#f59e0b",
+                    }))}
+                    layout="vertical"
+                    margin={{ top: 5, right: 30, left: 10, bottom: 5 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
+                    <XAxis type="number" unit="%" tick={{ fontSize: 11 }} />
+                    <YAxis type="category" dataKey="name" width={180} tick={{ fontSize: 12 }} />
+                    <Tooltip formatter={(v: any) => `${v}%`} />
+                    <Bar dataKey="ctr" radius={[0, 6, 6, 0]} barSize={24}>
+                      {data.creative.topAds.map((_, i) => (
+                        <Cell key={i} fill={i === 0 ? "#7033f5" : i === 1 ? "#0e9f6e" : "#f59e0b"} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Top Ads Grid */}
+              <h3 className="ai-sub-heading">Top Performing Ads</h3>
+              <div className="ai-ads-grid">
+                {data.creative.topAds.map((ad, i) => (
+                  <div key={ad.id} className="ai-ad-preview">
+                    <div className="ai-ad-preview-header">
+                      <span className="ai-ad-preview-rank" data-rank={i + 1}>#{i + 1}</span>
+                      <div className="ai-ad-preview-kpis">
+                        <div className="ai-ad-kpi">
+                          <span className="ai-ad-kpi-value" style={{ color: "#0e9f6e" }}>{ad.ctr}%</span>
+                          <span className="ai-ad-kpi-label">CTR</span>
+                        </div>
+                        <div className="ai-ad-kpi">
+                          <span className="ai-ad-kpi-value">{fmtCpa(ad.cpaCents)}</span>
+                          <span className="ai-ad-kpi-label">CPA</span>
+                        </div>
+                      </div>
                     </div>
-                    {ad.imageUrl && <img src={ad.imageUrl} alt={ad.headline} className="ad-creative-image" />}
-                    <div className="ad-creative-body">
-                      <strong>{ad.headline}</strong>
-                      <p className="muted-text mt-1">{ad.body}</p>
+                    {ad.imageUrl && <img src={ad.imageUrl} alt="" className="ai-ad-preview-img" />}
+                    <div className="ai-ad-preview-body">
+                      <h4 className="ai-ad-preview-headline">{ad.headline}</h4>
+                      <p className="ai-ad-preview-text">{ad.body}</p>
                     </div>
-                    <div className="ad-creative-engagement">
-                      <span>👍 Like</span>
-                      <span>💬 Comment</span>
-                      <span>↗️ Share</span>
+                    <div className="ai-ad-preview-footer">
+                      <span>{ad.campaignCount} campaign{ad.campaignCount !== 1 ? "s" : ""}</span>
                     </div>
                   </div>
                 ))}

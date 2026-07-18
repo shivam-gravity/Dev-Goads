@@ -2,6 +2,7 @@ import { randomUUID, createHash, randomBytes } from "node:crypto";
 import jwt from "jsonwebtoken";
 import { prisma } from "../../db/prisma.js";
 import { JWT_SECRET } from "../../infra/env.js";
+import { issueRefreshToken } from "./refreshTokenService.js";
 
 export interface User {
   id: string;
@@ -20,8 +21,11 @@ function generateSalt(): string {
   return randomBytes(16).toString("hex");
 }
 
-function issueToken(userId: string, workspaceId?: string): string {
-  return jwt.sign({ sub: userId, workspaceId }, JWT_SECRET, { expiresIn: "30d" });
+export function issueToken(userId: string, workspaceId?: string, businessId?: string): string {
+  const payload: Record<string, unknown> = { sub: userId };
+  if (workspaceId) payload.workspaceId = workspaceId;
+  if (businessId) payload.businessId = businessId;
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: "30d" });
 }
 
 function toUser(row: { id: string; email: string; name: string; avatar: string | null; googleId: string | null; createdAt: Date }): User {
@@ -44,7 +48,7 @@ export async function getUserByEmail(email: string): Promise<(User & { passwordH
 }
 
 export interface RegisterInput { email: string; password: string; name: string; }
-export interface AuthResult { user: User; token: string; workspaceId?: string; }
+export interface AuthResult { user: User; token: string; refreshToken: string; workspaceId?: string; }
 
 export async function register(input: RegisterInput): Promise<AuthResult> {
   const existing = await getUserByEmail(input.email);
@@ -66,7 +70,8 @@ export async function register(input: RegisterInput): Promise<AuthResult> {
 
   const user: User = { id, email, name, createdAt: createdAt.toISOString() };
   const token = issueToken(user.id, workspaceId);
-  return { user, token, workspaceId };
+  const refreshToken = await issueRefreshToken(user.id);
+  return { user, token, refreshToken, workspaceId };
 }
 
 export async function login(email: string, password: string): Promise<AuthResult> {
@@ -83,7 +88,8 @@ export async function login(email: string, password: string): Promise<AuthResult
   const member = await prisma.workspaceMember.findFirst({ where: { userId: user.id }, orderBy: { joinedAt: "asc" } });
   const workspaceId = member?.workspaceId;
   const token = issueToken(user.id, workspaceId);
-  return { user, token, workspaceId };
+  const refreshToken = await issueRefreshToken(user.id);
+  return { user, token, refreshToken, workspaceId };
 }
 
 export async function googleAuth(name: string, email: string, googleId: string): Promise<AuthResult> {
@@ -103,7 +109,8 @@ export async function googleAuth(name: string, email: string, googleId: string):
 
     const user: User = { id, email: normalizedEmail, name, createdAt: createdAt.toISOString() };
     const token = issueToken(user.id, workspaceId);
-    return { user, token, workspaceId };
+    const refreshToken = await issueRefreshToken(user.id);
+    return { user, token, refreshToken, workspaceId };
   }
 
   if (!row.googleId) {
@@ -113,7 +120,8 @@ export async function googleAuth(name: string, email: string, googleId: string):
   const user = toUser(row);
   const member = await prisma.workspaceMember.findFirst({ where: { userId: user.id }, orderBy: { joinedAt: "asc" } });
   const token = issueToken(user.id, member?.workspaceId);
-  return { user, token, workspaceId: member?.workspaceId };
+  const refreshToken = await issueRefreshToken(user.id);
+  return { user, token, refreshToken, workspaceId: member?.workspaceId };
 }
 
 export function verifyToken(token: string): { userId: string; workspaceId?: string } {

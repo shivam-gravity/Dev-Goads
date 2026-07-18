@@ -93,15 +93,50 @@ export const router = Router();
 // Register/login/google are mounted unauthenticated, ahead of requireAuth, in index.ts
 // (see authEntryRouter below) — a client has no bearer token yet when calling them, so
 // gating them behind requireAuth would be a chicken-and-egg 401 in production.
+import { authRateLimiter } from "./middleware/rateLimit.js";
+
 export const authEntryRouter = Router();
 const authProxy = proxyTo(AUTH_SERVICE_URL);
-authEntryRouter.post("/auth/register", authProxy);
-authEntryRouter.post("/auth/login", authProxy);
-authEntryRouter.post("/auth/google", authProxy);
+authEntryRouter.post("/auth/register", authRateLimiter, authProxy);
+authEntryRouter.post("/auth/login", authRateLimiter, authProxy);
+authEntryRouter.post("/auth/google", authRateLimiter, authProxy);
+
+import { crmLogin } from "../modules/auth/crmAuthService.js";
+import { rotateRefreshToken, revokeAllForUser } from "../modules/auth/refreshTokenService.js";
+import { issueToken } from "../modules/auth/authService.js";
+
+authEntryRouter.post("/auth/crm-login", authRateLimiter, asyncHandler(async (req, res) => {
+  const { token } = req.body;
+  if (!token || typeof token !== "string") return res.status(400).json({ error: "Missing token" });
+  try {
+    const result = await crmLogin(token);
+    res.json(result);
+  } catch (err: any) {
+    res.status(401).json({ error: err.message || "CRM authentication failed" });
+  }
+}));
+
+authEntryRouter.post("/auth/refresh", asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken || typeof refreshToken !== "string") return res.status(400).json({ error: "Missing refreshToken" });
+  try {
+    const { newPlaintext, userId, family } = await rotateRefreshToken(refreshToken);
+    const member = await prisma.workspaceMember.findFirst({ where: { userId }, orderBy: { joinedAt: "asc" } });
+    const accessToken = issueToken(userId, member?.workspaceId);
+    res.json({ accessToken, refreshToken: newPlaintext });
+  } catch (err: any) {
+    res.status(401).json({ error: err.message || "Refresh failed" });
+  }
+}));
 
 /* ═══════════════════════════════════════════════
    AUTH — handled inline (auth-service not running)
    ═══════════════════════════════════════════════ */
+
+router.post("/auth/logout", asyncHandler(async (req: AuthedRequest, res) => {
+  await revokeAllForUser(req.userId!);
+  res.json({ ok: true });
+}));
 
 router.get("/auth/me", asyncHandler(async (req: AuthedRequest, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.userId! } });

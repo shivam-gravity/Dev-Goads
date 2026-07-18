@@ -102,10 +102,9 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
 
   const [uploadStart, setUploadStart] = useState("");
   const [uploadEnd, setUploadEnd] = useState("");
-  const [lifetimeStart, setLifetimeStart] = useState("");
-  const [lifetimeEnd, setLifetimeEnd] = useState("");
   const [itemFilter, setItemFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
+  const [searchText, setSearchText] = useState("");
 
   const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
@@ -168,6 +167,7 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
 
   const filteredAssets = useMemo(() => {
     return assets.filter(a => {
+      if (searchText && !a.name.toLowerCase().includes(searchText.toLowerCase())) return false;
       if (itemFilter && a.type !== itemFilter) return false;
       if (uploadStart && a.createdAt < uploadStart) return false;
       if (uploadEnd && a.createdAt > `${uploadEnd}T23:59:59`) return false;
@@ -175,7 +175,7 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
       if (sourceFilter === "upload" && a.tags.includes("ai-generated")) return false;
       return true;
     });
-  }, [assets, itemFilter, uploadStart, uploadEnd, sourceFilter]);
+  }, [assets, searchText, itemFilter, uploadStart, uploadEnd, sourceFilter]);
 
   function metaTag(tags: string[], prefix: string): string | null {
     const tag = tags.find(t => t.startsWith(prefix));
@@ -252,6 +252,17 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
 
       <div className="creative-lib-filters">
         <div className="creative-lib-filter">
+          <span className="creative-lib-filter-label">Search</span>
+          <input
+            type="text"
+            className="creative-lib-search-input"
+            placeholder="Search by name…"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+          />
+        </div>
+
+        <div className="creative-lib-filter">
           <span className="creative-lib-filter-label">Upload Date</span>
           <div className="creative-lib-date-range">
             <input type="date" value={uploadStart} onChange={(e) => setUploadStart(e.target.value)} aria-label="Upload date start" />
@@ -262,20 +273,10 @@ export default function AssetLibrary({ businessId }: { businessId: string }) {
         </div>
 
         <div className="creative-lib-filter">
-          <span className="creative-lib-filter-label">Limited Lifetime</span>
-          <div className="creative-lib-date-range">
-            <input type="date" value={lifetimeStart} onChange={(e) => setLifetimeStart(e.target.value)} aria-label="Limited lifetime start" />
-            <Icon name="arrow-right" size={14} />
-            <input type="date" value={lifetimeEnd} onChange={(e) => setLifetimeEnd(e.target.value)} aria-label="Limited lifetime end" />
-            <Icon name="calendar" size={16} />
-          </div>
-        </div>
-
-        <div className="creative-lib-filter">
-          <span className="creative-lib-filter-label">Item</span>
+          <span className="creative-lib-filter-label">Type</span>
           <div className="creative-lib-select">
             <select value={itemFilter} onChange={(e) => setItemFilter(e.target.value)}>
-              <option value="">Please select</option>
+              <option value="">All types</option>
               {ITEM_TYPES.map(t => (
                 <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
               ))}

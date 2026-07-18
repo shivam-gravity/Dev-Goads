@@ -11,21 +11,11 @@ import type { LLMAssignment, LLMProvider } from "./llmRouter.js";
  * "recommendation-ranking", "tradeoff-analysis", "strategy-synthesis",
  * "context-enrichment").
  */
-const DEFAULT_ASSIGNMENT: LLMAssignment = { provider: "groq", model: "llama-3.3-70b-versatile" };
+const DEFAULT_ASSIGNMENT: LLMAssignment = { provider: "mistral", model: process.env.MISTRAL_MODEL ?? "mistral-small-latest" };
 
 const GEMINI: LLMAssignment = { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
 const MISTRAL: LLMAssignment = { provider: "mistral", model: process.env.MISTRAL_MODEL ?? "mistral-small-latest" };
-
-// All 20 agents and research providers now route through Groq (llama-3.3-70b-versatile)
-// as primary — a hosted 70B model that produces genuinely deep analysis, real budget
-// calculations grounded in market data, and publication-quality ad copy. The previous
-// Ollama (llama3.2, 8B local) assignment was too small to generate the depth needed for
-// real campaign recommendations that drive growth. Gemini and Mistral remain on the
-// synthesis/narrative steps for provider diversity. Groq as both primary AND fallback-of-
-// last-resort means a single key exhaustion degrades everything simultaneously — but in
-// practice Groq's free tier (14,400 req/day, 500k tokens/min) has never been hit under
-// real usage, and the fallback chain (groq→mistral→google) catches any isolated failures.
-const GROQ_70B: LLMAssignment = { provider: "groq", model: "llama-3.3-70b-versatile" };
+const GROQ_70B: LLMAssignment = MISTRAL;
 
 const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   // 20 marketing agents — 70B for deep, genuine analysis

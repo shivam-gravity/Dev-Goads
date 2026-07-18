@@ -9,11 +9,14 @@
 
 x-app-env: &app-env
   NODE_ENV: production
-  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-polluxa}?schema=public
+  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@pgbouncer:6432/${POSTGRES_DB:-polluxa}?schema=public
   REDIS_URL: redis://redis:6379
   JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set — see .env.example}
   INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY must be set — see .env.example}
   TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?TOKEN_ENCRYPTION_KEY must be set — see .env.example}
+  CRM_JWT_SHARED_SECRET: ${CRM_JWT_SHARED_SECRET:-dev-crm-shared-secret}
+  PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
+  CRM_ORIGIN: ${CRM_ORIGIN:-}
   AUTH_SERVICE_URL: http://auth-service:4001
   CAMPAIGN_SERVICE_URL: http://campaign-service:4002
   SCRAPER_SERVICE_URL: http://scraper-service:4003
@@ -56,7 +59,7 @@ x-api-image: &api-image
   image: polluxa-api:local
 
 x-depends-on-datastores: &depends-on-datastores
-  postgres:
+  pgbouncer:
     condition: service_healthy
   redis:
     condition: service_healthy
@@ -88,6 +91,26 @@ services:
       - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.22.0
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-polluxa}
+      POOL_MODE: transaction
+      DEFAULT_POOL_SIZE: 25
+      MAX_CLIENT_CONN: 200
+      MAX_DB_CONNECTIONS: 50
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 6432"]
       interval: 5s
       timeout: 5s
       retries: 10
