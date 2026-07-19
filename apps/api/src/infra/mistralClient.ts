@@ -30,7 +30,11 @@ const MISTRAL_EMBEDDING_MODEL = "mistral-embed";
 const MISTRAL_MAX_CONCURRENCY = Math.max(1, Number(process.env.MISTRAL_MAX_CONCURRENCY ?? 2));
 const MISTRAL_MAX_RETRIES = Math.max(0, Number(process.env.MISTRAL_MAX_RETRIES ?? 4));
 const MISTRAL_BASE_BACKOFF_MS = 500;
-const MISTRAL_MAX_BACKOFF_MS = 8000;
+// Mistral's limits are PER-MINUTE (measured: 50 req/min, 50k tokens/min), so a rate-limit 429's
+// reset can be up to ~60s out. Cap the backoff at 30s (was 8s) so a token-limit block actually
+// waits long enough to clear instead of burning all retries inside one minute and giving up. A
+// server-provided Retry-After still wins when present.
+const MISTRAL_MAX_BACKOFF_MS = Number(process.env.MISTRAL_MAX_BACKOFF_MS ?? 30_000);
 
 let mistralInFlight = 0;
 const mistralWaiters: (() => void)[] = [];

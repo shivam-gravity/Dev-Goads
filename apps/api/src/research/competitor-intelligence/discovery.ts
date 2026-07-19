@@ -9,6 +9,10 @@ export interface DiscoveryInput {
   industry?: string;
   workspaceId: string;
   businessId?: string;
+  /** Verified facts from the business's OWN site (fact-first pipeline). Powers a 4th discovery
+   * source that names competitors from the KNOWN product category — the safety net for when the
+   * three search/memory sources come back empty (which left competitors as "none discovered"). */
+  verifiedFacts?: { field: string; value: string; sourceUrl?: string; confidence: number }[];
 }
 
 const NAME_EXTRACTION_TOOL = {
@@ -146,11 +150,31 @@ export function mergeDiscoveredCompetitors(results: SourceResult[]): { competito
  * (no OPENAI_API_KEY, no memory yet, a search that found nothing) just contributes zero
  * candidates rather than failing discovery for the other sources.
  */
+/** Source 4: name competitors from the business's OWN verified facts. The three sources above
+ * all depend on live web search / prior memory; for a niche B2B product those routinely come
+ * back empty (leaving "no competitors discovered"). The facts reveal exactly what the business
+ * SELLS, so the model can name real, well-known direct rivals in that category from general
+ * knowledge — the safety net that turns "none discovered" into a real list. No new web call. */
+async function discoverFromVerifiedFacts(input: DiscoveryInput): Promise<{ name: string }[]> {
+  if (!llm || !input.verifiedFacts?.length) return [];
+  const factsText = input.verifiedFacts.slice(0, 40).map((f) => `- ${f.field}: ${f.value}`).join("\n");
+  const result = await runStructured<{ competitors: { name: string }[] }>({
+    maxTokens: 512,
+    tool: NAME_EXTRACTION_TOOL,
+    messages: [{
+      role: "user",
+      content: `Verified facts from the business's own website:\n${factsText}\n\nFrom these, determine exactly what product this business sells, then name its main DIRECT competitors — real, well-known companies selling a genuinely competing product in the same category (from your knowledge of that category). Do NOT list IT-services firms, consultancies, systems integrators, or agencies.`,
+    }],
+  });
+  return result?.competitors ?? [];
+}
+
 export async function discoverCompetitors(input: DiscoveryInput): Promise<{ competitors: DiscoveredCompetitor[]; sourcesUsed: string[] }> {
   const sources: { name: string; run: () => Promise<{ name: string; url?: string }[]> }[] = [
     { name: "direct-search", run: () => discoverFromDirectSearch(input) },
     { name: "alternatives-search", run: () => discoverFromAlternativesSearch(input) },
     { name: "research-memory", run: () => discoverFromResearchMemory(input) },
+    { name: "verified-facts", run: () => discoverFromVerifiedFacts(input) },
   ];
 
   const results = await Promise.all(

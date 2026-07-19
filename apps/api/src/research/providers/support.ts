@@ -335,6 +335,11 @@ export async function structureFromFacts<T extends { dataSource?: string }>(opts
   structurePrompt: (factsText: string) => string;
   tool: JsonSchemaTool;
   maxTokens: number;
+  /** The target business URL — used to guarantee at least one RELEVANT (same-host) citation on
+   * a fact-grounded result. Without it, when the fact extractor didn't populate per-fact
+   * sourceUrls, the result had zero citations and the scorer wrongly treated genuinely
+   * fact-grounded output as ungrounded (docking it to ~0.25 despite correct content). */
+  targetUrl?: string;
 }): Promise<{ status: ResearchProviderStatus; data: T; citations: Citation[] } | null> {
   if (!llm || opts.facts.length === 0) return null;
 
@@ -359,6 +364,13 @@ export async function structureFromFacts<T extends { dataSource?: string }>(opts
     .filter((f) => f.sourceUrl)
     .slice(0, 20)
     .map((f) => ({ url: f.sourceUrl as string, title: f.field }));
+  // Guarantee at least one same-host (relevant) citation: a result built from N verified facts
+  // pulled from the business's own site IS grounded, even if the extractor left per-fact URLs
+  // blank. Without this the scorer saw zero citations and docked correct, fact-grounded output
+  // to ~0.25. The target's own URL is unimpeachably relevant (isRelevantCitation: same host).
+  if (citations.length === 0 && opts.targetUrl) {
+    citations.push({ url: opts.targetUrl, title: `Verified from ${opts.targetUrl}` });
+  }
 
   const dataSource = `Grounded in ${opts.facts.length} verified facts from the site${source === "openrouter" ? "" : ` (structured via ${source}:${assignment.model})`}`;
   return { status: "success", data: { ...result, dataSource }, citations };

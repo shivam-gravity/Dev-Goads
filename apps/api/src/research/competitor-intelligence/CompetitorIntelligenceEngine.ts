@@ -11,7 +11,12 @@ import type { CompetitorIntelligenceReport, CompetitorProfile } from "./types.js
 // independently-corroborated ones get the expensive deep-dive. Set to 8 so the competitive set
 // shown to the user clears a meaningful bar (each extra name past 6 adds one search + one
 // extraction call).
-const MAX_ENRICHED_COMPETITORS = 8;
+// Each enriched competitor costs ~3 LLM/search calls; at 8 that's up to 24 calls which, queued
+// through Mistral's rate limiter (concurrency 2, 50 req/min), blew the provider's 150s ceiling
+// and the whole competitor result timed out to ZERO — discarding names discovery had already
+// found (Salesforce, Zoho, Dynamics, ...). Capped to 3 (the top corroborated names) so
+// enrichment fits the budget and the competitor list actually survives. Env-tunable.
+const MAX_ENRICHED_COMPETITORS = Math.max(1, Number(process.env.COMPETITOR_MAX_ENRICHED ?? 3));
 const MEMORY_KIND = "competitor-profile";
 
 export type CompetitorIntelligenceInput = DiscoveryInput;

@@ -1,6 +1,6 @@
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { MarketData, ProviderResult, ResearchProviderInput } from "../types/index.js";
-import { citationsToEvidence, runProviderStep, webSearchThenStructure } from "./support.js";
+import { citationsToEvidence, runProviderStep, structureFromFacts, webSearchThenStructure } from "./support.js";
 
 const MARKET_TOOL = {
   name: "emit_market_analysis",
@@ -27,6 +27,27 @@ export class MarketProvider implements ResearchProvider<MarketData> {
   async execute(input: ResearchProviderInput): Promise<ProviderResult<MarketData>> {
     return runProviderStep(this.name, 1, input, async () => {
       const industry = input.industry ?? "this business's category";
+
+      // Fact-first: the plain "market size for X" search drifted to the WRONG market on this run
+      // (it returned generic "AI service marketplaces / telecom / civic services" for what is
+      // actually a CRM/sales-tech product). The verified facts pin down the real category, so
+      // reason the market analysis from them — the model knows the CRM/sales-software market's
+      // size, growth, and real competitors from general knowledge, anchored to the true category
+      // rather than a mis-targeted search. Fall through to search only if facts yield nothing.
+      if (input.verifiedFacts && input.verifiedFacts.length > 0) {
+        const factResult = await structureFromFacts<MarketData>({
+          facts: input.verifiedFacts,
+          targetUrl: input.url,
+          websiteExcerpt: input.websiteExcerpt,
+          maxTokens: 1024,
+          tool: MARKET_TOOL,
+          structurePrompt: () => `From the verified facts above, first identify the SPECIFIC market/category this business competes in (be precise — e.g. "AI-powered CRM / sales automation software", not a vague "services" market). Then give that market's size (TAM), growth rate/CAGR, 2-5 real trends, the recommended primary region, and competition level. Ground everything in the actual product the facts describe.`,
+        });
+        if (factResult && (factResult.data.trends?.length || factResult.data.marketSize)) {
+          return { ...factResult, evidence: citationsToEvidence(factResult.citations) };
+        }
+      }
+
       const { status, data, citations } = await webSearchThenStructure<MarketData>({
         maxTokens: 1024,
         tool: MARKET_TOOL,

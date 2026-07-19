@@ -42,6 +42,7 @@ export class CompanyProvider implements ResearchProvider<CompanyData> {
       if (input.verifiedFacts && input.verifiedFacts.length > 0) {
         const factResult = await structureFromFacts<CompanyData>({
           facts: input.verifiedFacts,
+          targetUrl: input.url,
           websiteExcerpt: input.websiteExcerpt,
           maxTokens: 768,
           tool: COMPANY_TOOL,

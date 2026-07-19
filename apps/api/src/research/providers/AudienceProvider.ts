@@ -58,6 +58,7 @@ export class AudienceProvider implements ResearchProvider<AudienceData> {
       if (input.verifiedFacts && input.verifiedFacts.length > 0) {
         const factResult = await structureFromFacts<AudienceToolOutput>({
           facts: input.verifiedFacts,
+          targetUrl: input.url,
           websiteExcerpt: input.websiteExcerpt,
           maxTokens: 1024,
           tool: AUDIENCE_TOOL,

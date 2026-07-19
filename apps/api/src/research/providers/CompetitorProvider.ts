@@ -3,7 +3,7 @@ import { logger } from "../../modules/logger/logger.js";
 import { readMemory, writeMemory } from "../memory/MemoryCoordinator.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { CompetitorData, ProviderResult, ResearchProviderInput } from "../types/index.js";
-import { citationsToEvidence, hostnameOf, runProviderStep, webSearchThenStructure } from "./support.js";
+import { citationsToEvidence, hostnameOf, runProviderStep, structureFromFacts, webSearchThenStructure } from "./support.js";
 
 // Similarity floor for treating a Research Memory match as real signal worth injecting
 // into the prompt. Calibrated empirically, not guessed: a live verification run against
@@ -104,6 +104,28 @@ export class CompetitorProvider implements ResearchProvider<CompetitorData> {
       // without OPENAI_API_KEY this is a no-op string, same fail-soft posture as the rest
       // of this provider when there's no live search either.
       const memoryContext = llm ? await retrieveCompetitorMemoryContext(input, industry) : "";
+
+      // Fact-first: the competitor search often returns nothing usable for a niche B2B product
+      // (this run scored 0.05 — "no usable results"), yet the verified facts reveal exactly what
+      // the business SELLS, so the model can name real direct competitors from that + general
+      // knowledge (e.g. a CRM's rivals are Salesforce/HubSpot, not "other providers"). Try this
+      // first when facts exist; only fall through to search if it yields nothing.
+      if (input.verifiedFacts && input.verifiedFacts.length > 0) {
+        const factResult = await structureFromFacts<CompetitorData>({
+          facts: input.verifiedFacts,
+          targetUrl: input.url,
+          websiteExcerpt: input.websiteExcerpt,
+          maxTokens: 1024,
+          tool: COMPETITOR_TOOL,
+          structurePrompt: () => `From the verified facts above, determine exactly what product this business sells, then name its main DIRECT competitors — companies selling a genuinely competing product in the same category (name real, well-known companies from your knowledge of that category). Do NOT list IT-services firms, consultancies, or agencies. Give each competitor's name and how ${input.businessName ?? "this business"} could differentiate. Omit a competitor's url unless you are certain of it.${memoryContext}`,
+        });
+        // Accept only if it produced named competitors beyond the generic placeholder.
+        const named = (factResult?.data?.competitors ?? []).filter((c) => c?.name && !/other providers/i.test(c.name));
+        if (factResult && named.length > 0) {
+          if (llm) await writeCompetitorMemory(input, industry, factResult.data).catch(() => {});
+          return { ...factResult, data: { ...factResult.data, competitors: named }, evidence: citationsToEvidence(factResult.citations) };
+        }
+      }
 
       const { status, data, citations } = await webSearchThenStructure<CompetitorData>({
         maxTokens: 1024,

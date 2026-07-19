@@ -97,14 +97,20 @@ const CAMPAIGN_RESEARCH_CACHE_TTL_MS =
 // this — OR whose company identity anchor is null — is treated as a cache MISS and re-researched
 // rather than re-served (findReusableResearch / isReusableContext). Guards against re-serving a
 // run degraded by a provider-timeout storm: the 07-16 polluxa.com run scored 0.34 with a null
-// company and was confabulated as "medical device", then re-served on two later cache hits. A
-// non-finite/out-of-range env value falls back to 0.50. The company-null check is a hard
-// invariant inside isReusableContext and is NOT gated by this number.
+// company and was confabulated as "medical device", then re-served on two later cache hits.
+//
+// Default 0.75 (raised from 0.50): only HIGH-confidence research is trusted enough to reuse —
+// anything less is re-researched fresh every time, so a mediocre/incorrect run can never be
+// served twice. Trade-off: since a realistic run tops out ~0.66-0.85, most runs fall below 0.75
+// and will re-research on repeat (slower, but always fresh/correct — the point). This is BOTH
+// the read gate here AND the write gate below (markResearchJobCompleted marks sub-threshold runs
+// non-reusable), so low-confidence data isn't even eligible for reuse. A non-finite/out-of-range
+// env value falls back to 0.75. The company-null check is a hard invariant, not gated by this.
 const parsedResearchMinConfidence = Number(process.env.CAMPAIGN_RESEARCH_MIN_CONFIDENCE);
-const CAMPAIGN_RESEARCH_MIN_CONFIDENCE =
+export const CAMPAIGN_RESEARCH_MIN_CONFIDENCE =
   Number.isFinite(parsedResearchMinConfidence) && parsedResearchMinConfidence >= 0 && parsedResearchMinConfidence <= 1
     ? parsedResearchMinConfidence
-    : 0.5;
+    : 0.75;
 
 export interface RunCampaignGenerationOptions {
   deps?: CampaignGenerationDeps;

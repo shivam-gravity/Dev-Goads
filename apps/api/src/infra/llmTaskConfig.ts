@@ -11,20 +11,25 @@ import type { LLMAssignment, LLMProvider } from "./llmRouter.js";
  * "recommendation-ranking", "tradeoff-analysis", "strategy-synthesis",
  * "context-enrichment").
  */
-const DEFAULT_ASSIGNMENT: LLMAssignment = { provider: "mistral", model: process.env.MISTRAL_MODEL ?? "mistral-small-latest" };
-
-const GEMINI: LLMAssignment = { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
 const MISTRAL: LLMAssignment = { provider: "mistral", model: process.env.MISTRAL_MODEL ?? "mistral-small-latest" };
-// "dual" fires OpenRouter AND Mistral concurrently and keeps the more complete answer (see
-// llmRouter.runStructuredDual) — the deep-research quality lever. The `model` here is only a
-// nominal hint and is IGNORED by the dual path: each leg uses its own provider-appropriate
-// model (OPENROUTER_MODEL / MISTRAL_MODEL env, else that client's baked-in default), because
-// passing one shared model name to both makes the wrong provider 404. This doubles token spend
-// per call by design, spreading load across both providers so neither alone bottlenecks a run.
-const DUAL: LLMAssignment = { provider: "dual", model: "auto" };
-// Deep-research tasks (the 20 agents + the research providers that extract/analyze real web
-// data) now run dual for best-of-both quality. Renamed from the old DEEP_RESEARCH alias, which was
-// already just Mistral — this makes those same tasks concurrent instead of single-provider.
+
+// Master switch (default ON): route EVERY task to Mistral only. Mistral has NO daily quota —
+// just a per-minute rate limit (measured live: 50 req/min, 50k tokens/min) that our
+// retry-with-backoff + concurrency cap ride out cleanly. OpenRouter's free models have a hard
+// DAILY cap (which we exhausted) and Gemini's free tier is 0, so routing to them just spends
+// calls that fail and fall back to Mistral anyway. Collapsing everything to Mistral removes
+// those wasted/failing legs so a full generation completes reliably (slower, but it finishes
+// with real data). Set LLM_MISTRAL_ONLY=false to restore the multi-provider/dual routing once a
+// paid/uncapped provider is configured.
+const MISTRAL_ONLY = process.env.LLM_MISTRAL_ONLY !== "false";
+
+const DEFAULT_ASSIGNMENT: LLMAssignment = MISTRAL;
+
+const GEMINI: LLMAssignment = MISTRAL_ONLY ? MISTRAL : { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
+// "dual" would fire OpenRouter + Mistral concurrently; under MISTRAL_ONLY it's just Mistral (a
+// single call, no wasted OpenRouter leg). Restored to real dual when LLM_MISTRAL_ONLY=false.
+const DUAL: LLMAssignment = MISTRAL_ONLY ? MISTRAL : { provider: "dual", model: "auto" };
+// Deep-research tasks (the 20 agents + research providers). Mistral-only by default.
 const DEEP_RESEARCH: LLMAssignment = DUAL;
 
 const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {

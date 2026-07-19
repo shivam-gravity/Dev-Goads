@@ -90,6 +90,39 @@ function reconcileCompanyFunding(company: CompanyData | null, news: NewsData | n
  * so a partial research run still returns a usable (if incomplete) context rather than
  * failing the whole job over one bad provider.
  */
+// Decision-relevance weighting for overall confidence. The old flat 27-provider average
+// structurally couldn't exceed ~0.6 for a private startup: ~12 providers (funding, app-store,
+// reddit, backlinks, video-presence…) HONESTLY find little for such businesses and score ~0.25,
+// dragging the mean down even when the campaign-driving research is excellent. This weights the
+// score toward what actually shapes the campaign, so it reflects DECISION quality rather than
+// penalizing a business for not having, say, public app-store reviews.
+//   - CORE (weight 3): the providers the strategy/agents actually build on.
+//   - SUPPORTING (weight 1): useful enrichment, not decisive.
+//   - RARELY-APPLICABLE (weight 0.3): genuinely-empty for most private/B2B businesses — still
+//     counted (so a real failure isn't hidden), just not allowed to dominate the average.
+const CORE_PROVIDERS = new Set(["company", "website", "audience", "market", "competitor", "product", "keywords", "navigation"]);
+const RARELY_APPLICABLE_PROVIDERS = new Set(["app-store", "reddit", "video-presence", "backlink-authority", "partnerships", "funding", "local-presence", "legal-regulatory"]);
+
+function providerWeight(provider: string): number {
+  if (CORE_PROVIDERS.has(provider)) return 3;
+  if (RARELY_APPLICABLE_PROVIDERS.has(provider)) return 0.3;
+  return 1;
+}
+
+/** Decision-relevance-WEIGHTED mean of per-provider confidence (see CORE/RARELY_APPLICABLE
+ * above). Rounded to 2 decimals. Empty input → 0, same as the old flat average. */
+function computeOverallConfidence(results: ProviderResult<unknown>[]): number {
+  if (results.length === 0) return 0;
+  let weightedSum = 0;
+  let weightTotal = 0;
+  for (const r of results) {
+    const w = providerWeight(r.provider);
+    weightedSum += r.confidence * w;
+    weightTotal += w;
+  }
+  return weightTotal > 0 ? Math.round((weightedSum / weightTotal) * 100) / 100 : 0;
+}
+
 export function aggregateResearch(input: AggregateInput): ResearchContext {
   const byName = new Map(input.results.map((r) => [r.provider, r]));
 
@@ -104,9 +137,7 @@ export function aggregateResearch(input: AggregateInput): ResearchContext {
 
   const confidenceByProvider: Record<string, number> = {};
   for (const result of input.results) confidenceByProvider[result.provider] = result.confidence;
-  const overallConfidence = input.results.length > 0
-    ? Math.round((input.results.reduce((sum, r) => sum + r.confidence, 0) / input.results.length) * 100) / 100
-    : 0;
+  const overallConfidence = computeOverallConfidence(input.results);
 
   const website = validate("website", websiteSchema, byName.get("website"));
   const news = validate("news", newsSchema, byName.get("news"));

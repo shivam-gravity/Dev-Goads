@@ -19,6 +19,11 @@ export interface MarketIntelligenceInput {
   industry?: string;
   workspaceId: string;
   businessId?: string;
+  /** Verified facts from the business's OWN site (fact-first pipeline). Injected as
+   * authoritative grounding so the analysis identifies the RIGHT market/category — without it
+   * the generic "market size for X" search drifted to an unrelated market (e.g. "AI service
+   * marketplaces / telecom" for what is actually a CRM/sales-software product). */
+  verifiedFacts?: { field: string; value: string; sourceUrl?: string; confidence: number }[];
 }
 
 export type MarketLevel = "low" | "medium" | "high";
@@ -171,13 +176,19 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
     ? `\n\nPrior market research on OTHER businesses, retrieved by loose text similarity (Research Memory — this may be about a completely different industry that just happens to use similar vocabulary; only reuse a finding below if it is genuinely about the same product category/market as "${subject}" (${industry}) — otherwise ignore it entirely, do not blend it in):\n${priorMatches.map((m) => `- ${m.content}`).join("\n")}`
     : "";
 
+  // Authoritative grounding: the business's own facts pin down the REAL market/category, so the
+  // synthesis sizes the correct market instead of whatever the generic search happened to return.
+  const factsContext = input.verifiedFacts?.length
+    ? `AUTHORITATIVE — verified facts from the business's own website. First infer the SPECIFIC market/category from these (be precise, e.g. "AI-powered CRM / sales automation software", not a vague "services" market), then size THAT market. Where the web research below is about a different market, IGNORE it:\n${input.verifiedFacts.slice(0, 40).map((f) => `- ${f.field}: ${f.value}`).join("\n")}\n\n`
+    : "";
+
   const structured = await runStructured<MarketFields>({
     maxTokens: 1024,
     tool: MARKET_TOOL,
     messages: [
       {
         role: "user",
-        content: `Synthesize a market-intelligence profile for "${subject}" (${industry}) from this research.\n\nMarket/growth/demand research:\n${marketResearch.narrative}\n\nEmerging competitors/regulatory research:\n${regulatoryResearch.narrative}${memoryContext}`,
+        content: `${factsContext}Synthesize a market-intelligence profile for "${subject}" (${industry}) grounded in the authoritative facts above.\n\nMarket/growth/demand research:\n${marketResearch.narrative}\n\nEmerging competitors/regulatory research:\n${regulatoryResearch.narrative}${memoryContext}`,
       },
     ],
   });
