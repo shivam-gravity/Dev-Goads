@@ -1,4 +1,4 @@
-import { outageDataSource } from "../../infra/firecrawlClient.js";
+import { outageDataSource } from "../../infra/scrapeTypes.js";
 import { mapUrlWithFallback, scrapeUrlWithFallback, sourceLabel, type ScrapeSource } from "../../infra/scrapeFallback.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { ProductData, ProductEntry, ProviderResult, ResearchProviderInput } from "../types/index.js";
@@ -7,10 +7,10 @@ import { normalizeUrl, runProviderStep } from "./support.js";
 const PRODUCT_PAGE_HINTS = /\b(product|products|shop|store|pricing|plans|collections?)\b/i;
 const MAX_PRODUCT_PAGES = 4;
 
-/** Real product/pricing extraction — Firecrawl's `product` scrape format is deterministic
- * (JSON-LD + schema.org + embedded state, no LLM call), so this provider has no OpenAI
- * dependency at all, unlike most others. Independent of every other provider: it re-discovers
- * candidate pages itself via `firecrawlMap` rather than reusing WebsiteProvider's crawl, per
+/** Real product/pricing extraction — the `product` scrape format is deterministic (JSON-LD +
+ * schema.org + embedded state, no LLM call), so this provider has no OpenAI dependency at all,
+ * unlike most others. Independent of every other provider: it re-discovers candidate pages
+ * itself via `mapUrlWithFallback` rather than reusing WebsiteProvider's crawl, per
  * ResearchProvider's "never depend on another provider's result" contract. */
 export class ProductProvider implements ResearchProvider<ProductData> {
   readonly name = "product";

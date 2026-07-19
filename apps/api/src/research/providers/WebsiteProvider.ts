@@ -1,5 +1,6 @@
 import { normalizeUrl } from "../../modules/onboarding/scraper.js";
-import { firecrawlScrape, outageDataSource } from "../../infra/firecrawlClient.js";
+import { crawl4aiScrape } from "../../infra/crawl4aiClient.js";
+import { outageDataSource } from "../../infra/scrapeTypes.js";
 import { crawlUrlWithFallback, sourceLabel } from "../../infra/scrapeFallback.js";
 import { logger } from "../../modules/logger/logger.js";
 import { createCrawlJob, markCrawlJobFailed, persistCrawlPages } from "../crawl/crawlPersistence.js";
@@ -67,17 +68,17 @@ export class WebsiteProvider implements ResearchProvider<WebsiteData> {
         throw new Error("Couldn't crawl that URL — no pages were returned");
       }
 
-      // The in-house crawl already captured a screenshot and a deduped image list of its
-      // own (via scrapeUrl's internal captureScreenshot/extractImages) — reusing those
-      // avoids a second, redundant Firecrawl screenshot call and avoids trying to derive
-      // images from per-page `links`, which in-house crawl pages don't populate.
+      // When the in-house crawl contributed (source "inhouse" or "merged"), it already
+      // captured a screenshot and a deduped image list of its own (via scrapeUrl's internal
+      // captureScreenshot/extractImages) — reuse those. When only crawl4ai served the crawl,
+      // do a dedicated crawl4ai screenshot scrape and derive images from the page links.
       let screenshot: string | undefined;
       let images: string[];
-      if (crawled.source === "inhouse") {
+      if (crawled.source === "inhouse" || crawled.source === "merged") {
         screenshot = crawled.screenshot;
         images = crawled.images ?? [];
       } else {
-        const screenshotResult = await firecrawlScrape(url, ["screenshot"]);
+        const screenshotResult = await crawl4aiScrape(url, ["screenshot"]);
         screenshot = screenshotResult.outage ? undefined : (screenshotResult.data?.screenshot ?? undefined);
         images = (crawled.pages[0].links ?? []).filter((link) => /\.(png|jpe?g|webp|gif|avif)(\?|$)/i.test(link)).slice(0, 8);
       }

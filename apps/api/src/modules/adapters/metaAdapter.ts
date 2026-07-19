@@ -107,14 +107,15 @@ async function waitForVideoProcessing(videoId: string, accessToken: string): Pro
   throw new Error(`Meta video ${videoId} did not finish processing in time`);
 }
 
-async function setStatus(externalId: string, status: "PAUSED" | "ACTIVE"): Promise<void> {
+async function setStatus(externalId: string, status: "PAUSED" | "ACTIVE", credentials?: MetaCredentials): Promise<void> {
   logger.info(`Setting Meta resource ${externalId} status to ${status}`);
-  if (!hasLiveCredentials) {
+  const creds = resolveCredentials(credentials);
+  if (!creds) {
     logger.info(`Offline mode. Mock ${status === "ACTIVE" ? "activating" : "pausing"} Meta ad variant.`);
     return;
   }
   try {
-    const url = `${GRAPH_BASE}/${externalId}?access_token=${ENV_META_ACCESS_TOKEN}`;
+    const url = `${GRAPH_BASE}/${externalId}?access_token=${creds.accessToken}`;
     await fetchWithRetry(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -164,31 +165,28 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     }
   },
 
-  async pauseVariant(externalId: string): Promise<void> {
-    return setStatus(externalId, "PAUSED");
+  async pauseVariant(externalId: string, credentials?: MetaCredentials): Promise<void> {
+    return setStatus(externalId, "PAUSED", credentials);
   },
 
-  async activateVariant(externalId: string): Promise<void> {
-    return setStatus(externalId, "ACTIVE");
+  async activateVariant(externalId: string, credentials?: MetaCredentials): Promise<void> {
+    return setStatus(externalId, "ACTIVE", credentials);
   },
 
-  async setBudget(input: SetBudgetInput): Promise<void> {
+  async setBudget(input: SetBudgetInput, credentials?: MetaCredentials): Promise<void> {
     logger.info(`Updating daily budget for Meta Ads resource: ${input.externalId} to ${input.dailyBudgetCents} cents`);
-    if (!hasLiveCredentials) {
+    const creds = resolveCredentials(credentials);
+    if (!creds) {
       logger.info("Offline mode. Mock budget change complete.");
       return;
     }
 
     try {
-      // SetBudgetInput carries no credentials/currency (unlike the hierarchy methods below),
-      // so this assumes a standard 100-divisor currency — correct for USD/EUR/INR/GBP etc.,
-      // wrong for the handful of zero/three-decimal currencies toMetaMinorUnits() knows about.
-      // Fully fixing this means threading currency through SetBudgetInput/reallocateBudget.
-      const url = `${GRAPH_BASE}/${input.externalId}?access_token=${ENV_META_ACCESS_TOKEN}`;
+      const url = `${GRAPH_BASE}/${input.externalId}?access_token=${creds.accessToken}`;
       await fetchWithRetry(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ daily_budget: toMetaMinorUnits(input.dailyBudgetCents, "USD") }),
+        body: JSON.stringify({ daily_budget: toMetaMinorUnits(input.dailyBudgetCents, creds.currency) }),
       });
       logger.info("Meta daily campaign budget successfully modified.");
     } catch (err) {
@@ -197,13 +195,12 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     }
   },
 
-  async fetchInsights(externalId: string) {
+  async fetchInsights(externalId: string, _date?: string, credentials?: MetaCredentials) {
     logger.info(`Fetching performance insights for Meta Ads resource: ${externalId}`);
+    const creds = resolveCredentials(credentials);
 
-    if (!hasLiveCredentials) {
+    if (!creds) {
       const impressions = Math.floor(2000 + Math.random() * 8000);
-      // Reach is always <= impressions (a user can be shown an ad more than once) — mock
-      // it as a plausible fraction rather than a fully independent random number.
       const reach = Math.floor(impressions * (0.55 + Math.random() * 0.3));
       const clicks = Math.floor(impressions * (0.01 + Math.random() * 0.04));
       const conversions = Math.floor(clicks * (0.02 + Math.random() * 0.08));
@@ -213,7 +210,7 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     }
 
     try {
-      const url = `${GRAPH_BASE}/${externalId}/insights?fields=impressions,reach,clicks,actions,spend&access_token=${ENV_META_ACCESS_TOKEN}`;
+      const url = `${GRAPH_BASE}/${externalId}/insights?fields=impressions,reach,clicks,actions,spend&access_token=${creds.accessToken}`;
       const res = await fetchWithRetry(url, { method: "GET" });
       const json = (await res.json()) as any;
 

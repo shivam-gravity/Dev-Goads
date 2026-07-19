@@ -111,6 +111,10 @@ export interface RunCampaignGenerationOptions {
   /** When true, skip the research cache and always run fresh Phase-1 research. Sourced from
    * the POST /campaigns/generate body flag, carried on the BullMQ payload (no DB column). */
   forceRefresh?: boolean;
+  /** User-chosen Meta campaign objective (e.g. OUTCOME_LEADS) from the generation request.
+   * Carried on the BullMQ payload (no DB column, same pattern as forceRefresh) and stamped onto
+   * the built Campaign so launchMetaHierarchy uses it instead of the hardcoded default. */
+  objective?: string;
   /** Called with (completed, total, stepName) across the WHOLE pipeline (research providers +
    * agents + the campaign-build step) on one consistent 0..total scale, so a single
    * BullMQ job.updateProgress call can represent the entire Gateway -> Campaign Route ->
@@ -325,7 +329,7 @@ export async function runCampaignGenerationPipeline(
       const dailyBudgetCents = job.dailyBudgetCents ?? budgetAgentResult?.data.recommendedDailyBudgetCents ?? 2000;
       const name = defaultCampaignName(job, business);
 
-      const campaign = await deps.buildCampaignFromStrategy(strategy.id, name, dailyBudgetCents);
+      const campaign = await deps.buildCampaignFromStrategy(strategy.id, name, dailyBudgetCents, options.objective);
       return { campaign, strategyId: strategy.id };
     });
 

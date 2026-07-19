@@ -80,12 +80,12 @@ export { RedditProvider } from "./RedditProvider.js";
  * research/types/index.ts), following the exact same webSearchThenStructure pattern as
  * every original provider.
  *
- * The 7 providers below LegalRegulatoryProvider are the Firecrawl-backed crawler batch
- * (Product, Navigation, Search-ranking, Ad Library, Autocomplete, Google SERP features,
- * Reddit) — see infra/firecrawlClient.ts for the shared client + monthly credit budget
- * guard every one of them calls through. WebsiteProvider, ReviewsProvider, and
- * SocialMediaProvider (above) were also upgraded in this batch to try a real Firecrawl
- * crawl first, same field/shape, falling back to their original behavior unchanged.
+ * The 7 providers below LegalRegulatoryProvider are the crawler batch (Product, Navigation,
+ * Search-ranking, Ad Library, Autocomplete, Google SERP features, Reddit). Their scrape/map/
+ * crawl needs go through infra/scrapeFallback.ts, which runs the in-house Playwright scraper
+ * (scraper-service) and the self-hosted crawl4ai service concurrently and merges the results —
+ * no metered vendor, no credit budget (Firecrawl was removed). WebsiteProvider, ReviewsProvider,
+ * and SocialMediaProvider (above) draw on the same crawl layer.
  */
 export function createResearchProviders(): ResearchProvider<unknown>[] {
   return [

@@ -5,6 +5,7 @@ import { googleAdapter } from "../adapters/googleAdapter.js";
 import { tiktokAdapter } from "../adapters/tiktokAdapter.js";
 import type { AdAdapter, HierarchyCapableAdapter } from "../adapters/AdAdapter.js";
 import { resolveAudienceTargetingForWorkspace, withAgentInterests } from "../adapters/metaTargetingMapper.js";
+import { isValidObjective } from "../adapters/metaObjectives.js";
 import { resolveGoogleTargetingForWorkspace, buildGoogleCampaignTargetingFromLocations, withAgentKeywords } from "../adapters/googleTargetingMapper.js";
 import { getMetaCredentials } from "../integrations/integrationService.js";
 import { getGoogleAdsCredentials } from "../integrations/googleOAuth.js";
@@ -54,8 +55,10 @@ export async function listActiveCampaigns(): Promise<{ id: string; workspaceId: 
   return rows.map((r) => ({ id: r.id, workspaceId: r.workspaceId ?? "demo" }));
 }
 
-/** Builds a campaign draft from a strategy: one variant per creative x recommended network. */
-export async function buildCampaignFromStrategy(strategyId: string, name: string, dailyBudgetCents: number): Promise<Campaign> {
+/** Builds a campaign draft from a strategy: one variant per creative x recommended network.
+ * `objective` (optional) is the user-chosen Meta objective from the generation flow, stamped
+ * onto the campaign so launchMetaHierarchy uses it instead of the hardcoded default. */
+export async function buildCampaignFromStrategy(strategyId: string, name: string, dailyBudgetCents: number, objective?: string): Promise<Campaign> {
   const strategy = await getStrategy(strategyId);
   if (!strategy) throw new Error(`Strategy ${strategyId} not found`);
   const business = await getBusiness(strategy.businessId);
@@ -91,6 +94,7 @@ export async function buildCampaignFromStrategy(strategyId: string, name: string
     networks: strategy.recommendedNetworks,
     dailyBudgetCents,
     variants,
+    ...(objective ? { objective } : {}),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...(strategy.googleKeywords ? { googleKeywords: strategy.googleKeywords } : {}),
@@ -170,9 +174,14 @@ async function launchMetaHierarchy(
     : undefined;
   const accessToken = credentials?.accessToken ?? null;
 
+  // Use the campaign's chosen objective (threaded from the generation flow) when it's a valid
+  // post-ODAX Meta objective; otherwise fall back to the historical default. Guards against a
+  // stale/free-text value reaching the Graph API.
+  const metaObjective = campaign.objective && isValidObjective(campaign.objective) ? campaign.objective : DEFAULT_META_OBJECTIVE;
+
   let campaignExternalId: string;
   try {
-    const container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: DEFAULT_META_OBJECTIVE }, credentials);
+    const container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: metaObjective }, credentials);
     campaignExternalId = container.externalId;
     campaign.externalIds = { ...campaign.externalIds, meta: campaignExternalId };
   } catch {
@@ -196,6 +205,7 @@ async function launchMetaHierarchy(
           campaignExternalId,
           name: `${campaign.name} — ${audienceName}`,
           dailyBudgetCents: perVariantBudgetCents * groupVariants.length,
+          objective: metaObjective,
           targeting,
           promotedObject: campaign.pixelId && campaign.conversionEvent ? { pixelId: campaign.pixelId, customEventType: campaign.conversionEvent } : undefined,
           startTime: campaign.startDate,
@@ -403,7 +413,8 @@ export async function pauseVariant(campaignId: string, variantId: string): Promi
   const variant = campaign.variants.find((v) => v.id === variantId);
   if (!variant || !variant.externalId) throw new Error(`Variant ${variantId} not launched`);
 
-  await adapters[variant.network].pauseVariant(variant.externalId);
+  const credentials = variant.network === "meta" ? (await getMetaCredentials(campaign.workspaceId ?? "demo")) ?? undefined : undefined;
+  await adapters[variant.network].pauseVariant(variant.externalId, credentials);
   variant.status = "paused";
   campaign.updatedAt = new Date().toISOString();
   await saveCampaign(campaign);
@@ -417,7 +428,8 @@ export async function activateVariant(campaignId: string, variantId: string): Pr
   const variant = campaign.variants.find((v) => v.id === variantId);
   if (!variant || !variant.externalId) throw new Error(`Variant ${variantId} not launched`);
 
-  await adapters[variant.network].activateVariant(variant.externalId);
+  const credentials = variant.network === "meta" ? (await getMetaCredentials(campaign.workspaceId ?? "demo")) ?? undefined : undefined;
+  await adapters[variant.network].activateVariant(variant.externalId, credentials);
   variant.status = "active";
   campaign.updatedAt = new Date().toISOString();
   await saveCampaign(campaign);
@@ -430,9 +442,9 @@ export async function reallocateBudget(campaignId: string, variantId: string, da
   const variant = campaign.variants.find((v) => v.id === variantId);
   if (!variant || !variant.externalId) throw new Error(`Variant ${variantId} not launched`);
 
-  // Budget lives on the Ad Set for hierarchy-launched (Meta) variants, not the leaf ad.
+  const credentials = variant.network === "meta" ? (await getMetaCredentials(campaign.workspaceId ?? "demo")) ?? undefined : undefined;
   const targetExternalId = variant.adSetExternalId ?? variant.externalId;
-  await adapters[variant.network].setBudget({ externalId: targetExternalId, dailyBudgetCents });
+  await adapters[variant.network].setBudget({ externalId: targetExternalId, dailyBudgetCents }, credentials);
   campaign.updatedAt = new Date().toISOString();
   await saveCampaign(campaign);
   return campaign;

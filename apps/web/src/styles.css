@@ -9052,6 +9052,139 @@ td {
   flex-shrink: 0;
 }
 
+/* ── adsgo.ai-style setup controls (objective / networks / budget simulator) ── */
+.new-campaign-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 640px;
+  margin: 20px auto 8px;
+  text-align: left;
+}
+
+.ncs-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ncs-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted, #6b7280);
+}
+
+.ncs-objective-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ncs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border, #e5e7eb);
+  background: #ffffff;
+  color: var(--text, #111827);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.ncs-chip:hover {
+  border-color: var(--accent, #7033f5);
+}
+
+.ncs-chip-active {
+  border-color: var(--accent, #7033f5);
+  background: var(--accent, #7033f5);
+  color: #ffffff;
+}
+
+.ncs-conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d1d5db;
+}
+
+.ncs-conn-ok {
+  background: var(--accent-2, #0e9f6e);
+}
+
+.ncs-slider {
+  width: 100%;
+  accent-color: var(--accent, #7033f5);
+}
+
+.ncs-sim {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: var(--surface-2, #f9fafb);
+  border: 1px solid var(--border, #e5e7eb);
+}
+
+.ncs-sim-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ncs-sim-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text, #111827);
+}
+
+.ncs-sim-key {
+  font-size: 11.5px;
+  color: var(--text-muted, #6b7280);
+}
+
+.ncs-sim-note {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--text-muted, #9ca3af);
+  font-style: italic;
+}
+
+/* ── Published → go-live panel ── */
+.publish-live-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.ncs-optimize-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border, #e5e7eb);
+  background: #ffffff;
+  font-size: 13px;
+  color: var(--text, #111827);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ncs-optimize-toggle input {
+  margin-top: 2px;
+  accent-color: var(--accent, #7033f5);
+  flex-shrink: 0;
+}
+
 .brand-info-card {
   max-width: 480px;
   margin: 0 0 24px;

@@ -21,11 +21,12 @@ x-app-env: &app-env
   CAMPAIGN_SERVICE_URL: http://campaign-service:4002
   SCRAPER_SERVICE_URL: http://scraper-service:4003
   SENTRY_DSN: ${SENTRY_DSN:-}
-  GROQ_API_KEY: ${GROQ_API_KEY:-}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-oss-20b:free}
   MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
-  TAVILY_API_KEY: ${TAVILY_API_KEY:-}
-  SERPER_API_KEY: ${SERPER_API_KEY:-}
   SEARXNG_BASE_URL: http://searxng:8080
+  CRAWL4AI_BASE_URL: http://crawl4ai:11235
+  CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:-}
   RUNWAY_API_KEY: ${RUNWAY_API_KEY:-}
   SCRAPEGRAPH_SERVICE_URL: ${SCRAPEGRAPH_SERVICE_URL:-}
   META_ACCESS_TOKEN: ${META_ACCESS_TOKEN:-}
@@ -115,10 +116,11 @@ services:
       timeout: 5s
       retries: 10
 
-  # Self-hosted metasearch — last-resort tier in infra/searchRouter.ts's fallback chain
-  # (Tavily -> Serper -> searxng), behind our own network only (not port-published beyond
-  # localhost), so its rate limiter is safely disabled in searxng/settings.yml — a public
-  # instance would need it, ours only ever serves this platform's own backend.
+  # Self-hosted metasearch — now the ONLY web-search backend in infra/searchRouter.ts (Tavily
+  # and Serper, the metered paid vendors, were removed). Behind our own network only (not
+  # port-published beyond localhost), so its rate limiter is safely disabled in
+  # searxng/settings.yml — a public instance would need it, ours only ever serves this
+  # platform's own backend.
   searxng:
     image: searxng/searxng:latest
     restart: unless-stopped
@@ -134,6 +136,37 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  # Self-hosted crawler/content-extractor — the ONLY external crawl backend now (Firecrawl,
+  # the metered vendor, was replaced). infra/scrapeFallback.ts runs this CONCURRENTLY with the
+  # in-house Playwright scraper (scraper-service) and merges both results, so crawl4ai's
+  # headless render covers JS-heavy pages the in-house HTTP path misses. No per-call quota;
+  # reachable only on our own network. Set CRAWL4AI_API_TOKEN to require bearer auth (optional
+  # on a private network).
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    restart: unless-stopped
+    ports:
+      - "11235:11235"
+    environment:
+      # Non-loopback bind (see crawl4ai/config.yml host: 0.0.0.0) requires this token, or the
+      # server refuses to start. Must match apps/api's CRAWL4AI_API_TOKEN so the client auth.
+      - CRAWL4AI_API_TOKEN=${CRAWL4AI_API_TOKEN:?CRAWL4AI_API_TOKEN must be set — see .env.example}
+    volumes:
+      # Override the stock config, which binds 127.0.0.1 (unreachable via the published port).
+      - ./crawl4ai/config.yml:/app/config.yml:ro
+    # Headless-Chromium crawls are shared-memory hungry. 1GB was too small for the pool's page
+    # count and caused 500s under the research pipeline's parallel fan-out; 2GB + the config's
+    # lowered pool.max_pages (6) keeps crawls reliable. mem_limit bounds total container RAM so a
+    # leak can't take the host down.
+    shm_size: "2gb"
+    mem_limit: "3g"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:11235/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   api:
     <<: *api-image

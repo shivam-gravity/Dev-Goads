@@ -42,6 +42,12 @@ import { getAnalyticsSummary, getAudienceSuggestions } from "../modules/analytic
 import { getAdInsights } from "../modules/adInsights/adInsightsService.js";
 import { chatWithStrategist } from "../modules/strategist/strategistService.js";
 import { chatWithCopilot } from "../modules/copilot/copilotService.js";
+import { launchCampaign, pauseVariant, activateVariant, reallocateBudget, applyCreativeMedia } from "../modules/orchestrator/campaignOrchestrator.js";
+import { ingestCampaignMetrics } from "../modules/pipeline/performancePipeline.js";
+import { runOptimizationPass } from "../modules/optimization/optimizationEngine.js";
+import { metaAdapter } from "../modules/adapters/metaAdapter.js";
+import { isValidObjective, listObjectives } from "../modules/adapters/metaObjectives.js";
+import { simulateBudget } from "../modules/adapters/budgetSimulator.js";
 
 // Extracted services (roadmap Phase 2) — routes below are proxied, not handled locally.
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL ?? "http://localhost:4001";
@@ -50,10 +56,10 @@ const SCRAPER_SERVICE_URL = process.env.SCRAPER_SERVICE_URL ?? "http://localhost
 
 import { listNotifications, markRead, markAllRead, unreadCount, seedDemoNotifications, createNotification } from "../modules/notifications/notificationService.js";
 import { listAssets, createAsset, deleteAsset, updateAssetTags, seedDemoAssets } from "../modules/assets/assetService.js";
-import { listInsights, dismissInsight, generateInsights, seedDemoInsights } from "../modules/insights/insightService.js";
+import { listInsights, dismissInsight, generateInsights, seedDemoInsights, recordOptimizationInsights } from "../modules/insights/insightService.js";
 import { getOrCreateIntegrations, connectIntegration, disconnectIntegration, updateIntegrationSettings, getMetaCredentials, sanitizeIntegration, setMetaManualConnection, setGoogleManualConnection } from "../modules/integrations/integrationService.js";
 import { listAdAccounts as listMetaAdAccountsGraph, listPages as listMetaPagesGraph, listInstagramAccounts as listMetaInstagramAccountsGraph, listPixels as listMetaPixelsGraph } from "../modules/integrations/metaOAuth.js";
-import { listAccessibleCustomers as listGoogleCustomersApi, listConversionActions as listGoogleConversionActionsApi } from "../modules/integrations/googleOAuth.js";
+import { listAccessibleCustomers as listGoogleCustomersApi, listConversionActions as listGoogleConversionActionsApi, getGoogleAdsCredentials } from "../modules/integrations/googleOAuth.js";
 import { getProductCatalog } from "../modules/integrations/productCatalogService.js";
 import { createGenerationJob, getGenerationJob } from "../modules/generation/generationJobService.js";
 import { getCrmWebhookConfig, setCrmWebhookConfig, clearCrmWebhookConfig } from "../modules/crm/crmWebhookService.js";
@@ -924,6 +930,16 @@ router.get("/businesses/:id/campaigns", requireBusinessAccess("params", "id"), a
   const campaigns = await prisma.campaign.findMany({ where: { businessId: req.params.id } });
   res.json(campaigns.map(c => ({ id: c.id, ...c.data as object })));
 }));
+// Static /campaigns/* routes MUST be declared before the /campaigns/:id param route below,
+// or Express matches them as an :id. Objective picker + budget simulator for the generation flow.
+router.get("/campaigns/objectives", asyncHandler(async (_req, res) => res.json({ objectives: listObjectives() })));
+router.post("/campaigns/simulate", asyncHandler(async (req, res) => {
+  const dailyBudgetCents = Number(req.body?.dailyBudgetCents);
+  if (!Number.isFinite(dailyBudgetCents) || dailyBudgetCents <= 0) {
+    return res.status(400).json({ error: "dailyBudgetCents (positive number) is required" });
+  }
+  res.json(simulateBudget({ objective: req.body?.objective, dailyBudgetCents, countries: req.body?.countries }));
+}));
 router.get("/campaigns/:id", asyncHandler(async (req, res) => {
   const campaign = await prisma.campaign.findUnique({ where: { id: req.params.id } });
   if (!campaign) return res.status(404).json({ error: "Campaign not found" });
@@ -936,15 +952,86 @@ router.patch("/campaigns/:id", asyncHandler(async (req, res) => {
   res.json({ id: updated.id, ...updated.data as object });
 }));
 router.post("/campaigns/:id/launch", asyncHandler(async (req, res) => {
-  const existing = await prisma.campaign.findUnique({ where: { id: req.params.id } });
-  if (!existing) return res.status(404).json({ error: "Campaign not found" });
-  const updated = await prisma.campaign.update({ where: { id: req.params.id }, data: { data: { ...(existing.data as object), status: "active" } } });
-  res.json({ id: updated.id, ...updated.data as object });
+  const workspaceId = req.body.workspaceId ?? "demo-workspace";
+  const campaign = await prisma.campaign.findUnique({ where: { id: req.params.id } });
+  if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+  const data = campaign.data as any;
+  const hasMetaVariants = (data.variants ?? []).some((v: any) => v.network === "meta");
+  if (hasMetaVariants) {
+    const metaCreds = await getMetaCredentials(workspaceId);
+    if (!metaCreds) {
+      return res.status(422).json({ error: "No Meta ad account connected. Connect your Meta Business account in Settings before launching.", code: "META_NOT_CONNECTED" });
+    }
+  }
+  // Symmetric pre-flight for Google — without this, a Google variant with no connection would
+  // silently fail inside launchGoogleHierarchy (variant marked "failed") instead of prompting
+  // the user to connect. Mirrors the Meta check above.
+  const hasGoogleVariants = (data.variants ?? []).some((v: any) => v.network === "google");
+  if (hasGoogleVariants) {
+    const googleCreds = await getGoogleAdsCredentials(workspaceId);
+    if (!googleCreds) {
+      return res.status(422).json({ error: "No Google Ads account connected. Connect your Google Ads account in Settings before launching.", code: "GOOGLE_NOT_CONNECTED" });
+    }
+  }
+  try {
+    const launched = await launchCampaign(req.params.id, workspaceId);
+    res.json(launched);
+  } catch (err: any) {
+    if (err.message?.includes("not found")) return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message ?? "Campaign launch failed" });
+  }
 }));
-router.post("/campaigns/:id/variants/:variantId/pause", asyncHandler(async (_req, res) => res.json({ ok: true })));
-router.post("/campaigns/:id/variants/:variantId/activate", asyncHandler(async (_req, res) => res.json({ ok: true })));
-router.post("/campaigns/:id/apply-creative-media", asyncHandler(async (_req, res) => res.json({ ok: true })));
-router.post("/campaigns/:id/ingest", asyncHandler(async (_req, res) => res.json({ ok: true })));
+router.post("/campaigns/:id/variants/:variantId/pause", asyncHandler(async (req, res) => {
+  try {
+    const result = await pauseVariant(req.params.id, req.params.variantId);
+    res.json(result);
+  } catch (err: any) {
+    const status = err.message?.includes("not found") || err.message?.includes("not launched") ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
+}));
+router.post("/campaigns/:id/variants/:variantId/activate", asyncHandler(async (req, res) => {
+  try {
+    const result = await activateVariant(req.params.id, req.params.variantId);
+    res.json(result);
+  } catch (err: any) {
+    const status = err.message?.includes("not found") || err.message?.includes("not launched") ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
+}));
+router.post("/campaigns/:id/apply-creative-media", asyncHandler(async (req, res) => {
+  try {
+    const result = await applyCreativeMedia(req.params.id, req.body);
+    res.json(result);
+  } catch (err: any) {
+    if (err.message?.includes("not found")) return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+}));
+router.post("/campaigns/:id/variants/:variantId/budget", asyncHandler(async (req, res) => {
+  const dailyBudgetCents = Number(req.body.dailyBudgetCents);
+  if (!dailyBudgetCents || dailyBudgetCents <= 0 || dailyBudgetCents > MAX_BUDGET_CENTS) {
+    return res.status(400).json({ error: "Invalid budget amount" });
+  }
+  try {
+    const result = await reallocateBudget(req.params.id, req.params.variantId, dailyBudgetCents);
+    res.json(result);
+  } catch (err: any) {
+    const status = err.message?.includes("not found") || err.message?.includes("not launched") ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
+}));
+router.post("/campaigns/:id/ingest", asyncHandler(async (req, res) => {
+  // On-demand metrics pull so the UI can populate a just-launched campaign immediately
+  // instead of waiting for the next 15-min metrics-ingestion worker tick.
+  try {
+    const metrics = await ingestCampaignMetrics(req.params.id);
+    res.json({ ok: true, ingested: metrics.length });
+  } catch (err: any) {
+    if (err.message?.includes("not found")) return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message ?? "Metrics ingestion failed" });
+  }
+}));
 router.get("/campaigns/:id/performance", asyncHandler(async (req, res) => {
   const snapshots = await prisma.campaignPerformanceSnapshot.findMany({ where: { campaignId: req.params.id }, orderBy: { capturedAt: "desc" }, take: 30 });
   res.json(snapshots);
@@ -953,17 +1040,26 @@ router.get("/campaigns/:id/live-insights", asyncHandler(async (req, res) => {
   const campaign = await prisma.campaign.findUnique({ where: { id: req.params.id } });
   if (!campaign) return res.status(404).json({ error: "Campaign not found" });
   const data = campaign.data as any;
-  const variants = data.variants ?? [];
-  const budgetCents = data.dailyBudgetCents ?? 0;
-  if (variants.length === 0 || budgetCents === 0) {
+  const variants: any[] = data.variants ?? [];
+  const liveVariants = variants.filter((v: any) => v.externalId && (v.status === "active" || v.status === "paused"));
+
+  if (liveVariants.length === 0) {
     return res.json({ campaignId: req.params.id, isLive: false, impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, ctr: 0, cpcCents: null, cpmCents: null, roas: null });
   }
-  const avgCpm = 1800;
-  const impressions = Math.round((budgetCents / avgCpm) * 1000);
-  const reach = Math.round(impressions * 0.72);
-  const clicks = Math.round(impressions * 0.022);
-  const conversions = Math.max(1, Math.round(clicks * 0.03));
-  const spendCents = budgetCents;
+
+  const credentials = (await getMetaCredentials(data.workspaceId ?? campaign.workspaceId ?? "demo-workspace")) ?? undefined;
+  let impressions = 0, reach = 0, clicks = 0, conversions = 0, spendCents = 0;
+  for (const v of liveVariants) {
+    try {
+      const stats = await metaAdapter.fetchInsights(v.externalId, new Date().toISOString().slice(0, 10), credentials);
+      impressions += stats.impressions;
+      reach += stats.reach;
+      clicks += stats.clicks;
+      conversions += stats.conversions;
+      spendCents += stats.spendCents;
+    } catch { /* variant may have been deleted on Meta */ }
+  }
+
   res.json({
     campaignId: req.params.id,
     isLive: true,
@@ -979,7 +1075,35 @@ router.get("/campaigns/:id/live-insights", asyncHandler(async (req, res) => {
   });
 }));
 router.get("/campaigns/:id/trend", requireCampaignAccess, asyncHandler(async (req, res) => res.json(await getCampaignTrend(req.params.id))));
-router.post("/campaigns/:id/optimize", asyncHandler(async (_req, res) => res.json({ ok: true })));
+router.post("/campaigns/:id/optimize", asyncHandler(async (req, res) => {
+  // Manual "optimize now" — runs the same optimization pass the metrics worker runs on a
+  // schedule, and persists the resulting decisions to the workspace's AI-insights feed.
+  const campaign = await prisma.campaign.findUnique({ where: { id: req.params.id } });
+  if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+  try {
+    const decisions = await runOptimizationPass(req.params.id);
+    const workspaceId = (campaign.data as any)?.workspaceId ?? campaign.workspaceId;
+    if (workspaceId && decisions.length) await recordOptimizationInsights(workspaceId, decisions);
+    res.json({ ok: true, decisions });
+  } catch (err: any) {
+    if (err.message?.includes("not found")) return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message ?? "Optimization failed" });
+  }
+}));
+// Persistent 24/7 auto-optimize toggle. Stored on the campaign's data blob (no schema column);
+// the scheduled metrics-ingestion worker reads this flag and skips the optimization pass when
+// it's explicitly false, so the user can turn autonomous budget/pause moves off per campaign.
+router.post("/campaigns/:id/auto-optimize", asyncHandler(async (req, res) => {
+  const enabled = req.body?.enabled;
+  if (typeof enabled !== "boolean") return res.status(400).json({ error: "enabled (boolean) is required" });
+  const existing = await prisma.campaign.findUnique({ where: { id: req.params.id } });
+  if (!existing) return res.status(404).json({ error: "Campaign not found" });
+  const updated = await prisma.campaign.update({
+    where: { id: req.params.id },
+    data: { data: { ...(existing.data as object), autoOptimize: enabled } },
+  });
+  res.json({ id: updated.id, autoOptimize: enabled });
+}));
 
 // Billing — inline stubs (campaign-service not running)
 router.post("/businesses/:id/invoices", requireBusinessAccess("params", "id"), asyncHandler(async (_req, res) => res.json([])));
@@ -1157,7 +1281,10 @@ const campaignGenerateSchema = z.object({
 router.post("/campaigns/generate", requireWorkspaceMember("body", "workspaceId"), asyncHandler(async (req, res) => {
   const parsed = campaignGenerateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { workspaceId, businessId, url, name, dailyBudgetCents, forceRefresh } = parsed.data;
+  const { workspaceId, businessId, url, name, dailyBudgetCents, objective, forceRefresh } = parsed.data;
+  // Only forward a valid post-ODAX Meta objective to the pipeline; anything else is dropped so
+  // launchMetaHierarchy falls back to its default rather than sending junk to the Graph API.
+  const validObjective = objective && isValidObjective(objective) ? objective : undefined;
 
   const business = await getBusiness(businessId);
   if (!business) return res.status(404).json({ error: "Business not found" });
@@ -1203,7 +1330,7 @@ router.post("/campaigns/generate", requireWorkspaceMember("body", "workspaceId")
 
   try {
     const job = await createCampaignGenerationJob({ workspaceId, businessId, url, name, dailyBudgetCents });
-    await campaignGenerationQueue.add("campaign-generate", { jobId: job.id, forceRefresh: forceRefresh ?? false });
+    await campaignGenerationQueue.add("campaign-generate", { jobId: job.id, forceRefresh: forceRefresh ?? false, objective: validObjective });
     res.status(202).json(job);
   } catch (err) {
     sendError(res, err, 422, "Failed to start campaign generation");

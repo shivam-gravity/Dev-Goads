@@ -3,10 +3,10 @@ import { logger } from "../modules/logger/logger.js";
 // PullPush.io — a free, unauthenticated third-party archive of Reddit submissions/comments
 // (the Pushshift successor). Reddit's own JSON endpoints now reject anonymous programmatic
 // access outright (confirmed live: even a compliant descriptive User-Agent gets a 403 on
-// reddit.com/*.json), and Firecrawl's scrape of individual reddit.com threads hits the same
+// reddit.com/*.json), and a headless scrape of individual reddit.com threads hits the same
 // wall — PullPush sidesteps both since it's a separate archive, not Reddit's own
-// infrastructure. Mirrors firecrawlClient.ts's fetch + AbortController timeout +
-// graceful-null-on-failure shape, minus any credit budgeting (no API key, no per-call cost).
+// infrastructure. Uses the same fetch + AbortController timeout + graceful-null-on-failure
+// shape every external client here follows (no API key, no per-call cost).
 const BASE_URL = "https://api.pullpush.io/reddit/search";
 const REQUEST_TIMEOUT_MS = 8000;
 

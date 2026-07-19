@@ -250,10 +250,19 @@ export default function AdsManager({ businessId }: { businessId: string }) {
     try {
       const camp = campaigns.find((c) => c.id === id);
       if (!camp) return;
+      const liveVariants = (camp.variants ?? []).filter((v) => v.externalId);
+      if (liveVariants.length === 0) {
+        await api.updateCampaign(id, { status: isOn ? "paused" : "active" } as any);
+        return;
+      }
       if (isOn) {
-        await api.updateCampaign(id, { name: camp.name });
+        for (const v of liveVariants.filter((v) => v.status === "active")) {
+          await api.pauseVariant(id, v.id);
+        }
       } else {
-        await api.updateCampaign(id, { name: camp.name });
+        for (const v of liveVariants.filter((v) => v.status === "paused")) {
+          await api.activateVariant(id, v.id);
+        }
       }
     } catch {
       setOnIds((prev) => {

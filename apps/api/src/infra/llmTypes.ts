@@ -1,5 +1,5 @@
 /**
- * Shared request/response shapes every LLM client (groqClient, mistralClient,
+ * Shared request/response shapes every LLM client (openRouterClient, mistralClient,
  * ollamaClient, geminiClient) builds against — extracted from openaiClient.ts (now
  * removed) so no client "owns" these types just because OpenAI happened to be first.
  */

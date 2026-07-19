@@ -6,10 +6,13 @@ import { useRealtimeContext } from "../providers/RealtimeProvider.js";
 import { TargetIcon, UserIcon, LightningIcon, GlobeIcon, SparkleIcon } from "../components/icons.js";
 import type {
   AudiencePersonaCard,
+  BudgetSimulation,
+  Campaign,
   CampaignGenerationCitations,
   CampaignGenerationFacts,
   CampaignGenerationJobStatus,
   CampaignGenerationPipelineStatus,
+  CampaignObjectiveOption,
   CampaignStrategyOption,
   CompetitorAdsData,
   DecisionContext,
@@ -19,6 +22,33 @@ import type {
 
 const AVATAR_EMOJIS = ["🤖", "👨", "👩", "👩‍🦰", "🧑", "👩🏾"];
 const POLL_INTERVAL_MS = 1500;
+const SIMULATE_DEBOUNCE_MS = 400;
+
+// Networks the adsgo.ai-style setup exposes as one-click toggles. Both default on to match the
+// "publish to Meta and Google" promise; the launch pre-flight prompts to connect whichever isn't.
+const NETWORK_OPTIONS: { value: "meta" | "google"; label: string }[] = [
+  { value: "meta", label: "Meta" },
+  { value: "google", label: "Google" },
+];
+
+// Fallback objective list if GET /campaigns/objectives hasn't resolved yet — replaced by the
+// engine-driven list (metaObjectives.ts) as soon as it loads, so this is only ever a brief default.
+const FALLBACK_OBJECTIVES: CampaignObjectiveOption[] = [
+  { value: "OUTCOME_TRAFFIC", label: "Traffic", description: "Send people to your site" },
+  { value: "OUTCOME_LEADS", label: "Leads", description: "Collect leads via forms or calls" },
+  { value: "OUTCOME_SALES", label: "Sales", description: "Find people likely to purchase" },
+  { value: "OUTCOME_AWARENESS", label: "Awareness", description: "Maximize reach and recall" },
+];
+
+const DEFAULT_BUDGET_CENTS = 2000;
+
+function formatMoney(cents: number): string {
+  return `$${(cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+function formatCompact(n: number): string {
+  return Number(n || 0).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
+}
 
 /**
  * Mirrors the pipeline's real phases (modules/orchestrator/campaignGenerationPipeline.ts) —
@@ -694,6 +724,21 @@ export default function NewCampaign() {
   const [refreshing, setRefreshing] = useState(false);
   const pollRef = useRef<number | null>(null);
 
+  // ── adsgo.ai-style setup controls ──
+  const [objectives, setObjectives] = useState<CampaignObjectiveOption[]>(FALLBACK_OBJECTIVES);
+  const [objective, setObjective] = useState<string>("OUTCOME_TRAFFIC");
+  const [networks, setNetworks] = useState<("meta" | "google")[]>(["meta", "google"]);
+  const [dailyBudgetCents, setDailyBudgetCents] = useState<number>(DEFAULT_BUDGET_CENTS);
+  const [simulation, setSimulation] = useState<BudgetSimulation | null>(null);
+  const [connections, setConnections] = useState<{ meta: boolean; google: boolean }>({ meta: false, google: false });
+  const simulateTimerRef = useRef<number | null>(null);
+
+  // ── publish / go-live / auto-optimize (post-generation) ──
+  const [publishedCampaign, setPublishedCampaign] = useState<Campaign | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [goingLive, setGoingLive] = useState(false);
+  const [autoOptimize, setAutoOptimize] = useState(true);
+
   // Same resumability contract as the old flow: generation runs server-side (BullMQ worker)
   // regardless of whether this component is mounted — persisting just the job id means
   // switching pages and back resumes exactly where it left off. The URL is persisted
@@ -713,6 +758,34 @@ export default function NewCampaign() {
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load engine-driven objective list + current platform connection status once, for the setup UI.
+  useEffect(() => {
+    let cancelled = false;
+    api.getCampaignObjectives().then((r) => { if (!cancelled && r.objectives?.length) setObjectives(r.objectives); }).catch(() => {});
+    api.listIntegrations(wsId).then((list) => {
+      if (cancelled) return;
+      const isConnected = (p: string) => list.some((i) => i.platform === p && i.status === "connected");
+      setConnections({ meta: isConnected("meta"), google: isConnected("google") });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [wsId]);
+
+  // Live budget/goal simulator — debounced so dragging the slider doesn't spam the API. Only
+  // meaningful before generation (the setup screen); skipped once a job exists.
+  useEffect(() => {
+    if (job) return;
+    if (simulateTimerRef.current) window.clearTimeout(simulateTimerRef.current);
+    simulateTimerRef.current = window.setTimeout(async () => {
+      try {
+        const sim = await api.simulateCampaign({ objective, dailyBudgetCents });
+        setSimulation(sim);
+      } catch {
+        // simulator is best-effort — a failure just hides the preview
+      }
+    }, SIMULATE_DEBOUNCE_MS);
+    return () => { if (simulateTimerRef.current) window.clearTimeout(simulateTimerRef.current); };
+  }, [objective, dailyBudgetCents, job]);
 
   const factsVisible = job?.status === "completed" || job?.status === "building_campaign";
 
@@ -770,10 +843,14 @@ export default function NewCampaign() {
       setError("No business selected yet — try again in a moment.");
       return;
     }
+    if (networks.length === 0) {
+      setError("Select at least one platform (Meta or Google).");
+      return;
+    }
     setError(null);
     setStarting(true);
     try {
-      const created = await api.generateCampaign({ workspaceId: wsId, businessId, url });
+      const created = await api.generateCampaign({ workspaceId: wsId, businessId, url, dailyBudgetCents, objective, channels: networks });
       setJob(created);
       setProgressSteps([]);
       setProgressTotal(null);
@@ -783,6 +860,50 @@ export default function NewCampaign() {
       setError(err instanceof Error ? err.message : "Couldn't start research — check the URL and try again.");
     } finally {
       setStarting(false);
+    }
+  }
+
+  // One-click publish: builds the real Meta/Google hierarchy (all PAUSED) via launchCampaign,
+  // using the workspace's default ad-account connection — no builder round-trip. A 422 means a
+  // needed platform isn't connected; surface it with a link to the connection settings.
+  async function handlePublish() {
+    if (!job?.campaignId) return;
+    setPublishing(true);
+    setError(null);
+    try {
+      const launched = await api.launchCampaign(job.campaignId, wsId);
+      setPublishedCampaign(launched);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Publish failed — try again.";
+      if (/META_NOT_CONNECTED|Meta ad account/i.test(msg)) {
+        setError("Connect your Meta ad account before publishing. Open Settings → Ad Platform Connection.");
+      } else if (/GOOGLE_NOT_CONNECTED|Google Ads account/i.test(msg)) {
+        setError("Connect your Google Ads account before publishing. Open Settings → Ad Platform Connection.");
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  // "Go live" — flips every launched (PAUSED) variant to ACTIVE, sets the persistent auto-optimize
+  // preference, then pulls metrics once immediately so CampaignDetail isn't empty for 15 minutes.
+  async function handleGoLive() {
+    const campaign = publishedCampaign;
+    if (!campaign) return;
+    setGoingLive(true);
+    setError(null);
+    try {
+      const launchedVariants = campaign.variants.filter((v) => v.externalId && v.status !== "active");
+      for (const v of launchedVariants) {
+        try { await api.activateVariant(campaign.id, v.id); } catch { /* one variant failing shouldn't block the rest */ }
+      }
+      await api.setAutoOptimize(campaign.id, autoOptimize).catch(() => {});
+      await api.ingestMetrics(campaign.id).catch(() => {}); // best-effort first metrics pull
+      navigate(`/campaigns/${campaign.id}`);
+    } finally {
+      setGoingLive(false);
     }
   }
 
@@ -814,6 +935,7 @@ export default function NewCampaign() {
     setPageUrl("");
     setProgressSteps([]);
     setProgressTotal(null);
+    setPublishedCampaign(null);
     localStorage.removeItem(activeJobKey);
     localStorage.removeItem(activeJobUrlKey);
   }
@@ -865,6 +987,70 @@ export default function NewCampaign() {
               <span aria-hidden="true">✨</span>
               {starting ? "Starting…" : "Deep Research"}
             </button>
+          </div>
+
+          {/* adsgo.ai-style setup: objective + networks + budget slider with a live outcome preview */}
+          <div className="new-campaign-setup">
+            <div className="ncs-field">
+              <label className="ncs-label">Objective</label>
+              <div className="ncs-objective-row">
+                {objectives.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    className={`ncs-chip${objective === o.value ? " ncs-chip-active" : ""}`}
+                    onClick={() => setObjective(o.value)}
+                    title={o.description}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="ncs-field">
+              <label className="ncs-label">Platforms</label>
+              <div className="ncs-objective-row">
+                {NETWORK_OPTIONS.map((n) => {
+                  const on = networks.includes(n.value);
+                  const connected = connections[n.value];
+                  return (
+                    <button
+                      key={n.value}
+                      type="button"
+                      className={`ncs-chip${on ? " ncs-chip-active" : ""}`}
+                      onClick={() => setNetworks((prev) => prev.includes(n.value) ? prev.filter((x) => x !== n.value) : [...prev, n.value])}
+                    >
+                      {n.label}
+                      <span className={`ncs-conn-dot${connected ? " ncs-conn-ok" : ""}`} title={connected ? `${n.label} connected` : `${n.label} not connected — you can still generate, but you'll be asked to connect before publishing`} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="ncs-field">
+              <label className="ncs-label">Daily budget: <strong>{formatMoney(dailyBudgetCents)}</strong></label>
+              <input
+                type="range"
+                className="ncs-slider"
+                min={500}
+                max={50000}
+                step={500}
+                value={dailyBudgetCents}
+                onChange={(e) => setDailyBudgetCents(Number(e.target.value))}
+              />
+            </div>
+
+            {simulation && (
+              <div className="ncs-sim">
+                <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estImpressionsPerDay)}</span><span className="ncs-sim-key">impressions/day</span></div>
+                <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estClicks)}</span><span className="ncs-sim-key">clicks/day</span></div>
+                <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estConversions)}</span><span className="ncs-sim-key">conv./day</span></div>
+                <div className="ncs-sim-item"><span className="ncs-sim-val">{simulation.estRoas.toFixed(1)}×</span><span className="ncs-sim-key">est. ROAS</span></div>
+                <span className="ncs-sim-note">Estimated — actual results depend on your creative, audience, and market.</span>
+              </div>
+            )}
           </div>
 
           <div className="new-campaign-value-row">
@@ -954,19 +1140,47 @@ export default function NewCampaign() {
 
           {factsVisible && <CompetitorAdsSection jobId={job.id} />}
 
-          {isDone && (
+          {isDone && !publishedCampaign && (
             <div className="all-set-banner">
               <span className="all-set-banner-icon" aria-hidden="true">✓</span>
-              <span>Your campaign is ready — real ads have been generated. Review and launch it in the builder.</span>
+              <span>Your campaign is ready — real ads have been generated. Publish to {networks.map((n) => n === "meta" ? "Meta" : "Google").join(" & ")} in one click, or fine-tune it in the builder.</span>
             </div>
           )}
 
-          {isDone && job.campaignId && (
+          {/* One-click publish (pre-publish) */}
+          {isDone && job.campaignId && !publishedCampaign && (
             <div className="crawler-result-actions">
-              <button className="btn btn-primary" onClick={() => navigate(`/campaigns/${job.campaignId}/builder`)}>
-                Review in Campaign Builder
+              <button className="btn btn-primary" onClick={handlePublish} disabled={publishing}>
+                {publishing ? "Publishing…" : `Publish to ${networks.map((n) => n === "meta" ? "Meta" : "Google").join(" & ")}`}
+              </button>
+              <button className="btn btn-secondary" onClick={() => navigate(`/campaigns/${job.campaignId}/builder`)}>
+                Customize in Builder
               </button>
               <button className="btn btn-secondary" onClick={handleReset}>Try a different page</button>
+            </div>
+          )}
+
+          {/* Published (PAUSED) — go live + auto-optimize */}
+          {publishedCampaign && (
+            <div className="publish-live-panel">
+              <div className="all-set-banner">
+                <span className="all-set-banner-icon" aria-hidden="true">✓</span>
+                <span>
+                  Published to {publishedCampaign.networks.map((n) => n === "meta" ? "Meta" : "Google").join(" & ")} — {publishedCampaign.variants.filter((v) => v.externalId).length} ad(s) created and <strong>paused</strong>. Nothing spends until you go live.
+                </span>
+              </div>
+              <label className="ncs-optimize-toggle">
+                <input type="checkbox" checked={autoOptimize} onChange={(e) => setAutoOptimize(e.target.checked)} />
+                <span><strong>24/7 auto-optimize</strong> — automatically shift budget to winning ads and pause underperformers.</span>
+              </label>
+              <div className="crawler-result-actions">
+                <button className="btn btn-primary" onClick={handleGoLive} disabled={goingLive}>
+                  {goingLive ? "Going live…" : "Go live"}
+                </button>
+                <button className="btn btn-secondary" onClick={() => navigate(`/campaigns/${publishedCampaign.id}`)}>
+                  View campaign
+                </button>
+              </div>
             </div>
           )}
         </div>

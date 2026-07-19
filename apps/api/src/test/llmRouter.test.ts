@@ -9,7 +9,7 @@ import { getGlobalLlmMonthlyBudget } from "../infra/llmUsageBoundary.js";
 // tests exercise the "configured, but the call itself fails" fallback path for the
 // non-Groq providers, rather than only their "not configured at all" degrade path
 // (which is covered separately in mistralClient.test.ts/geminiClient.test.ts).
-process.env.GROQ_API_KEY = "test-groq-key";
+process.env.OPENROUTER_API_KEY = "test-openrouter-key";
 process.env.MISTRAL_API_KEY = "test-mistral-key";
 // Redirects the global usage ledger to a throwaway path — without this, a real
 // (persistent, file-based) global-usage-exceeded state left over from an earlier run
@@ -57,8 +57,8 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function groqToolResponse(): Response {
-  return jsonResponse({ choices: [{ message: { tool_calls: [{ type: "function", function: { name: "emit_test", arguments: JSON.stringify({ ok: true, via: "groq" }) } }] } }] });
+function openRouterToolResponse(): Response {
+  return jsonResponse({ choices: [{ message: { tool_calls: [{ type: "function", function: { name: "emit_test", arguments: JSON.stringify({ ok: true, via: "openrouter" }) } }] } }] });
 }
 
 test("llmRouter.runStructured - a groq assignment calls Groq directly, no fallback wrapping", async () => {
@@ -66,14 +66,14 @@ test("llmRouter.runStructured - a groq assignment calls Groq directly, no fallba
   let calls = 0;
   currentFetchImpl = (async (url) => {
     calls += 1;
-    if (isUrl(url, "api.groq.com")) return groqToolResponse();
+    if (isUrl(url, "openrouter.ai")) return openRouterToolResponse();
     throw new Error(`unexpected fetch: ${String(url)}`);
   }) as typeof fetch;
 
   try {
-    const result = await runStructured({ provider: "groq", model: "llama-3.3-70b-versatile" }, BASE_OPTS);
-    assert.strictEqual(result.source, "groq");
-    assert.deepStrictEqual(result.data, { ok: true, via: "groq" });
+    const result = await runStructured({ provider: "openrouter", model: "llama-3.3-70b-versatile" }, BASE_OPTS);
+    assert.strictEqual(result.source, "openrouter");
+    assert.deepStrictEqual(result.data, { ok: true, via: "openrouter" });
     assert.strictEqual(calls, 1);
   } finally {
     currentFetchImpl = original;
@@ -102,14 +102,14 @@ test("llmRouter.runStructured - an ollama assignment failing falls back to a suc
   const original = currentFetchImpl;
   currentFetchImpl = (async (url) => {
     if (isUrl(url, "11434")) throw new Error("ollama unreachable (simulated)");
-    if (isUrl(url, "api.groq.com")) return groqToolResponse();
+    if (isUrl(url, "openrouter.ai")) return openRouterToolResponse();
     throw new Error(`unexpected fetch: ${String(url)}`);
   }) as typeof fetch;
 
   try {
     const result = await runStructured({ provider: "ollama", model: "llama3.1" }, BASE_OPTS);
-    assert.strictEqual(result.source, "groq");
-    assert.deepStrictEqual(result.data, { ok: true, via: "groq" });
+    assert.strictEqual(result.source, "openrouter");
+    assert.deepStrictEqual(result.data, { ok: true, via: "openrouter" });
   } finally {
     currentFetchImpl = original;
   }
@@ -125,14 +125,14 @@ test("llmRouter.runStructured - a mistral assignment with no real key configured
     if (isUrl(url, "api.mistral.ai")) {
       return jsonResponse({ choices: [{ message: {} }] }); // no tool_calls => null
     }
-    if (isUrl(url, "api.groq.com")) return groqToolResponse();
+    if (isUrl(url, "openrouter.ai")) return openRouterToolResponse();
     throw new Error(`unexpected fetch: ${String(url)}`);
   }) as typeof fetch;
 
   try {
     const result = await runStructured({ provider: "mistral", model: "mistral-small-latest" }, BASE_OPTS);
-    assert.strictEqual(result.source, "groq");
-    assert.deepStrictEqual(result.data, { ok: true, via: "groq" });
+    assert.strictEqual(result.source, "openrouter");
+    assert.deepStrictEqual(result.data, { ok: true, via: "openrouter" });
   } finally {
     currentFetchImpl = original;
   }
@@ -146,8 +146,8 @@ test("llmRouter.runStructured - a groq assignment failing now falls back to Mist
   const original = currentFetchImpl;
   const reached: string[] = [];
   currentFetchImpl = (async (url) => {
-    if (isUrl(url, "api.groq.com")) {
-      reached.push("groq");
+    if (isUrl(url, "openrouter.ai")) {
+      reached.push("openrouter");
       throw new Error("429 rate limit (simulated)");
     }
     if (isUrl(url, "api.mistral.ai")) {
@@ -158,13 +158,13 @@ test("llmRouter.runStructured - a groq assignment failing now falls back to Mist
   }) as typeof fetch;
 
   try {
-    const result = await runStructured({ provider: "groq", model: "llama-3.3-70b-versatile" }, BASE_OPTS);
+    const result = await runStructured({ provider: "openrouter", model: "llama-3.3-70b-versatile" }, BASE_OPTS);
     assert.strictEqual(result.source, "mistral");
     assert.deepStrictEqual(result.data, { ok: true, via: "mistral" });
     // The OpenAI SDK (which groqClient.ts reuses) auto-retries a connection error a few
     // times before giving up, so groq may appear more than once — dedup to first-seen
     // order to assert only what matters: groq was tried, then mistral, in that order.
-    assert.deepStrictEqual([...new Set(reached)], ["groq", "mistral"]);
+    assert.deepStrictEqual([...new Set(reached)], ["openrouter", "mistral"]);
   } finally {
     currentFetchImpl = original;
   }
@@ -175,7 +175,7 @@ test("llmRouter.runStructured - the assigned provider, Groq, and Mistral all fai
   const reached: string[] = [];
   currentFetchImpl = (async (url) => {
     if (isUrl(url, "11434")) reached.push("ollama");
-    else if (isUrl(url, "api.groq.com")) reached.push("groq");
+    else if (isUrl(url, "openrouter.ai")) reached.push("openrouter");
     else if (isUrl(url, "api.mistral.ai")) reached.push("mistral");
     throw new Error("network unavailable (simulated)");
   }) as typeof fetch;
@@ -191,7 +191,7 @@ test("llmRouter.runStructured - the assigned provider, Groq, and Mistral all fai
     // this test file, so it degrades to null without a network call, same as being absent.
     // Dedup to first-seen order: the OpenAI SDK (groq/ollama) auto-retries a connection
     // error a few times before giving up, so a provider may appear more than once.
-    assert.deepStrictEqual([...new Set(reached)], ["ollama", "mistral", "groq"]);
+    assert.deepStrictEqual([...new Set(reached)], ["ollama", "mistral", "openrouter"]);
   } finally {
     currentFetchImpl = original;
   }
@@ -216,6 +216,72 @@ test("llmRouter.runStructured - LLM_TASK_FALLBACK_ENABLED=false disables the saf
   } finally {
     currentFetchImpl = original;
     delete process.env.LLM_TASK_FALLBACK_ENABLED;
+  }
+});
+
+test("llmRouter.runStructured - a dual assignment runs Groq AND Mistral concurrently and keeps the more complete result", async () => {
+  // Best-of-both deep-research mode: both fire, the richer (more-populated, longer-serialized)
+  // answer wins. Here Mistral returns the fuller object, so it must be chosen over Groq's thin one.
+  const original = currentFetchImpl;
+  const reached: string[] = [];
+  currentFetchImpl = (async (url) => {
+    if (isUrl(url, "openrouter.ai")) {
+      reached.push("openrouter");
+      return jsonResponse({ choices: [{ message: { tool_calls: [{ function: { name: "emit_test", arguments: JSON.stringify({ ok: true }) } }] } }] });
+    }
+    if (isUrl(url, "api.mistral.ai")) {
+      reached.push("mistral");
+      return jsonResponse({ choices: [{ message: { tool_calls: [{ function: { name: "emit_test", arguments: JSON.stringify({ ok: true, detail: "a much more complete and thorough answer with extra grounded fields" }) } }] } }] });
+    }
+    throw new Error(`unexpected fetch: ${String(url)}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await runStructured({ provider: "dual", model: "mistral-small-latest" }, BASE_OPTS);
+    // Both providers were actually called (concurrent), and the richer Mistral answer won.
+    assert.ok(reached.includes("openrouter"), "openrouter leg should run");
+    assert.ok(reached.includes("mistral"), "mistral leg should run");
+    assert.strictEqual(result.source, "mistral");
+    assert.ok((result.data as { detail?: string })?.detail, "the more complete result should win");
+  } finally {
+    currentFetchImpl = original;
+  }
+});
+
+test("llmRouter.runStructured - a dual assignment survives one leg failing (returns the other leg's result)", async () => {
+  // Resilience: if Groq is rate-limited (429), the Mistral leg still answers — the whole point
+  // of running both for a quota-exhausted primary provider.
+  const original = currentFetchImpl;
+  currentFetchImpl = (async (url) => {
+    if (isUrl(url, "openrouter.ai")) throw new Error("429 rate limit (simulated)");
+    if (isUrl(url, "api.mistral.ai")) {
+      return jsonResponse({ choices: [{ message: { tool_calls: [{ function: { name: "emit_test", arguments: JSON.stringify({ ok: true, via: "mistral" }) } }] } }] });
+    }
+    throw new Error(`unexpected fetch: ${String(url)}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await runStructured({ provider: "dual", model: "mistral-small-latest" }, BASE_OPTS);
+    assert.strictEqual(result.source, "mistral");
+    assert.deepStrictEqual(result.data, { ok: true, via: "mistral" });
+  } finally {
+    currentFetchImpl = original;
+  }
+});
+
+test("llmRouter.runStructured - a dual assignment with BOTH legs failing walks the fallback chain, never throws", async () => {
+  // Both dual legs down => it must not throw; it falls through to the normal chain (which,
+  // with google unconfigured here, ends in null). Confirms dual degrades like everything else.
+  const original = currentFetchImpl;
+  currentFetchImpl = (async () => {
+    throw new Error("network unavailable (simulated)");
+  }) as typeof fetch;
+
+  try {
+    const result = await runStructured({ provider: "dual", model: "mistral-small-latest" }, BASE_OPTS);
+    assert.strictEqual(result.data, null);
+  } finally {
+    currentFetchImpl = original;
   }
 });
 

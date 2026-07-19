@@ -21,10 +21,10 @@ export interface SetBudgetInput {
 export interface AdAdapter {
   readonly network: AdNetwork;
   launchVariant(input: LaunchVariantInput): Promise<LaunchVariantResult>;
-  pauseVariant(externalId: string): Promise<void>;
-  activateVariant(externalId: string): Promise<void>;
-  setBudget(input: SetBudgetInput): Promise<void>;
-  fetchInsights(externalId: string, date: string): Promise<Omit<PerformanceMetric, "id" | "campaignId" | "variantId" | "network" | "date">>;
+  pauseVariant(externalId: string, credentials?: MetaCredentials): Promise<void>;
+  activateVariant(externalId: string, credentials?: MetaCredentials): Promise<void>;
+  setBudget(input: SetBudgetInput, credentials?: MetaCredentials): Promise<void>;
+  fetchInsights(externalId: string, date: string, credentials?: MetaCredentials): Promise<Omit<PerformanceMetric, "id" | "campaignId" | "variantId" | "network" | "date">>;
 }
 
 /**

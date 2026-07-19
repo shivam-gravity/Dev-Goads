@@ -28,6 +28,11 @@ export interface AudienceIntelligenceInput {
   /** Optional — competitor names already known (e.g. from runCompetitorIntelligence),
    * folded into the prompt as extra context. Never independently discovered here. */
   competitorNames?: string[];
+  /** Source-attributed facts extracted up-front from the business's OWN site (fact-first
+   * pipeline). Injected as AUTHORITATIVE grounding into the synthesis so the audience profile
+   * is anchored in what the business actually sells — even when the web-search signals below
+   * return off-target junk (the failure mode that scored this engine 0). */
+  verifiedFacts?: { field: string; value: string; sourceUrl?: string; confidence: number }[];
 }
 
 /** One weighted fit criterion — `weight` (0-1) is this criterion's relative importance to
@@ -344,6 +349,13 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
     : "";
   const competitorContext = input.competitorNames?.length ? `\n\nKnown competitors: ${input.competitorNames.join(", ")}.` : "";
 
+  // Fact-first grounding: the business's OWN verified facts are the authoritative anchor for WHO
+  // its audience is. Placed first and marked as taking precedence, so a junk web-search signal
+  // (unrelated pages SearXNG sometimes returns for a niche query) can't derail the profile.
+  const factsContext = input.verifiedFacts?.length
+    ? `AUTHORITATIVE — verified facts from the business's own website (these define what it sells and to whom; ground the audience in these, and where the web research below conflicts, THESE win):\n${input.verifiedFacts.slice(0, 40).map((f) => `- ${f.field}: ${f.value}`).join("\n")}\n\n`
+    : "";
+
   const structured = await runStructured<AudienceFields>({
     // Larger than most 1024-token structured-extraction calls elsewhere — this schema is
     // unusually wide (icp + 6 array fields up to 6 items each, a 3-6-entry `personas` array
@@ -357,7 +369,7 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
     messages: [
       {
         role: "user",
-        content: `Synthesize an audience-intelligence profile for "${businessLabel}" (${input.industry ?? "its category"}) from this research.\n\nTarget-audience research:\n${audienceSignal.narrative}\n\nReview/complaint research:\n${reviewSignal.narrative}${competitorContext}${memoryContext}`,
+        content: `${factsContext}Synthesize an audience-intelligence profile for "${businessLabel}" (${input.industry ?? "its category"}) grounded in the authoritative facts above.\n\nTarget-audience research:\n${audienceSignal.narrative}\n\nReview/complaint research:\n${reviewSignal.narrative}${competitorContext}${memoryContext}`,
       },
     ],
   });

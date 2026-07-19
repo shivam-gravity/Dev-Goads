@@ -1,4 +1,4 @@
-import { firecrawlScrape } from "../../infra/firecrawlClient.js";
+import { crawl4aiScrape } from "../../infra/crawl4aiClient.js";
 import { runSearch } from "../../infra/searchRouter.js";
 import { resolveSearchTask } from "../../infra/searchTaskConfig.js";
 import { runStructured } from "../../infra/llmClient.js";
@@ -74,7 +74,7 @@ export class ReviewsProvider implements ResearchProvider<ReviewsData> {
     const excerpts: string[] = [];
     const evidence: { url: string; title?: string }[] = [];
     for (const profile of searchResult.results.slice(0, MAX_PROFILES)) {
-      const scraped = await firecrawlScrape(profile.url, ["markdown"]);
+      const scraped = await crawl4aiScrape(profile.url, ["markdown"]);
       if (scraped.outage) break;
       if (scraped.data?.markdown) {
         excerpts.push(`### ${profile.title}\n${profile.url}\n${scraped.data.markdown.slice(0, MAX_EXCERPT_LENGTH)}`);

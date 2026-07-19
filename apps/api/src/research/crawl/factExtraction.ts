@@ -101,3 +101,54 @@ export async function extractAndPersistCrawlFacts(crawlJobId: string): Promise<n
 
   return persistCrawlFacts(crawlJobId, result.facts);
 }
+
+/**
+ * In-memory sibling of extractAndPersistCrawlFacts: turns already-crawled page text into a
+ * source-attributed fact table with ONE structured LLM call, WITHOUT touching the DB. This is
+ * the heart of the fact-first pipeline — the orchestrator runs it once up-front, then the
+ * business-identity providers reason from the returned facts instead of each making their own
+ * search+LLM call. Collapsing ~17 per-provider retrieval calls into this single extraction is
+ * what cuts token use (and free-tier throttling) while keeping every claim pinned to a real URL.
+ *
+ * `pages` is the refined crawl output (already boilerplate-stripped). Returns [] — never throws
+ * upward — when there's no content or no model, so callers degrade to their prior search path.
+ */
+export async function extractFactsFromPages(
+  pages: { url: string; text: string }[]
+): Promise<ExtractedFact[]> {
+  const usable = pages.filter((p) => p.text && p.text.trim().length > 0);
+  if (usable.length === 0) return [];
+
+  // Same greedy whole-page packing as the persisted path: fill the char budget with the
+  // highest-value pages intact rather than blindly slicing a concatenation mid-sentence.
+  const parts: string[] = [];
+  let remaining = MAX_CONTENT_CHARS;
+  for (const p of usable) {
+    const block = `[Page: ${p.url}]\n${p.text}`;
+    if (block.length > remaining) {
+      if (parts.length === 0) parts.push(block.slice(0, remaining));
+      break;
+    }
+    parts.push(block);
+    remaining -= block.length + 2;
+  }
+  const content = parts.join("\n\n");
+
+  try {
+    const { data: result } = await llmRouter.runStructured<{ facts: ExtractedFact[] }>(resolveTaskModel("crawl-fact-extraction"), {
+      maxTokens: 2048,
+      tool: FACT_EXTRACTION_TOOL,
+      messages: [
+        {
+          role: "user",
+          content: `Extract every concrete, verifiable fact from these crawled website pages. For each fact give the exact page URL it came from and your confidence in it.\n\n${content}`,
+        },
+      ],
+    });
+    if (!result || !Array.isArray(result.facts)) return [];
+    return result.facts;
+  } catch (err) {
+    logger.warn("extractFactsFromPages: fact extraction failed — providers fall back to their search path", err);
+    return [];
+  }
+}

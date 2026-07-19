@@ -21,6 +21,7 @@ delete process.env.OPENAI_API_KEY;
 // Gemini's SDK in particular may not honor this file's global.fetch mock at all, making a
 // genuine live call instead of hitting the mock's "unexpected fetch" throw.
 delete process.env.GROQ_API_KEY;
+delete process.env.OPENROUTER_API_KEY;
 delete process.env.MISTRAL_API_KEY;
 delete process.env.GEMINI_API_KEY;
 // SearchRankingProvider now goes through searchRouter (tavily -> serper -> searxng)

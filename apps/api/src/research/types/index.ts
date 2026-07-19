@@ -31,6 +31,23 @@ export interface ResearchProviderInput {
   url: string;
   businessName?: string;
   industry?: string;
+  /** The REAL text content of the target site, crawled once up-front by the orchestrator
+   * (before the provider fan-out) and passed to every provider. Providers that reason about
+   * the business (company, audience, market, pricing, …) use this as the PRIMARY source of
+   * truth about what the business actually is, so they describe the real site the user entered
+   * instead of confabulating from an ambiguous business name + noisy web-search snippets — the
+   * root cause of "the summary describes a totally different company" hallucinations. Optional:
+   * absent when the up-front crawl fails/returns nothing, in which case providers fall back to
+   * their prior search-only behavior. Already refined (boilerplate stripped) and length-capped. */
+  websiteExcerpt?: string;
+  /** Source-attributed facts extracted ONCE up-front from the crawled site (fact → URL →
+   * confidence), the core of the fact-first pipeline. Business-identity providers reason from
+   * these in a single structured call instead of each running its own web search + LLM
+   * structuring — collapsing ~17 retrieval calls into one shared extraction, which cuts token
+   * use / free-tier throttling and raises grounding (every claim is pinned to a real page).
+   * Empty when the up-front crawl/extraction produced nothing; providers then use their
+   * search path as before. */
+  verifiedFacts?: { field: string; value: string; sourceUrl?: string; confidence: number }[];
 }
 
 /** Uniform envelope every provider returns, regardless of what T is — the orchestrator

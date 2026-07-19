@@ -2,7 +2,7 @@ import { getBusiness } from "../business/businessService.js";
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
 import { getAnalyticsSummary } from "../analytics/analyticsService.js";
 import { logger } from "../logger/logger.js";
-import * as groq from "../../infra/groqClient.js";
+import * as openRouter from "../../infra/openRouterClient.js";
 import type { StrategistChatMessage } from "./strategistService.js";
 
 async function buildSystemPrompt(businessId: string): Promise<string> {
@@ -28,7 +28,7 @@ ${JSON.stringify(context, null, 2)}`;
 
 /**
  * Streams the strategist response token-by-token via a callback.
- * Uses Groq's streaming API (OpenAI-compatible stream: true).
+ * Uses OpenRouter's streaming API (OpenAI-compatible stream: true).
  * Falls back to non-streaming full-text response if streaming isn't available.
  */
 export async function chatWithStrategistStream(
@@ -38,7 +38,7 @@ export async function chatWithStrategistStream(
 ): Promise<void> {
   const systemPrompt = await buildSystemPrompt(businessId);
 
-  if (!groq.isGroqConfigured()) {
+  if (!openRouter.isOpenRouterConfigured()) {
     const business = await getBusiness(businessId);
     const campaigns = await listCampaignsForBusiness(businessId);
     const fallback = campaigns.length === 0
@@ -49,7 +49,7 @@ export async function chatWithStrategistStream(
   }
 
   try {
-    const fullText = await groq.streamChat(
+    const fullText = await openRouter.streamChat(
       systemPrompt,
       messages.map((m) => ({ role: m.role, content: m.content })),
       (chunk) => onChunk(chunk, false),

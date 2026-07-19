@@ -243,6 +243,15 @@ export interface Campaign {
   networks: AdNetwork[];
   dailyBudgetCents: number;
   variants: CampaignVariant[];
+  /** Meta campaign objective (post-ODAX key, e.g. OUTCOME_TRAFFIC/OUTCOME_LEADS/OUTCOME_SALES),
+   * chosen in the generation flow and threaded through to launchMetaHierarchy so the real Meta
+   * Campaign container uses it instead of the old hardcoded OUTCOME_TRAFFIC default. Optional:
+   * campaigns generated before this existed (or via the manual builder) fall back to the default. */
+  objective?: string;
+  /** Persistent 24/7 auto-optimize switch. When explicitly false, the scheduled metrics worker
+   * still ingests metrics but skips the budget-moving optimization pass for this campaign.
+   * Undefined defaults to enabled (prior always-on behavior). Set via POST /campaigns/:id/auto-optimize. */
+  autoOptimize?: boolean;
   createdAt: string;
   updatedAt: string;
   /** Fields below are only set by the manual campaign builder (CampaignBuilder.tsx) — undefined for campaigns created via the /wizard instant-generate flow, which keeps working off getMetaCredentials' workspace-level default connection. */

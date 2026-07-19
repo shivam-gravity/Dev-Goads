@@ -1,6 +1,6 @@
 /**
  * Passed as the explicit `fetch` option to every OpenAI-SDK-backed client in this codebase
- * (groqClient.ts, ollamaClient.ts) instead of letting the SDK default to
+ * (openRouterClient.ts, ollamaClient.ts) instead of letting the SDK default to
  * `Shims.getDefaultFetch()`. The SDK snapshots whatever `fetch` it's given ONCE, at client
  * construction time (`this.fetch = options.fetch ?? Shims.getDefaultFetch()`), never
  * re-reading it — so a test that reassigns `global.fetch` to a mock AFTER this module's
@@ -9,7 +9,7 @@
  * "constructed by some earlier, unrelated test file" rather than the test's own code —
  * this silently defeated fetch mocks in newAgents.test.ts/newResearchProviders.test.ts
  * (fixed there via import-order tricks) and crawlerProviders.test.ts (flaky "success" vs
- * "partial" results depending on real Groq/Mistral/Gemini quota state at the moment a
+ * "partial" results depending on real OpenRouter/Mistral/Gemini quota state at the moment a
  * leaked, un-mocked real network call landed).
  *
  * This wrapper re-reads `globalThis.fetch` on every single call instead of once, so any

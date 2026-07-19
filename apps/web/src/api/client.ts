@@ -106,6 +106,7 @@ export interface CreativeAssetRef { id: string; url: string; type: "image" | "vi
 export interface Campaign {
   id: string; businessId: string; workspaceId?: string; strategyId: string; name: string; status: string;
   networks: ("meta" | "google")[]; dailyBudgetCents: number; variants: CampaignVariant[];
+  objective?: string; autoOptimize?: boolean;
   createdAt: string; updatedAt: string;
   conversionEvent?: string; finalUrl?: string; startDate?: string; endDate?: string;
   locations?: string[]; advantagePlus?: boolean;
@@ -262,6 +263,20 @@ export interface CampaignGenerationFacts {
 export interface CampaignGenerationProgress {
   completedSteps: string[];
   total: number;
+}
+
+export interface CampaignObjectiveOption {
+  value: string;
+  label: string;
+  description: string;
+}
+
+export interface BudgetSimulation {
+  estImpressionsPerDay: number;
+  estClicks: number;
+  estConversions: number;
+  estRoas: number;
+  source: "heuristic";
 }
 
 export interface CompetitorAdEntry {
@@ -473,6 +488,10 @@ export const api = {
   getCampaignGenerationFacts: (id: string) => request<CampaignGenerationFacts>(`/campaigns/generate/${id}/facts`),
   getCampaignGenerationProgress: (id: string) => request<CampaignGenerationProgress>(`/campaigns/generate/${id}/progress`),
   getCampaignGenerationCitations: (id: string) => request<CampaignGenerationCitations>(`/campaigns/generate/${id}/citations`),
+  // adsgo.ai-style flow: objective picker + interactive budget/goal simulator
+  getCampaignObjectives: () => request<{ objectives: CampaignObjectiveOption[] }>("/campaigns/objectives"),
+  simulateCampaign: (input: { objective?: string; dailyBudgetCents: number; countries?: string[] }) =>
+    request<BudgetSimulation>("/campaigns/simulate", { method: "POST", body: JSON.stringify(input) }),
 
   // Business
   createBusiness: (input: Omit<BusinessProfile, "id">) =>
@@ -505,6 +524,8 @@ export const api = {
     request<Campaign>(`/campaigns/${campaignId}/variants/${variantId}/pause`, { method: "POST" }),
   activateVariant: (campaignId: string, variantId: string) =>
     request<Campaign>(`/campaigns/${campaignId}/variants/${variantId}/activate`, { method: "POST" }),
+  reallocateBudget: (campaignId: string, variantId: string, dailyBudgetCents: number) =>
+    request<Campaign>(`/campaigns/${campaignId}/variants/${variantId}/budget`, { method: "POST", body: JSON.stringify({ dailyBudgetCents }) }),
   applyCreativeMedia: (campaignId: string, media: { imageUrl?: string; videoUrl?: string }) =>
     request<Campaign>(`/campaigns/${campaignId}/apply-creative-media`, { method: "POST", body: JSON.stringify(media) }),
   ingestMetrics: (id: string) => request<unknown[]>(`/campaigns/${id}/ingest`, { method: "POST" }),
@@ -512,6 +533,8 @@ export const api = {
   getLiveInsights: (id: string) => request<LiveInsights>(`/campaigns/${id}/live-insights`),
   getCampaignTrend: (id: string) => request<TrendPoint[]>(`/campaigns/${id}/trend`),
   optimize: (id: string) => request<OptimizationDecision[]>(`/campaigns/${id}/optimize`, { method: "POST" }),
+  setAutoOptimize: (id: string, enabled: boolean) =>
+    request<{ id: string; autoOptimize: boolean }>(`/campaigns/${id}/auto-optimize`, { method: "POST", body: JSON.stringify({ enabled }) }),
 
   // Analytics
   getAnalyticsSummary: (businessId: string, period: "all" | "month" | "week" = "all") =>

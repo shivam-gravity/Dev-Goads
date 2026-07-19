@@ -69,6 +69,19 @@ test("Campaign Orchestrator - buildCampaignFromStrategy drafting", async () => {
   assert.strictEqual(googleVariants.length, 2, "Should have 2 Google variants");
 });
 
+test("Campaign Orchestrator - buildCampaignFromStrategy threads the chosen objective onto the campaign", async () => {
+  const strategyId = `strat_obj_${Date.now()}`;
+  const businessId = "biz_test_obj";
+  await seedTestStrategy(strategyId, businessId);
+
+  const withObjective = await buildCampaignFromStrategy(strategyId, "Objective Campaign", 10000, "OUTCOME_LEADS");
+  assert.strictEqual(withObjective.objective, "OUTCOME_LEADS", "objective should be stamped onto the campaign");
+
+  // Omitting the objective leaves it undefined (launch falls back to the historical default).
+  const withoutObjective = await buildCampaignFromStrategy(strategyId, "No Objective Campaign", 10000);
+  assert.strictEqual(withoutObjective.objective, undefined, "objective should be undefined when not provided");
+});
+
 test("Campaign Orchestrator - launchCampaign and pauseVariant execution flow", async () => {
   const strategyId = `strat_test_${Date.now()}`;
   const businessId = "biz_test_1";

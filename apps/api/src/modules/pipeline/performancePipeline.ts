@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { analyticsStore } from "../../infra/analyticsStore.js";
 import { adapters } from "../orchestrator/campaignOrchestrator.js";
 import { getCampaign } from "../orchestrator/campaignOrchestrator.js";
+import { getMetaCredentials } from "../integrations/integrationService.js";
 import type { NormalizedPerformance, PerformanceMetric } from "../../types/index.js";
 
 /**
@@ -24,11 +25,13 @@ export async function ingestCampaignMetrics(campaignId: string): Promise<Perform
 
   const date = todayISO();
   const results: PerformanceMetric[] = [];
+  const metaCredentials = (await getMetaCredentials(campaign.workspaceId ?? "demo")) ?? undefined;
 
   for (const variant of campaign.variants) {
     if (!variant.externalId) continue;
     const adapter = adapters[variant.network];
-    const raw = await adapter.fetchInsights(variant.externalId, date);
+    const credentials = variant.network === "meta" ? metaCredentials : undefined;
+    const raw = await adapter.fetchInsights(variant.externalId, date, credentials);
 
     const metric: PerformanceMetric = {
       id: randomUUID(),

@@ -1,4 +1,4 @@
-import { outageDataSource } from "../../infra/firecrawlClient.js";
+import { outageDataSource } from "../../infra/scrapeTypes.js";
 import { mapUrlWithFallback, sourceLabel } from "../../infra/scrapeFallback.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { NavigationData, NavigationPage, ProviderResult, ResearchProviderInput } from "../types/index.js";

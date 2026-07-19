@@ -1,13 +1,19 @@
 # Minimal override merged on top of SearXNG's baked-in defaults (use_default_settings: true
-# pulls in every engine/setting we don't explicitly override here). Two changes from
-# defaults, both required for this to work as an API backend rather than a browser-facing
-# search page:
-#   - search.formats includes "json" — disabled by default specifically to stop exactly
-#     what we're doing (unattended API consumption); safe here because this instance is
-#     reachable only from this platform's own Docker network, not the public internet.
-#   - server.limiter: false — SearXNG's bot-detection would otherwise throttle/block our
-#     own backend's repeated automated requests the same way it blocks abusive public
-#     traffic. Only safe to disable because nothing outside our own services can reach it.
+# pulls in every engine/setting we don't explicitly override here). Changes from defaults,
+# all required for this to work as a reliable API backend rather than a browser-facing page:
+#   - search.formats includes "json" — disabled by default specifically to stop exactly what
+#     we're doing (unattended API consumption); safe here because this instance is reachable
+#     only from this platform's own Docker network, not the public internet.
+#   - server.limiter: false — SearXNG's own bot-detection would otherwise throttle our
+#     backend's repeated automated requests. Safe only because nothing outside our services
+#     can reach it.
+#   - engines — the default engine set (Google CSE / Brave / DuckDuckGo / Startpage) all
+#     CAPTCHA / rate-limit a datacenter IP scraping them unattended, so a real research query
+#     returned ZERO results ("Suspended: too many requests" / "CAPTCHA"). We disable those and
+#     lean on engines that tolerate programmatic access far better (Bing, Mojeek, Wikipedia,
+#     Wikidata, DuckDuckGo's no-CAPTCHA API-ish variants). This is the single biggest lever on
+#     research quality: no search results => nothing for crawl4ai to enrich => the pipeline
+#     falls back to ungrounded LLM guesses.
 use_default_settings: true
 
 server:
@@ -19,3 +25,39 @@ search:
   formats:
     - html
     - json
+  default_lang: "en"
+  max_page: 1
+  # Filter adult/spam results — Bing/Mojeek unfiltered occasionally surface irrelevant NSFW
+  # forums for generic B2B queries, which then poison the crawl-enrichment + LLM grounding.
+  # 1 = moderate (drops adult content without over-filtering legitimate business results).
+  safe_search: 1
+
+outgoing:
+  # A realistic desktop UA + a small request cushion reduces how aggressively upstream engines
+  # flag our scraping as botlike. request_timeout is per-engine.
+  request_timeout: 8.0
+  max_request_timeout: 12.0
+  pool_connections: 100
+  pool_maxsize: 20
+
+engines:
+  # --- Reliable for unattended scraping: keep enabled ---
+  - name: bing
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: wikidata
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  # --- CAPTCHA / rate-limit a datacenter IP: disable so they don't poison the result set ---
+  - name: google
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: startpage
+    disabled: true
+  - name: qwant
+    disabled: true

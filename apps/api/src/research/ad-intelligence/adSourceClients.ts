@@ -1,4 +1,4 @@
-import { scrapeUrlWithFallback } from "../../infra/scrapeFallback.js";
+import { scrapeUrlWithFallback, type ScrapeSource } from "../../infra/scrapeFallback.js";
 import { logger } from "../../modules/logger/logger.js";
 import { withTimeout } from "../providers/support.js";
 
@@ -77,7 +77,7 @@ export async function fetchMetaAdsForQuery(query: string): Promise<{ ads: RawAdE
  * scrapeUrlWithFallback). Not officially sanctioned by Google's ToS regardless of which tool
  * fetches it, so this degrades to an empty, `attempted: false` result on any markup
  * change/block rather than throwing. */
-export async function fetchGoogleTransparencyAdsForQuery(query: string): Promise<{ ads: RawAdEntry[]; attempted: boolean; source: "inhouse" | "firecrawl" | null }> {
+export async function fetchGoogleTransparencyAdsForQuery(query: string): Promise<{ ads: RawAdEntry[]; attempted: boolean; source: ScrapeSource | null }> {
   const url = `https://adstransparency.google.com/?query=${encodeURIComponent(query)}&region=anywhere`;
   const scraped = await scrapeUrlWithFallback(url, ["markdown", "links"]);
   if (scraped.outage || !scraped.data) return { ads: [], attempted: false, source: null };

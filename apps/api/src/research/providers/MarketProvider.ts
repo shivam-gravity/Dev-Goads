@@ -30,8 +30,9 @@ export class MarketProvider implements ResearchProvider<MarketData> {
       const { status, data, citations } = await webSearchThenStructure<MarketData>({
         maxTokens: 1024,
         tool: MARKET_TOOL,
+        websiteExcerpt: input.websiteExcerpt,
         searchPrompt: `Research the market size, growth rate, and competitive intensity for ${industry}, relevant to the business at ${input.url}. Find: (1) total addressable market size, (2) growth rate/CAGR, (3) 2-5 notable market trends, (4) overall competition level.`,
-        structurePrompt: (narrative) => `Using this web research, produce a structured market analysis.\n\nWeb research findings:\n${narrative}\n\nBusiness URL: ${input.url}\nIndustry: ${industry}`,
+        structurePrompt: (narrative) => `Produce a structured market analysis for the market this business actually operates in — determine that market from the authoritative website content above, then use the web research below for sizing, growth, and trend figures.\n\nWeb research findings:\n${narrative}\n\nBusiness URL: ${input.url}\nIndustry: ${industry}`,
         fallback: () => ({
           trends: ["No live research performed — revisit once real market data is available"],
           competitionLevel: "Unknown — no live research performed",

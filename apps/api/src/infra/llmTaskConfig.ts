@@ -4,7 +4,7 @@ import type { LLMAssignment, LLMProvider } from "./llmRouter.js";
  * One flat registry, shared by all three LLM call surfaces — the 20 agents, research
  * providers, and the Decision Engine — since a "task" is a task regardless of which
  * subsystem it lives in. Every task not listed here falls through to DEFAULT_ASSIGNMENT
- * (Groq) until a row is added or overridden via an env var.
+ * (Mistral) until a row is added or overridden via an env var.
  *
  * Keys: agent promptIds (e.g. "budget-agent"), research provider names (e.g.
  * "competitor", "reviews"), decision-engine step names (e.g. "decision-summary",
@@ -15,30 +15,40 @@ const DEFAULT_ASSIGNMENT: LLMAssignment = { provider: "mistral", model: process.
 
 const GEMINI: LLMAssignment = { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
 const MISTRAL: LLMAssignment = { provider: "mistral", model: process.env.MISTRAL_MODEL ?? "mistral-small-latest" };
-const GROQ_70B: LLMAssignment = MISTRAL;
+// "dual" fires OpenRouter AND Mistral concurrently and keeps the more complete answer (see
+// llmRouter.runStructuredDual) — the deep-research quality lever. The `model` here is only a
+// nominal hint and is IGNORED by the dual path: each leg uses its own provider-appropriate
+// model (OPENROUTER_MODEL / MISTRAL_MODEL env, else that client's baked-in default), because
+// passing one shared model name to both makes the wrong provider 404. This doubles token spend
+// per call by design, spreading load across both providers so neither alone bottlenecks a run.
+const DUAL: LLMAssignment = { provider: "dual", model: "auto" };
+// Deep-research tasks (the 20 agents + the research providers that extract/analyze real web
+// data) now run dual for best-of-both quality. Renamed from the old DEEP_RESEARCH alias, which was
+// already just Mistral — this makes those same tasks concurrent instead of single-provider.
+const DEEP_RESEARCH: LLMAssignment = DUAL;
 
 const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   // 20 marketing agents — 70B for deep, genuine analysis
-  "campaign-agent": GROQ_70B,
-  "audience-agent": GROQ_70B,
-  "budget-agent": GROQ_70B,
-  "competitor-agent": GROQ_70B,
-  "channel-placement-agent": GROQ_70B,
-  "compliance-agent": GROQ_70B,
-  "critic-agent": GROQ_70B,
-  "forecasting-kpi-agent": GROQ_70B,
-  "funnel-retargeting-agent": GROQ_70B,
-  "creative-agent": GROQ_70B,
-  "keyword-agent": GROQ_70B,
-  "localization-agent": GROQ_70B,
-  "market-agent": GROQ_70B,
-  "landing-page-agent": GROQ_70B,
-  "objection-handling-agent": GROQ_70B,
-  "persona-agent": GROQ_70B,
-  "pricing-offer-agent": GROQ_70B,
-  "seo-content-agent": GROQ_70B,
-  "seasonality-timing-agent": GROQ_70B,
-  "product-agent": GROQ_70B,
+  "campaign-agent": DEEP_RESEARCH,
+  "audience-agent": DEEP_RESEARCH,
+  "budget-agent": DEEP_RESEARCH,
+  "competitor-agent": DEEP_RESEARCH,
+  "channel-placement-agent": DEEP_RESEARCH,
+  "compliance-agent": DEEP_RESEARCH,
+  "critic-agent": DEEP_RESEARCH,
+  "forecasting-kpi-agent": DEEP_RESEARCH,
+  "funnel-retargeting-agent": DEEP_RESEARCH,
+  "creative-agent": DEEP_RESEARCH,
+  "keyword-agent": DEEP_RESEARCH,
+  "localization-agent": DEEP_RESEARCH,
+  "market-agent": DEEP_RESEARCH,
+  "landing-page-agent": DEEP_RESEARCH,
+  "objection-handling-agent": DEEP_RESEARCH,
+  "persona-agent": DEEP_RESEARCH,
+  "pricing-offer-agent": DEEP_RESEARCH,
+  "seo-content-agent": DEEP_RESEARCH,
+  "seasonality-timing-agent": DEEP_RESEARCH,
+  "product-agent": DEEP_RESEARCH,
 
   // Decision Engine steps — Gemini/Mistral for synthesis diversity
   "decision-summary": GEMINI,
@@ -49,52 +59,58 @@ const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   "strategy-synthesis": MISTRAL,
 
   // Research providers — 70B for accurate data extraction
-  "app-store": GROQ_70B,
-  audience: GROQ_70B,
-  "ad-library": GROQ_70B,
-  competitor: GROQ_70B,
-  company: GROQ_70B,
-  autocomplete: GROQ_70B,
-  "backlink-authority": GROQ_70B,
-  funding: GROQ_70B,
-  "serp-features": GROQ_70B,
-  "hiring-signals": GROQ_70B,
-  "content-marketing": GROQ_70B,
-  "legal-regulatory": GROQ_70B,
-  "local-presence": GROQ_70B,
-  market: GROQ_70B,
-  partnerships: GROQ_70B,
-  product: GROQ_70B,
-  reddit: GROQ_70B,
-  reviews: GROQ_70B,
-  seo: GROQ_70B,
-  "social-media": GROQ_70B,
-  technology: GROQ_70B,
-  "video-presence": GROQ_70B,
-  website: GROQ_70B,
-  navigation: GROQ_70B,
-  news: GROQ_70B,
-  search: GROQ_70B,
-  "search-ranking": GROQ_70B,
+  "app-store": DEEP_RESEARCH,
+  audience: DEEP_RESEARCH,
+  "ad-library": DEEP_RESEARCH,
+  competitor: DEEP_RESEARCH,
+  company: DEEP_RESEARCH,
+  autocomplete: DEEP_RESEARCH,
+  "backlink-authority": DEEP_RESEARCH,
+  funding: DEEP_RESEARCH,
+  "serp-features": DEEP_RESEARCH,
+  "hiring-signals": DEEP_RESEARCH,
+  "content-marketing": DEEP_RESEARCH,
+  "legal-regulatory": DEEP_RESEARCH,
+  "local-presence": DEEP_RESEARCH,
+  market: DEEP_RESEARCH,
+  partnerships: DEEP_RESEARCH,
+  product: DEEP_RESEARCH,
+  reddit: DEEP_RESEARCH,
+  reviews: DEEP_RESEARCH,
+  seo: DEEP_RESEARCH,
+  "social-media": DEEP_RESEARCH,
+  technology: DEEP_RESEARCH,
+  "video-presence": DEEP_RESEARCH,
+  website: DEEP_RESEARCH,
+  navigation: DEEP_RESEARCH,
+  news: DEEP_RESEARCH,
+  search: DEEP_RESEARCH,
+  "search-ranking": DEEP_RESEARCH,
 
   // Intelligence Engines + crawl fact extraction — mixed for diversity
   "audience-intelligence": GEMINI,
-  "competitor-intelligence-discovery": GROQ_70B,
-  "competitor-intelligence-enrichment": GROQ_70B,
+  "competitor-intelligence-discovery": DEEP_RESEARCH,
+  "competitor-intelligence-enrichment": DEEP_RESEARCH,
   "creative-intelligence": GEMINI,
-  "market-intelligence": GROQ_70B,
+  "market-intelligence": DEEP_RESEARCH,
   "pricing-intelligence": GEMINI,
-  "landing-page-intelligence": GROQ_70B,
-  "crawl-fact-extraction": GEMINI,
-  "ad-creative-analysis": GROQ_70B,
+  "landing-page-intelligence": DEEP_RESEARCH,
+  // The single most valuable call in the run (its facts replace ~17 downstream retrievals), and
+  // it's on the CRITICAL PATH — the whole fact-first pipeline is skipped if it doesn't return in
+  // time. It was assigned GEMINI (free tier = 0 → failed → fell through to throttled OpenRouter/
+  // Mistral → blew the prefetch timeout). "dual" fires OpenRouter + Mistral concurrently (best of
+  // two shots at a fast answer), and the fallback chain ends in local Ollama, so this call
+  // completes even when both hosted tiers throttle — no more silent prefetch timeouts.
+  "crawl-fact-extraction": DUAL,
+  "ad-creative-analysis": DEEP_RESEARCH,
 
   // Meta Ads keyword validation & interest mining
-  "meta-interest-mining": GROQ_70B,
-  "meta-keyword-validation": GROQ_70B,
-  "budget-market-calibration": GROQ_70B,
+  "meta-interest-mining": DEEP_RESEARCH,
+  "meta-keyword-validation": DEEP_RESEARCH,
+  "budget-market-calibration": DEEP_RESEARCH,
 };
 
-const VALID_PROVIDERS = new Set<string>(["groq", "ollama", "mistral", "google"]);
+const VALID_PROVIDERS = new Set<string>(["openrouter", "ollama", "mistral", "google", "dual"]);
 
 /**
  * Resolution order: per-task env override (quick experiments, no code change) → static

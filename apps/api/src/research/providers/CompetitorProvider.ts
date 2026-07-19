@@ -111,8 +111,9 @@ export class CompetitorProvider implements ResearchProvider<CompetitorData> {
         // A fabricated url shouldn't cost us an otherwise-legitimate competitor name/notes —
         // unlike a Reddit thread (which IS its URL), a competitor's identity stands on its own.
         unverifiedUrlPolicy: "null-field",
+        websiteExcerpt: input.websiteExcerpt,
         searchPrompt: `Research the main named competitors of the business at ${input.url}${input.businessName ? ` ("${input.businessName}")` : ""} in ${industry}. Find real competitor names and, where possible, their URLs and what differentiates them.${memoryContext}`,
-        structurePrompt: (narrative) => `Using this web research, list named competitors and how this business could differentiate. Only list companies that sell a directly competing product in the same category — do NOT list IT-services firms, consultancies, systems integrators, or agencies just because their own marketing happens to mention the same keyword/industry phrase (e.g. a literal search for "${industry}" can surface consulting firms with that phrase in their name — those are not real product competitors).\n\nWeb research findings:\n${narrative}\n\nBusiness URL: ${input.url}`,
+        structurePrompt: (narrative) => `List named competitors and how this business could differentiate. Use the authoritative website content above to understand what this business actually sells, then identify companies that sell a DIRECTLY competing product in the same category. Do NOT list IT-services firms, consultancies, systems integrators, or agencies just because their own marketing happens to mention the same keyword/industry phrase (e.g. a literal search for "${industry}" can surface consulting firms with that phrase in their name — those are not real product competitors).\n\nWeb research findings:\n${narrative}\n\nBusiness URL: ${input.url}`,
         fallback: () => ({
           competitors: [{ name: "Other providers in this category" }],
           competitionIntensity: "Unknown — no live research performed",

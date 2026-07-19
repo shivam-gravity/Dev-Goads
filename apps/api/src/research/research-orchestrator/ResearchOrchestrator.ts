@@ -1,6 +1,9 @@
 import { logger } from "../../modules/logger/logger.js";
 import { aggregateResearch } from "../knowledge/KnowledgeAggregator.js";
 import { getBusiness } from "../../modules/business/businessService.js";
+import { scrapeUrlWithFallback } from "../../infra/scrapeFallback.js";
+import { refineContent } from "../../infra/contentRefiner.js";
+import { extractFactsFromPages } from "../crawl/factExtraction.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import { ResearchJobStateMachine } from "../state-machine/ResearchJobStateMachine.js";
 import { createResearchProviders } from "../providers/index.js";
@@ -17,7 +20,72 @@ import {
 
 export const MAX_PROVIDER_ATTEMPTS = 2;
 export const PROVIDER_RETRY_DELAY_MS = 1000;
-export const PROVIDER_TIMEOUT_MS = 45_000;
+// A provider's LLM call can now legitimately take much longer than the old 45s on a free-tier
+// model, because the openRouterClient rides out 429 rate-limit backoffs + a concurrency queue
+// (see its doc comment) rather than failing fast. This outer per-provider ceiling must exceed
+// the inner llmRouter hosted-timeout (120s), or it kills a provider mid-retry and reintroduces
+// exactly the "company provider timed out" degradation the retry logic exists to prevent.
+// Tune down (env) when on a fast paid model that doesn't need the backoff headroom.
+export const PROVIDER_TIMEOUT_MS = Number(process.env.RESEARCH_PROVIDER_TIMEOUT_MS ?? 150_000);
+// How much of the up-front site crawl to hand every provider as ground-truth. Big enough to
+// carry the real value proposition / product / positioning, capped so it doesn't dominate each
+// provider's token budget (the refiner has already stripped boilerplate before this cap).
+const WEBSITE_EXCERPT_MAX_CHARS = 6000;
+// Generous: this window covers BOTH the dual crawl AND the up-front fact-extraction LLM call,
+// which on the free tier may ride out 429 backoffs. It's the highest-value step in the run (its
+// facts replace ~17 downstream retrieval calls), so it's worth waiting for rather than racing to
+// an empty result that collapses the whole fact-first path back to junk search. Env-tunable.
+const WEBSITE_PREFETCH_TIMEOUT_MS = Number(process.env.WEBSITE_PREFETCH_TIMEOUT_MS ?? 90_000);
+
+export interface WebsitePrefetch {
+  excerpt?: string;
+  facts: { field: string; value: string; sourceUrl?: string; confidence: number }[];
+}
+
+/**
+ * The fact-first pipeline's Stage 1+2, run ONCE before the provider fan-out:
+ *   1. Crawl the target URL and refine it (boilerplate stripped) → the ground-truth excerpt.
+ *   2. Extract a source-attributed fact table from it with a SINGLE structured LLM call.
+ * Both are handed to every provider via ResearchProviderInput. The business-identity providers
+ * then reason from these facts in one call each instead of every one running its own web
+ * search + LLM structuring — collapsing ~17 retrieval calls into this one shared extraction,
+ * which is what cuts token use / free-tier throttling and raises grounding (every downstream
+ * claim traces to a real page). Without this, providers derived the business identity from a
+ * web search of an (often ambiguous) name and confabulated a different company entirely.
+ *
+ * Best-effort throughout: a crawl failure/timeout yields no excerpt and no facts, and providers
+ * fall back to their prior search-only path — this is grounding, never a hard dependency.
+ */
+async function prefetchWebsite(url: string): Promise<WebsitePrefetch> {
+  try {
+    const timeout = new Promise<WebsitePrefetch>((resolve) => setTimeout(() => {
+      logger.warn(`Website prefetch for ${url} exceeded ${WEBSITE_PREFETCH_TIMEOUT_MS}ms — proceeding without up-front facts (providers fall back to search grounding). Likely the crawl or the fact-extraction LLM call is throttled/slow.`);
+      resolve({ facts: [] });
+    }, WEBSITE_PREFETCH_TIMEOUT_MS));
+    const crawl = (async (): Promise<WebsitePrefetch> => {
+      // Use the DUAL crawl path (in-house scraper-service + crawl4ai, merged) rather than
+      // crawl4ai alone: this up-front crawl is the single point of failure for the whole
+      // fact-first pipeline, and crawl4ai degrades to 500s under concurrent load. Routing
+      // through scrapeUrlWithFallback means a crawl4ai outage is transparently covered by the
+      // in-house scraper (and vice-versa), so facts get extracted whenever EITHER crawler works.
+      const { data } = await scrapeUrlWithFallback(url, ["markdown"]);
+      const md = data?.markdown?.trim();
+      if (!md) return { facts: [] };
+      // relevanceFilter off: this is the business's OWN site, so keep all its real prose (only
+      // strip nav/footer/cookie boilerplate) rather than filtering to a query's keywords.
+      const refined = refineContent(md, "", { maxChars: WEBSITE_EXCERPT_MAX_CHARS, relevanceFilter: false });
+      const excerpt = refined || undefined;
+      // ONE fact-extraction call over the refined page — the single most valuable LLM call in
+      // the whole run, since its output replaces ~17 per-provider retrieval calls downstream.
+      const facts = excerpt ? await extractFactsFromPages([{ url, text: excerpt }]) : [];
+      return { excerpt, facts };
+    })();
+    return await Promise.race([crawl, timeout]);
+  } catch (err) {
+    logger.warn(`Website prefetch/fact-extraction failed for ${url} — providers will fall back to search-only grounding`, err);
+    return { facts: [] };
+  }
+}
 
 /** Persistence + reporting hooks the orchestrator calls out to — real implementations
  * (defaultDeps below) hit Postgres via researchJobService; unit tests inject in-memory
@@ -145,7 +213,16 @@ export async function runResearchOrchestrator(jobId: string, options: RunResearc
     state.transition("running");
     await deps.markStatus(jobId, state.state, { startedAt: true });
 
-    const businessName = job.businessId ? await deps.loadBusinessName?.(job.businessId) : undefined;
+    // Business name + the up-front crawl/fact-extraction run concurrently, so Stage 1+2 adds no
+    // wall-clock over the name lookup it runs alongside. The extracted facts are the shared
+    // grounding every business-identity provider reasons from (fact-first pipeline).
+    const [businessName, prefetch] = await Promise.all([
+      job.businessId ? deps.loadBusinessName?.(job.businessId) : Promise.resolve(undefined),
+      prefetchWebsite(job.url),
+    ]);
+    if (prefetch.facts.length > 0) {
+      logger.info(`Research job ${jobId}: extracted ${prefetch.facts.length} verified facts up-front — identity providers will reason from these instead of each searching`);
+    }
 
     const input: ResearchProviderInput = {
       jobId,
@@ -153,6 +230,8 @@ export async function runResearchOrchestrator(jobId: string, options: RunResearc
       businessId: job.businessId,
       url: job.url,
       businessName,
+      websiteExcerpt: prefetch.excerpt,
+      verifiedFacts: prefetch.facts,
     };
 
     let completed = 0;

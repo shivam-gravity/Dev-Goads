@@ -5,6 +5,7 @@ import type { AgentEvidenceItem } from "../agents/types/index.js";
 
 delete process.env.OPENAI_API_KEY;
 delete process.env.GROQ_API_KEY;
+delete process.env.OPENROUTER_API_KEY;
 delete process.env.GEMINI_API_KEY;
 delete process.env.MISTRAL_API_KEY;
 

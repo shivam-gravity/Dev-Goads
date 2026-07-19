@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { Worker, type Job } from "bullmq";
 import { redisConnection, METRICS_INGESTION_QUEUE, metricsIngestionQueue } from "../infra/queue.js";
-import { listActiveCampaigns } from "../modules/orchestrator/campaignOrchestrator.js";
+import { listActiveCampaigns, getCampaign } from "../modules/orchestrator/campaignOrchestrator.js";
 import { ingestCampaignMetrics } from "../modules/pipeline/performancePipeline.js";
 import { runOptimizationPass } from "../modules/optimization/optimizationEngine.js";
 import { recordOptimizationInsights } from "../modules/insights/insightService.js";
@@ -40,6 +40,20 @@ const worker = new Worker(
     for (const { id: campaignId, workspaceId } of campaigns) {
       try {
         await ingestCampaignMetrics(campaignId);
+        // Metrics ingestion above always runs (read-only, keeps dashboards fresh). The
+        // optimization pass MOVES REAL BUDGET / pauses ads, so it's gated on the campaign's
+        // per-campaign autoOptimize flag: skip it only when explicitly disabled. Undefined
+        // (older campaigns, or ones that never set it) defaults to enabled to preserve prior
+        // always-on behavior and match the adsgo.ai "24/7 optimization" promise.
+        const campaign = await getCampaign(campaignId);
+        const autoOptimizeEnabled = campaign?.autoOptimize !== false;
+        if (!autoOptimizeEnabled) {
+          logger.info(`Auto-optimize disabled for campaign ${campaignId} — ingested metrics only, skipped optimization pass`);
+          void emitInsightsUpdate(workspaceId, campaignId, { refreshedAt: Date.now() });
+          await recordPerformanceSnapshot(campaignId);
+          await recordCampaignOutcome(campaignId);
+          continue;
+        }
         const decisions = await runOptimizationPass(campaignId);
         await recordOptimizationInsights(workspaceId, decisions);
         // Campaign Intelligence: a real point-in-time performance snapshot every tick,

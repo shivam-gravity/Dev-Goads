@@ -74,7 +74,7 @@ export const tiktokAdapter: AdAdapter = {
     }
   },
 
-  async pauseVariant(externalId: string): Promise<void> {
+  async pauseVariant(externalId: string, _credentials?: unknown): Promise<void> {
     logger.info(`Initializing pauseVariant on TikTok for resource: ${externalId}`);
     if (!hasLiveCredentials) {
       logger.info("Offline mode. Mock pausing TikTok ad variant.");
@@ -98,7 +98,7 @@ export const tiktokAdapter: AdAdapter = {
     }
   },
 
-  async activateVariant(externalId: string): Promise<void> {
+  async activateVariant(externalId: string, _credentials?: unknown): Promise<void> {
     logger.info(`Initializing activateVariant on TikTok for resource: ${externalId}`);
     if (!hasLiveCredentials) {
       logger.info("Offline mode. Mock activating TikTok ad variant.");
@@ -122,7 +122,7 @@ export const tiktokAdapter: AdAdapter = {
     }
   },
 
-  async setBudget(input: SetBudgetInput): Promise<void> {
+  async setBudget(input: SetBudgetInput, _credentials?: unknown): Promise<void> {
     logger.info(`Updating daily budget for TikTok Ads resource: ${input.externalId} to ${input.dailyBudgetCents} cents`);
     if (!hasLiveCredentials) {
       logger.info("Offline mode. Mock budget change complete.");
@@ -146,7 +146,7 @@ export const tiktokAdapter: AdAdapter = {
     }
   },
 
-  async fetchInsights(externalId: string) {
+  async fetchInsights(externalId: string, _date?: string, _credentials?: unknown) {
     logger.info(`Fetching performance insights for TikTok Ads resource: ${externalId}`);
 
     if (!hasLiveCredentials) {
