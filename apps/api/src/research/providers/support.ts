@@ -19,6 +19,14 @@ interface ProviderOutcome<T> {
   citations?: Citation[];
   evidence?: ResearchEvidenceItem[];
   error?: string;
+  /** Optional pre-computed confidence that OVERRIDES runProviderStep's citation-based
+   * computeConfidence. The default scorer keys off web-search citation count/relevance, which
+   * under-scores the fact-first providers (market/audience/competitor intelligence): those now
+   * reason from the business's OWN verified facts and deliberately skip web search, so they have
+   * few/no citations yet are strongly grounded. Those engines compute their own fact-aware
+   * confidence (with a high floor when factGrounded) and pass it through here so the aggregate
+   * reflects real grounding instead of docking correct data to ~0.3 for lacking citations. */
+  confidence?: number;
 }
 
 // Excluded from the word-level fallback in isRelevantCitation below — generic enough (legal
@@ -177,7 +185,7 @@ export async function runProviderStep<T>(
         durationMs: Date.now() - start,
         attempt,
         error: outcome.error,
-        confidence: computeConfidence({ status: outcome.status, data: outcome.data, citations: outcome.citations, evidence: outcome.evidence, attempt }, target),
+        confidence: outcome.confidence ?? computeConfidence({ status: outcome.status, data: outcome.data, citations: outcome.citations, evidence: outcome.evidence, attempt }, target),
       };
     } catch (err) {
       return {

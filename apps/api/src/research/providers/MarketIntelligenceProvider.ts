@@ -48,7 +48,10 @@ export class MarketIntelligenceProvider implements ResearchProvider<MarketData> 
         dataSource,
       };
 
-      return { status: usedFallback ? "partial" : "success", data, citations: report.citations, evidence: citationsToEvidence(report.citations) };
+      // Pass the engine's own fact-aware confidence through (see ProviderOutcome.confidence): the
+      // engine scores fact-grounded output with a high floor even with zero web citations, which
+      // the default citation-based scorer would otherwise dock to ~0.35.
+      return { status: usedFallback ? "partial" : "success", data, citations: report.citations, evidence: citationsToEvidence(report.citations), confidence: usedFallback ? undefined : report.confidence };
     });
   }
 }

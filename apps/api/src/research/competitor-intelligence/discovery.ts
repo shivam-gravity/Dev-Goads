@@ -170,12 +170,24 @@ async function discoverFromVerifiedFacts(input: DiscoveryInput): Promise<{ name:
 }
 
 export async function discoverCompetitors(input: DiscoveryInput): Promise<{ competitors: DiscoveredCompetitor[]; sourcesUsed: string[] }> {
-  const sources: { name: string; run: () => Promise<{ name: string; url?: string }[]> }[] = [
-    { name: "direct-search", run: () => discoverFromDirectSearch(input) },
-    { name: "alternatives-search", run: () => discoverFromAlternativesSearch(input) },
-    { name: "research-memory", run: () => discoverFromResearchMemory(input) },
-    { name: "verified-facts", run: () => discoverFromVerifiedFacts(input) },
-  ];
+  // Fact-first: when the up-front crawl produced verified facts, discoverFromVerifiedFacts alone
+  // reliably names direct competitors from the model's category knowledge (it knows what the
+  // business sells from its own facts), so we DROP the two live web searches — the flaky
+  // SearXNG+crawl4ai path whose cold-start latency was timing this provider out to 0 (the
+  // competitor=0.05 / "no competitors discovered" failures). Research Memory is kept (local, fast).
+  // With no facts (crawl failed), all four sources run — the prior behavior.
+  const hasFacts = !!input.verifiedFacts?.length;
+  const sources: { name: string; run: () => Promise<{ name: string; url?: string }[]> }[] = hasFacts
+    ? [
+        { name: "verified-facts", run: () => discoverFromVerifiedFacts(input) },
+        { name: "research-memory", run: () => discoverFromResearchMemory(input) },
+      ]
+    : [
+        { name: "direct-search", run: () => discoverFromDirectSearch(input) },
+        { name: "alternatives-search", run: () => discoverFromAlternativesSearch(input) },
+        { name: "research-memory", run: () => discoverFromResearchMemory(input) },
+        { name: "verified-facts", run: () => discoverFromVerifiedFacts(input) },
+      ];
 
   const results = await Promise.all(
     sources.map(async (source) => ({ source: source.name, names: await source.run().catch(() => [] as { name: string; url?: string }[]) }))

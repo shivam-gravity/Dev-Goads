@@ -1,7 +1,7 @@
 import { normalizeUrl } from "../../modules/onboarding/scraper.js";
 import { crawl4aiScrape } from "../../infra/crawl4aiClient.js";
 import { outageDataSource } from "../../infra/scrapeTypes.js";
-import { crawlUrlWithFallback, sourceLabel } from "../../infra/scrapeFallback.js";
+import { crawlUrlWithFallback, scrapeUrlWithFallback, sourceLabel } from "../../infra/scrapeFallback.js";
 import { logger } from "../../modules/logger/logger.js";
 import { createCrawlJob, markCrawlJobFailed, persistCrawlPages } from "../crawl/crawlPersistence.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
@@ -57,15 +57,29 @@ export class WebsiteProvider implements ResearchProvider<WebsiteData> {
         }
       }
 
-      const crawled = await crawlUrlWithFallback(url, { limit: CRAWL_PAGE_LIMIT, formats: ["markdown", "links"] });
+      let crawled = await crawlUrlWithFallback(url, { limit: CRAWL_PAGE_LIMIT, formats: ["markdown", "links"] });
       if (crawled.outage) {
         if (crawlJobId) await markCrawlJobFailed(crawlJobId, outageDataSource(crawled.outage)).catch(() => {});
         const outageData: WebsiteData = { title: "", description: "", excerpt: "", images: [], crawledPages: [], pagesDiscovered: 0, dataSource: outageDataSource(crawled.outage), crawlJobId };
         return { status: "partial", data: outageData };
       }
+      // The multi-page deep crawl is more fragile than a single-page scrape (crawl4ai can flake on
+      // the deep-crawl path under load). Rather than hard-fail a CORE provider to zero confidence
+      // when we can plainly reach the site, fall back to a single-page scrape of the entry URL —
+      // the exact path the up-front prefetch uses successfully. One real page beats a total miss.
       if (crawled.pages.length === 0) {
-        if (crawlJobId) await markCrawlJobFailed(crawlJobId, "Crawl returned no pages").catch(() => {});
-        throw new Error("Couldn't crawl that URL — no pages were returned");
+        const single = await scrapeUrlWithFallback(url, ["markdown", "links"]);
+        const md = single.data?.markdown?.trim();
+        if (md) {
+          crawled = {
+            pages: [{ markdown: md, html: single.data?.html ?? "", links: single.data?.links ?? [], metadata: { title: single.data?.metadata?.title, sourceURL: url } }],
+            outage: null,
+            source: single.source,
+          };
+        } else {
+          if (crawlJobId) await markCrawlJobFailed(crawlJobId, "Crawl returned no pages").catch(() => {});
+          throw new Error("Couldn't crawl that URL — no pages were returned");
+        }
       }
 
       // When the in-house crawl contributed (source "inhouse" or "merged"), it already

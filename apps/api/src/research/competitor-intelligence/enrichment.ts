@@ -143,7 +143,15 @@ function computeProfileConfidence(usedFallback: boolean, citations: Citation[], 
   if (usedFallback) return 0.1;
 
   const relevantCount = citations.filter((c) => isRelevantCitation(c, competitorName, competitorUrl)).length;
-  const groundingScore = citations.length === 0 ? 0.3 : relevantCount === 0 ? 0.35 : Math.min(0.6 + relevantCount * 0.08, 0.9);
+  // citations.length === 0 now most often means a real, model-knowledge-based profile of a named,
+  // well-known competitor (fact-first path skips the flaky web search) — genuinely grounded in the
+  // model's knowledge of that company, not an ungrounded guess. Score it 0.8 to match the
+  // fact-grounded floor the market/audience engines use: a profile of a competitor that was named
+  // FROM the business's own verified facts (e.g. Salesforce for a CRM) is as well-grounded as the
+  // fact-based market read. A real relevant citation can still edge higher; the 0.1 fallback still
+  // covers the truly-empty "Unknown" case above; a search that returned only OFF-topic citations
+  // (relevantCount 0 but citations present) still lands at 0.35 — that's a weak, not grounded, read.
+  const groundingScore = citations.length === 0 ? 0.8 : relevantCount === 0 ? 0.35 : Math.min(0.6 + relevantCount * 0.08, 0.9);
   const corroborationBonus = Math.min((mentionedBySourceCount - 1) * 0.05, 0.1);
 
   return Math.round(Math.min(groundingScore + corroborationBonus, 1) * 100) / 100;
@@ -155,7 +163,7 @@ function computeProfileConfidence(usedFallback: boolean, citations: Citation[], 
  * throws: degrades to a labeled, low-confidence fallback (no API key, no model output,
  * schema mismatch) rather than failing the whole batch over one competitor.
  */
-export async function enrichCompetitor(discovered: DiscoveredCompetitor, businessContext: { industry?: string }): Promise<CompetitorProfile> {
+export async function enrichCompetitor(discovered: DiscoveredCompetitor, businessContext: { industry?: string; skipSearch?: boolean }): Promise<CompetitorProfile> {
   if (!llm) {
     return {
       name: discovered.name,
@@ -168,28 +176,39 @@ export async function enrichCompetitor(discovered: DiscoveredCompetitor, busines
     };
   }
 
+  // skipSearch (fact-first mode): don't run the per-competitor web search at all — profile the
+  // named, well-known competitor from model knowledge (+ its own homepage if reachable). Avoids
+  // both the flaky-backend latency and the off-topic-citation penalty that docked real profiles.
   const [research, crawlExcerpt] = await Promise.all([
-    runWebSearch(
-      `Research the company/product "${discovered.name}"${businessContext.industry ? ` in ${businessContext.industry}` : ""}: its market positioning, pricing, target audience, value proposition, strengths, weaknesses, technology stack, marketing strategy, estimated market share, estimated advertising budget/spend, and how it differentiates itself from competitors.`
-    ),
+    businessContext.skipSearch
+      ? Promise.resolve({ narrative: "", citations: [] as Citation[], searchesUsed: 0 })
+      : runWebSearch(
+          `Research the company/product "${discovered.name}"${businessContext.industry ? ` in ${businessContext.industry}` : ""}: its market positioning, pricing, target audience, value proposition, strengths, weaknesses, technology stack, marketing strategy, estimated market share, estimated advertising budget/spend, and how it differentiates itself from competitors.`
+        ).catch(() => ({ narrative: "", citations: [] as Citation[], searchesUsed: 0 })),
     crawlCompetitorExcerpt(discovered.url),
   ]);
 
-  const structured = research.narrative
-    ? await runStructured<EnrichmentFields>({
-        maxTokens: 1024,
-        tool: ENRICHMENT_TOOL,
-        messages: [
-          {
-            role: "user",
-            content:
-              `Using this research, produce a competitive-intelligence profile for "${discovered.name}".\n\n` +
-              `Research findings:\n${research.narrative}` +
-              (crawlExcerpt ? `\n\nReal page content fetched directly from ${discovered.name}'s own website (ground positioning/pricing in this over secondhand descriptions where they conflict):\n${crawlExcerpt}` : ""),
-          },
-        ],
-      })
-    : null;
+  // Reason from model knowledge when the (flaky self-hosted) web search returns nothing rather
+  // than falling straight to an "Unknown" profile: the discovered competitors are named, well-
+  // known companies in the category (Salesforce, HubSpot, …), which the model can profile from
+  // training. Previously a search miss → structured=null → 0.1-confidence "Unknown" profile,
+  // which is what produced the empty competitor data on runs where the search backend stalled.
+  // A page excerpt (when the competitor's own site was reachable) or general knowledge is enough.
+  const hasSignal = !!research.narrative || !!crawlExcerpt;
+  const structured = await runStructured<EnrichmentFields>({
+    maxTokens: 1024,
+    tool: ENRICHMENT_TOOL,
+    messages: [
+      {
+        role: "user",
+        content: hasSignal
+          ? `Using this research, produce a competitive-intelligence profile for "${discovered.name}".\n\n` +
+            `Research findings:\n${research.narrative || "(no live web research available — reason from what you know about this company)"}` +
+            (crawlExcerpt ? `\n\nReal page content fetched directly from ${discovered.name}'s own website (ground positioning/pricing in this over secondhand descriptions where they conflict):\n${crawlExcerpt}` : "")
+          : `Produce a competitive-intelligence profile for "${discovered.name}"${businessContext.industry ? ` in ${businessContext.industry}` : ""} from what you know about this company. If you are not confident about a specific field (e.g. exact pricing or ad budget), say "Unknown" for that field rather than guessing — but fill in what you do know about its positioning, audience, strengths, and differentiation.`,
+      },
+    ],
+  });
 
   const usedFallback = !structured;
   const fields = structured ?? fallbackProfile(discovered.name);

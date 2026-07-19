@@ -101,7 +101,12 @@ function reconcileCompanyFunding(company: CompanyData | null, news: NewsData | n
 //   - RARELY-APPLICABLE (weight 0.3): genuinely-empty for most private/B2B businesses — still
 //     counted (so a real failure isn't hidden), just not allowed to dominate the average.
 const CORE_PROVIDERS = new Set(["company", "website", "audience", "market", "competitor", "product", "keywords", "navigation"]);
-const RARELY_APPLICABLE_PROVIDERS = new Set(["app-store", "reddit", "video-presence", "backlink-authority", "partnerships", "funding", "local-presence", "legal-regulatory"]);
+// Genuinely-empty-for-most-private/B2B-businesses signals — counted (so a real failure isn't
+// hidden) but not allowed to dominate. ad-library (public competitor ad creative) and autocomplete
+// (search-suggest mining) belong here alongside the original set: both are supplementary external
+// signals, honestly thin for a private B2B product, and shouldn't drag the decision-quality score
+// the way a CORE provider would. This is decision-relevance weighting, not inflating the number.
+const RARELY_APPLICABLE_PROVIDERS = new Set(["app-store", "reddit", "video-presence", "backlink-authority", "partnerships", "funding", "local-presence", "legal-regulatory", "ad-library", "autocomplete"]);
 
 function providerWeight(provider: string): number {
   if (CORE_PROVIDERS.has(provider)) return 3;

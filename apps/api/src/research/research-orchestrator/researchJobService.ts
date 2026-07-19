@@ -185,11 +185,13 @@ export function isReusableContext(context: ResearchContext, minConfidence: numbe
 
 /**
  * A recently-completed research job for this exact (workspace, business, url) whose full
- * persisted ResearchContext can be reused instead of re-running Phase 1's 27-provider fan-out.
- * Only status "completed" jobs with a non-null context inside `ttlMs` are eligible; newest
- * first. Keyed on businessId (not url alone) so one business can never match another's row —
- * the caller still does a defense-in-depth identity re-check on the returned context (see
- * campaignGenerationPipeline); this only performs the keyed lookup.
+ * persisted ResearchContext can be reused instead of re-running Phase 1's provider fan-out.
+ * Only status "completed" jobs with a non-null context inside `ttlMs` are eligible, and among
+ * those the HIGHEST-overallConfidence one is served (not merely the newest) — so a later,
+ * higher-confidence run automatically supersedes an older stored one, while a later WORSE run
+ * never downgrades a better stored result. Keyed on businessId (not url alone) so one business
+ * can never match another's row — the caller still does a defense-in-depth identity re-check on
+ * the returned context (see campaignGenerationPipeline); this only performs the keyed lookup.
  *
  * `minConfidence` is passed in (like `ttlMs`), not read from env here, so env parsing stays in
  * the pipeline. A row that matches the key but fails the quality-gate (isReusableContext) is
@@ -204,7 +206,15 @@ export async function findReusableResearch(
   ttlMs: number,
   minConfidence: number
 ): Promise<{ researchJobId: string; context: ResearchContext } | null> {
-  const row = await prisma.researchJob.findFirst({
+  // Fetch ALL completed-within-TTL rows for this key, not just the most recent, and serve the
+  // HIGHEST-confidence one. This is what makes "a new higher-confidence run supersedes the stored
+  // one" work: every fresh run is persisted as its own completed row, so the next lookup picks
+  // whichever run — new or old — is actually best. A new run that's WORSE than a stored one never
+  // downgrades what's served (the better stored run still wins), and a new run that's BETTER
+  // becomes the served result automatically. overallConfidence lives in the context JSON (not a
+  // sortable column), so we rank in code rather than via orderBy. Bounded to a sane recent window
+  // so the scan can't grow unbounded for a hammered key.
+  const rows = await prisma.researchJob.findMany({
     where: {
       workspaceId,
       businessId,
@@ -215,18 +225,31 @@ export async function findReusableResearch(
       completedAt: { gte: new Date(Date.now() - ttlMs) },
     },
     orderBy: { completedAt: "desc" },
+    take: 20,
   });
-  if (!row || row.context == null) return null;
+  if (rows.length === 0) return null;
 
-  const context = row.context as unknown as ResearchContext;
-  if (!isReusableContext(context, minConfidence)) {
-    // Tripwire, mirroring the pipeline's identity-mismatch warning: a keyed row exists but is
-    // too degraded to reuse, so we're deliberately taking a cache miss and re-researching.
+  // Rank eligible candidates by their own overallConfidence, highest first; take the best. Rows
+  // arrive newest-first, and the sort is stable, so equal-confidence rows keep that order — i.e.
+  // ties break toward the most recent run (fresher data when quality is identical).
+  const ranked = rows
+    .filter((r) => r.context != null)
+    .map((r) => ({ id: r.id, context: r.context as unknown as ResearchContext }))
+    .filter((r) => isReusableContext(r.context, minConfidence))
+    .sort((a, b) => (b.context.metadata?.overallConfidence ?? 0) - (a.context.metadata?.overallConfidence ?? 0));
+
+  if (ranked.length === 0) {
+    // Tripwire, mirroring the pipeline's identity-mismatch warning: keyed rows exist but none
+    // clears the quality-gate, so we deliberately take a cache miss and re-research.
+    const best = rows.find((r) => r.context != null);
+    const ctx = best?.context as unknown as ResearchContext | undefined;
     logger.warn(
-      `Research cache candidate ${row.id} rejected by quality-gate (company=${context.company == null ? "null" : "present"}, ` +
-        `overallConfidence=${context.metadata?.overallConfidence ?? 0}, minConfidence=${minConfidence}) — running fresh research`
+      `Research cache: ${rows.length} candidate(s) for this key but none passed the quality-gate ` +
+        `(best overallConfidence=${ctx?.metadata?.overallConfidence ?? 0}, minConfidence=${minConfidence}) — running fresh research`
     );
     return null;
   }
-  return { researchJobId: row.id, context };
+
+  const winner = ranked[0];
+  return { researchJobId: winner.id, context: winner.context };
 }

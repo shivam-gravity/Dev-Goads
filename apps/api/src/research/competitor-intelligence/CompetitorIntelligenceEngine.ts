@@ -67,10 +67,17 @@ export async function runCompetitorIntelligence(input: CompetitorIntelligenceInp
     .sort((a, b) => b.mentionedBy.length - a.mentionedBy.length)
     .slice(0, MAX_ENRICHED_COMPETITORS);
 
+  // Fact-first: when the crawl produced verified facts, enrich from model knowledge and skip the
+  // per-competitor web search — that search goes through the flaky backend and, when it returns
+  // OFF-TOPIC citations (common for a niche query), the citation scorer docks a real, well-known
+  // competitor's profile to 0.35 for "citations but none relevant". Named competitors like
+  // Salesforce/HubSpot are well-covered by the model's knowledge, so a knowledge-based profile is
+  // both reliable and fast here. With no facts, enrichment still web-searches (prior behavior).
+  const skipSearch = !!input.verifiedFacts?.length;
   const profiles = await Promise.all(
     toEnrich.map(async (discoveredCompetitor) => {
       const [profile, prior] = await Promise.all([
-        enrichCompetitor(discoveredCompetitor, { industry: input.industry }),
+        enrichCompetitor(discoveredCompetitor, { industry: input.industry, skipSearch }),
         findPriorProfile(discoveredCompetitor.name, input),
       ]);
       return { profile, prior };

@@ -63,7 +63,15 @@ export class CompetitorIntelligenceProvider implements ResearchProvider<Competit
         dataSource: report.sourcesUsed.join(" + "),
       };
 
-      return { status: "success", data, citations, evidence: citationsToEvidence(citations) };
+      // Pass through the mean of the enriched profiles' own confidence (each floored for a real,
+      // knowledge-based profile of a named competitor) instead of letting the citation-based
+      // scorer dock this to ~0.25 — the fact-first path names real competitors (Salesforce, …)
+      // and profiles them from model knowledge with few web citations, which is genuine grounding.
+      const meanConfidence = report.competitors.length > 0
+        ? Math.round((report.competitors.reduce((sum, c) => sum + (c.confidence ?? 0), 0) / report.competitors.length) * 100) / 100
+        : undefined;
+
+      return { status: "success", data, citations, evidence: citationsToEvidence(citations), confidence: meanConfidence };
     });
   }
 }

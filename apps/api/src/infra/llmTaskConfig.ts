@@ -12,24 +12,47 @@ import type { LLMAssignment, LLMProvider } from "./llmRouter.js";
  * "context-enrichment").
  */
 const MISTRAL: LLMAssignment = { provider: "mistral", model: process.env.MISTRAL_MODEL ?? "mistral-small-latest" };
+const GEMINI_PRIMARY: LLMAssignment = { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
 
-// Master switch (default ON): route EVERY task to Mistral only. Mistral has NO daily quota —
-// just a per-minute rate limit (measured live: 50 req/min, 50k tokens/min) that our
-// retry-with-backoff + concurrency cap ride out cleanly. OpenRouter's free models have a hard
-// DAILY cap (which we exhausted) and Gemini's free tier is 0, so routing to them just spends
-// calls that fail and fall back to Mistral anyway. Collapsing everything to Mistral removes
-// those wasted/failing legs so a full generation completes reliably (slower, but it finishes
-// with real data). Set LLM_MISTRAL_ONLY=false to restore the multi-provider/dual routing once a
-// paid/uncapped provider is configured.
-const MISTRAL_ONLY = process.env.LLM_MISTRAL_ONLY !== "false";
+// PRIMARY workhorse for the whole pipeline. LLM_PRIMARY=gemini (the current setup) routes every
+// task to Gemini (AI Studio free tier — fast, hosted, with a real per-minute/day allowance),
+// with Mistral/OpenRouter/Ollama behind it in llmRouter's FALLBACK_CHAIN for when a call is
+// rate-limited. This is what replaced the Mistral-only / local-Ollama workarounds: a hosted-fast
+// model spreads load off Mistral's 50-req/min limit AND avoids Ollama's ~3min/call CPU latency.
+// Set LLM_PRIMARY to something other than "gemini" (or unset) to fall back to the older routing.
+const PRIMARY_IS_GEMINI = process.env.LLM_PRIMARY === "gemini";
 
-const DEFAULT_ASSIGNMENT: LLMAssignment = MISTRAL;
+// Master switch (default ON before Gemini became primary): route EVERY task to Mistral only.
+// Mistral has NO daily quota — just a per-minute rate limit (measured live: 50 req/min, 50k
+// tokens/min) that our retry-with-backoff + concurrency cap ride out cleanly. Superseded by
+// LLM_PRIMARY=gemini; kept as a fallback routing mode. Set LLM_MISTRAL_ONLY=false to restore the
+// multi-provider/dual routing.
+const MISTRAL_ONLY = !PRIMARY_IS_GEMINI && process.env.LLM_MISTRAL_ONLY !== "false";
 
-const GEMINI: LLMAssignment = MISTRAL_ONLY ? MISTRAL : { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
-// "dual" would fire OpenRouter + Mistral concurrently; under MISTRAL_ONLY it's just Mistral (a
-// single call, no wasted OpenRouter leg). Restored to real dual when LLM_MISTRAL_ONLY=false.
-const DUAL: LLMAssignment = MISTRAL_ONLY ? MISTRAL : { provider: "dual", model: "auto" };
-// Deep-research tasks (the 20 agents + research providers). Mistral-only by default.
+// LOCAL Ollama — the one free resource with NO rate limit and NO daily cap (it runs on this
+// machine). The whole confidence-instability problem was providers timing out to 0 under
+// Mistral's 50-req/min limit; a local call CANNOT be throttled, so routing the fact-grounded
+// reasoning tasks here means they never time out and never zero the score. It's slower per call
+// than a hosted API, but it can't be rate-limited — reliability over speed. Proven to do forced
+// tool-calls (llama3.1:8b named Salesforce/HubSpot/Zoho for a CRM in one shot). Also OFFLOADS
+// those calls from Mistral, easing its rate pressure for everything else.
+const OLLAMA: LLMAssignment = { provider: "ollama", model: process.env.OLLAMA_MODEL ?? "llama3.1:8b" };
+// Master switch: route the fact-grounded research/reasoning tasks to local Ollama. On by
+// default because it's the free way to stop the rate-limit timeouts. Set LLM_LOCAL_RESEARCH=false
+// to send them back to Mistral (e.g. if a fast uncapped hosted provider is configured).
+const LOCAL_RESEARCH = !PRIMARY_IS_GEMINI && process.env.LLM_LOCAL_RESEARCH !== "false";
+// The reasoning tasks that work from already-extracted facts. Under LLM_PRIMARY=gemini they go to
+// Gemini (fast, hosted); otherwise the older split — local Ollama (LOCAL_RESEARCH) or Mistral.
+const FACT_REASONING: LLMAssignment = PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : LOCAL_RESEARCH ? OLLAMA : MISTRAL;
+
+const DEFAULT_ASSIGNMENT: LLMAssignment = PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : MISTRAL;
+
+const GEMINI: LLMAssignment = PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : MISTRAL_ONLY ? MISTRAL : { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
+// "dual" would fire OpenRouter + Mistral concurrently; under Gemini-primary it's a single Gemini
+// call (no wasted legs, the fallback chain still covers rate-limit failures), and under
+// MISTRAL_ONLY just Mistral. Restored to real dual when neither mode is active.
+const DUAL: LLMAssignment = PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : MISTRAL_ONLY ? MISTRAL : { provider: "dual", model: "auto" };
+// Deep-research tasks (the 20 agents + research providers). Gemini-primary by default.
 const DEEP_RESEARCH: LLMAssignment = DUAL;
 
 const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
@@ -55,20 +78,26 @@ const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   "seasonality-timing-agent": DEEP_RESEARCH,
   "product-agent": DEEP_RESEARCH,
 
-  // Decision Engine steps — Gemini/Mistral for synthesis diversity
-  "decision-summary": GEMINI,
-  "enrichment-proof-points": GEMINI,
+  // Decision Engine steps — pinned to MISTRAL, not the shared Gemini primary. These run at the
+  // very END of the pipeline (after ~30 Gemini research/agent calls have saturated Gemini's
+  // 50/min budget) and they produce the USER-VISIBLE decision output (business summary, ranked
+  // recommendations, strategy). When they got rate-limited past the timeout they returned null →
+  // the "No live research available — re-run with a live API key" PLACEHOLDER text rendered in the
+  // UI even though research itself succeeded at 0.81. They're few and sequential, so Mistral's
+  // separate rate budget makes the visible summary reliable instead of intermittently degrading.
+  "decision-summary": MISTRAL,
+  "enrichment-proof-points": MISTRAL,
   "enrichment-regional-depth": MISTRAL,
   "tradeoff-analysis": MISTRAL,
-  "recommendation-generation": GEMINI,
+  "recommendation-generation": MISTRAL,
   "strategy-synthesis": MISTRAL,
 
   // Research providers — 70B for accurate data extraction
   "app-store": DEEP_RESEARCH,
   audience: DEEP_RESEARCH,
   "ad-library": DEEP_RESEARCH,
-  competitor: DEEP_RESEARCH,
-  company: DEEP_RESEARCH,
+  competitor: FACT_REASONING,
+  company: FACT_REASONING,
   autocomplete: DEEP_RESEARCH,
   "backlink-authority": DEEP_RESEARCH,
   funding: DEEP_RESEARCH,
@@ -77,7 +106,7 @@ const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   "content-marketing": DEEP_RESEARCH,
   "legal-regulatory": DEEP_RESEARCH,
   "local-presence": DEEP_RESEARCH,
-  market: DEEP_RESEARCH,
+  market: FACT_REASONING,
   partnerships: DEEP_RESEARCH,
   product: DEEP_RESEARCH,
   reddit: DEEP_RESEARCH,
@@ -92,21 +121,26 @@ const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   search: DEEP_RESEARCH,
   "search-ranking": DEEP_RESEARCH,
 
-  // Intelligence Engines + crawl fact extraction — mixed for diversity
-  "audience-intelligence": GEMINI,
-  "competitor-intelligence-discovery": DEEP_RESEARCH,
-  "competitor-intelligence-enrichment": DEEP_RESEARCH,
+  // Intelligence Engines + crawl fact extraction — the fact-grounded reasoning tasks that kept
+  // TIMING OUT to 0 under Mistral's rate limit. Routed to LOCAL Ollama (FACT_REASONING): it
+  // can't be rate-limited, so these complete reliably instead of intermittently zeroing the
+  // score, and they stop competing for Mistral's request budget.
+  "audience-intelligence": FACT_REASONING,
+  "competitor-intelligence-discovery": FACT_REASONING,
+  "competitor-intelligence-enrichment": FACT_REASONING,
   "creative-intelligence": GEMINI,
-  "market-intelligence": DEEP_RESEARCH,
+  "market-intelligence": FACT_REASONING,
   "pricing-intelligence": GEMINI,
   "landing-page-intelligence": DEEP_RESEARCH,
-  // The single most valuable call in the run (its facts replace ~17 downstream retrievals), and
+  // The single most valuable call in the run (its facts replace ~17 downstream retrievals) and
   // it's on the CRITICAL PATH — the whole fact-first pipeline is skipped if it doesn't return in
-  // time. It was assigned GEMINI (free tier = 0 → failed → fell through to throttled OpenRouter/
-  // Mistral → blew the prefetch timeout). "dual" fires OpenRouter + Mistral concurrently (best of
-  // two shots at a fast answer), and the fallback chain ends in local Ollama, so this call
-  // completes even when both hosted tiers throttle — no more silent prefetch timeouts.
-  "crawl-fact-extraction": DUAL,
+  // time, and then every provider falls back to (flaky) web search and the CORE ones time out to
+  // 0. Pinned to MISTRAL rather than the shared primary: it's ONE call that gates everything, so
+  // it must not queue behind the ~30 parallel Gemini provider/agent calls that saturate Gemini's
+  // 50-req/min budget (measured: the first fact-extraction call burned all 120s on Gemini 429
+  // backoff and timed out). Mistral has an independent rate budget and does this one structured
+  // call in seconds — spreading the single critical call off Gemini keeps the prefetch reliable.
+  "crawl-fact-extraction": MISTRAL,
   "ad-creative-analysis": DEEP_RESEARCH,
 
   // Meta Ads keyword validation & interest mining

@@ -122,8 +122,14 @@ function fallbackFields(subject: string): MarketFields {
   };
 }
 
-function computeConfidence(usedFallback: boolean, citationCount: number): number {
+// factGrounded: the synthesis was anchored in the business's OWN verified facts (fact-first
+// pipeline). That's STRONGER grounding than a web citation — the facts came from the actual
+// site — so a fact-grounded result earns a high floor even with zero web citations, instead of
+// being scored as an ungrounded "AI estimate" (0.35) the way it was before. Without facts, the
+// old citation-count behavior is unchanged.
+function computeConfidence(usedFallback: boolean, citationCount: number, factGrounded = false): number {
   if (usedFallback) return 0.1;
+  if (factGrounded) return Math.round(Math.min(0.8 + citationCount * 0.03, 0.9) * 100) / 100;
   return citationCount === 0 ? 0.35 : Math.round(Math.min(0.55 + citationCount * 0.07, 0.9) * 100) / 100;
 }
 
@@ -166,9 +172,16 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
     return { ...fallbackFields(subject), opportunityScore: 0, citations: [], confidence: computeConfidence(true, 0), generatedAt: new Date().toISOString() };
   }
 
+  // Fact-first: when the up-front crawl produced verified facts, they pin down the real
+  // market/category, so we SKIP the two live web searches (the flaky SearXNG+crawl4ai path whose
+  // cold-start latency is the main cause of provider timeouts → 0 scores). The searches only
+  // supplemented the facts, which already win on conflict; dropping them when facts exist gives a
+  // fast, reliable, fact-grounded market read. With no facts (crawl failed), we still search.
+  const hasFacts = !!input.verifiedFacts?.length;
+  const emptyResearch = { narrative: "", citations: [] as Citation[] };
   const [marketResearch, regulatoryResearch, priorMatches] = await Promise.all([
-    runWebSearch(`What is the current market size (TAM), CAGR/growth rate, demand trends, seasonality, and regional/geographic demand breakdown for ${industry} (relevant to a business like "${subject}")? Include any notable trends.`),
-    runWebSearch(`What emerging/newer competitors are gaining traction in ${industry}, and what regulatory factors affect this market?`),
+    hasFacts ? Promise.resolve(emptyResearch) : runWebSearch(`What is the current market size (TAM), CAGR/growth rate, demand trends, seasonality, and regional/geographic demand breakdown for ${industry} (relevant to a business like "${subject}")? Include any notable trends.`),
+    hasFacts ? Promise.resolve(emptyResearch) : runWebSearch(`What emerging/newer competitors are gaining traction in ${industry}, and what regulatory factors affect this market?`),
     readMemory({ kind: MEMORY_KIND, queryText: `${subject} — ${industry}`, workspaceId: input.workspaceId, excludeBusinessId: input.businessId, topK: 2 }),
   ]);
 
@@ -202,7 +215,7 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
     ...fields,
     opportunityScore,
     citations,
-    confidence: computeConfidence(usedFallback, citations.length),
+    confidence: computeConfidence(usedFallback, citations.length, !!input.verifiedFacts?.length),
     generatedAt: new Date().toISOString(),
   };
 

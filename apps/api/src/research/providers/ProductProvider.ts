@@ -48,6 +48,33 @@ export class ProductProvider implements ResearchProvider<ProductData> {
         }
       }
 
+      // Fact-first fallback: JS-heavy SPAs expose no JSON-LD/schema.org product markup, so the
+      // deterministic scrape above finds nothing — but the up-front fact extraction already pulled
+      // the real pricing tiers/product name from the rendered page (e.g. "pricing.starter.price:
+      // $29/user/mo"). Build ProductEntries from those verified facts rather than reporting an
+      // empty product set (which scored 0.3 and dragged this CORE provider down) for a business
+      // that plainly has products. Grounded in the site's own facts → confidence passed through.
+      if (products.length === 0 && input.verifiedFacts?.length) {
+        const productFacts = input.verifiedFacts.filter((f) => /(^|\.)(product|pricing|plan|tier|price|offer)/i.test(f.field));
+        if (productFacts.length > 0) {
+          const priceFacts = productFacts.filter((f) => /pric|plan|tier|\$|\/mo|\/user/i.test(`${f.field} ${f.value}`));
+          const nameFact = productFacts.find((f) => /product\.?name|^name$/i.test(f.field));
+          const featureFact = productFacts.find((f) => /feature/i.test(f.field));
+          const factProducts: ProductEntry[] = priceFacts.length > 0
+            ? priceFacts.map((f) => ({
+                name: nameFact?.value ?? (f.field.replace(/^pricing\./i, "").replace(/\.(price|cost)$/i, "") || "Plan"),
+                priceText: f.value,
+                features: featureFact ? [featureFact.value] : [],
+              }))
+            : [{ name: nameFact?.value ?? "Product", features: productFacts.map((f) => f.value).slice(0, 5) }];
+          return {
+            status: "success",
+            data: { products: factProducts, dataSource: `Grounded in ${productFacts.length} verified facts from the site` },
+            confidence: 0.8,
+          };
+        }
+      }
+
       const dataSource =
         products.length > 0
           ? sourceLabel(lastSource, `product extraction (${candidatePages.length > 0 ? "pricing/product pages" : "homepage"})`)

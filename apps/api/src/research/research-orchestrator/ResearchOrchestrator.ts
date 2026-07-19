@@ -35,7 +35,7 @@ const WEBSITE_EXCERPT_MAX_CHARS = 6000;
 // which on the free tier may ride out 429 backoffs. It's the highest-value step in the run (its
 // facts replace ~17 downstream retrieval calls), so it's worth waiting for rather than racing to
 // an empty result that collapses the whole fact-first path back to junk search. Env-tunable.
-const WEBSITE_PREFETCH_TIMEOUT_MS = Number(process.env.WEBSITE_PREFETCH_TIMEOUT_MS ?? 90_000);
+const WEBSITE_PREFETCH_TIMEOUT_MS = Number(process.env.WEBSITE_PREFETCH_TIMEOUT_MS ?? 120_000);
 
 export interface WebsitePrefetch {
   excerpt?: string;

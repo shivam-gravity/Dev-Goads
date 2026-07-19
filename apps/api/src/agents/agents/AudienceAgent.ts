@@ -19,8 +19,25 @@ const AUDIENCE_AGENT_TOOL = {
       painPoints: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
       interestTags: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 10 },
       targetingNotes: { type: "string", description: "1-2 sentences of practical ad-targeting guidance" },
+      personas: {
+        type: "array",
+        minItems: 2,
+        maxItems: 6,
+        description: "Named audience personas, each with real Meta-ads interest keywords — one per distinct buyer segment",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "e.g. \"Growth-Focused CMO\"" },
+            ageRange: { type: "string", description: "e.g. \"35-55\"" },
+            genderSplit: { type: "string", description: "e.g. \"60% Male, 40% Female\"" },
+            details: { type: "string", description: "1-2 sentences on who this persona is and why they convert" },
+            interests: { type: "array", items: { type: "string" }, minItems: 6, maxItems: 15, description: "Real Meta Ads interest keywords (brands, job titles, tools) — not generic terms" },
+          },
+          required: ["name", "ageRange", "genderSplit", "details", "interests"],
+        },
+      },
     },
-    required: ["primaryAudience", "segments", "painPoints", "interestTags", "targetingNotes"],
+    required: ["primaryAudience", "segments", "painPoints", "interestTags", "targetingNotes", "personas"],
   },
 };
 
@@ -30,15 +47,33 @@ const audienceAgentSchema: z.ZodType<AudienceAgentOutput> = z.object({
   painPoints: z.array(z.string()),
   interestTags: z.array(z.string()),
   targetingNotes: z.string(),
+  personas: z.array(z.object({
+    name: z.string(),
+    ageRange: z.string(),
+    genderSplit: z.string(),
+    details: z.string(),
+    interests: z.array(z.string()),
+  })),
 });
 
 function fallback(context: ResearchContext): AudienceAgentOutput {
+  const segments = context.audience?.segments ?? [];
+  const interestTags = context.audience?.interestTags ?? [];
   return {
     primaryAudience: context.audience?.primaryAudience ?? "General audience",
-    segments: context.audience?.segments ?? [],
+    segments,
     painPoints: context.audience?.painPoints ?? [],
-    interestTags: context.audience?.interestTags ?? [],
+    interestTags,
     targetingNotes: "Insufficient research data to give specific targeting guidance.",
+    // Derive minimal personas from whatever segments research found, so the merged
+    // persona output is never empty even on the fallback path.
+    personas: segments.slice(0, 6).map((s) => ({
+      name: s.name,
+      ageRange: "25-54",
+      genderSplit: "Balanced distribution",
+      details: s.description,
+      interests: interestTags.slice(0, 8),
+    })),
   };
 }
 

@@ -80,18 +80,19 @@ export const defaultCampaignGenerationDeps: CampaignGenerationDeps = {
 const CAMPAIGN_GENERATION_LOCK_TTL_MS = 10 * 60 * 1000;
 
 // A completed ResearchJob for the same (workspace, business, url) within this window is
-// reused instead of re-running Phase 1 (27 providers / ~50 searches / research-structuring
-// LLM calls). Only the research INPUT is cached — the campaign, its budget, and its name are
-// always built fresh from the reused ResearchContext in Phases 2-3. 7 days by default because
-// a business's market/competitor/pricing landscape doesn't move hour-to-hour; env-tunable.
-// Kept <= the UI's 14-day staleness horizon (CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS, router.ts)
+// reused instead of re-running Phase 1 (the URL deep-research cache). Only the research INPUT
+// is cached — the campaign, its budget, and its name are always built fresh from the reused
+// ResearchContext in Phases 2-3. Default 6 HOURS: a cached run older than this is a cache miss
+// and gets re-researched fresh, so served deep-research is never more than 6h old (per the
+// "clear the cache every 6 hrs" policy). env-tunable via CAMPAIGN_RESEARCH_CACHE_TTL_MS. Kept
+// well under the UI's 14-day staleness horizon (CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS, router.ts)
 // so we never serve research the UI would already badge as stale. A non-finite/negative env
-// value falls back to the 7-day default rather than poisoning the lookup with an Invalid Date.
+// value falls back to the 6-hour default rather than poisoning the lookup with an Invalid Date.
 const parsedResearchCacheTtl = Number(process.env.CAMPAIGN_RESEARCH_CACHE_TTL_MS);
 const CAMPAIGN_RESEARCH_CACHE_TTL_MS =
   Number.isFinite(parsedResearchCacheTtl) && parsedResearchCacheTtl >= 0
     ? parsedResearchCacheTtl
-    : 7 * 24 * 60 * 60 * 1000;
+    : 6 * 60 * 60 * 1000;
 
 // Cache quality-gate threshold (0-1): a cached ResearchContext whose overallConfidence is below
 // this — OR whose company identity anchor is null — is treated as a cache MISS and re-researched
@@ -99,18 +100,19 @@ const CAMPAIGN_RESEARCH_CACHE_TTL_MS =
 // run degraded by a provider-timeout storm: the 07-16 polluxa.com run scored 0.34 with a null
 // company and was confabulated as "medical device", then re-served on two later cache hits.
 //
-// Default 0.75 (raised from 0.50): only HIGH-confidence research is trusted enough to reuse —
-// anything less is re-researched fresh every time, so a mediocre/incorrect run can never be
-// served twice. Trade-off: since a realistic run tops out ~0.66-0.85, most runs fall below 0.75
-// and will re-research on repeat (slower, but always fresh/correct — the point). This is BOTH
-// the read gate here AND the write gate below (markResearchJobCompleted marks sub-threshold runs
-// non-reusable), so low-confidence data isn't even eligible for reuse. A non-finite/out-of-range
-// env value falls back to 0.75. The company-null check is a hard invariant, not gated by this.
+// Default 0.65: only research at/above this confidence is trusted enough to reuse — anything
+// less is re-researched fresh every time, so a mediocre/incorrect run can never be served twice.
+// Set to 0.65 (down from 0.75) now that the fact-first pipeline reliably lands ~0.78-0.81 on a
+// clean run: 0.65 keeps genuinely-good runs cacheable (fast repeat launches) while still rejecting
+// the degraded ~0.3-0.5 runs that produced confabulated/placeholder data. Read gate here; the
+// serve side (findReusableResearch → isReusableContext) enforces the same threshold, so
+// sub-threshold data is never eligible for reuse. A non-finite/out-of-range env value falls back
+// to 0.65. The company-null check is a hard invariant, not gated by this.
 const parsedResearchMinConfidence = Number(process.env.CAMPAIGN_RESEARCH_MIN_CONFIDENCE);
 export const CAMPAIGN_RESEARCH_MIN_CONFIDENCE =
   Number.isFinite(parsedResearchMinConfidence) && parsedResearchMinConfidence >= 0 && parsedResearchMinConfidence <= 1
     ? parsedResearchMinConfidence
-    : 0.75;
+    : 0.65;
 
 export interface RunCampaignGenerationOptions {
   deps?: CampaignGenerationDeps;
@@ -309,8 +311,16 @@ export async function runCampaignGenerationPipeline(
     const creativeResult = pipeline.results["creative-agent"] as AgentResult<CreativeAgentOutput> | undefined;
     const criticResult = pipeline.results["critic-agent"] as AgentResult<CriticAgentOutput> | undefined;
     const keywordResult = pipeline.results["keyword-agent"] as AgentResult<KeywordAgentOutput> | undefined;
-    const personaResult = pipeline.results["persona-agent"] as AgentResult<PersonaAgentOutput> | undefined;
     const audienceResult = pipeline.results["audience-agent"] as AgentResult<AudienceAgentOutput> | undefined;
+    // persona-agent was merged into audience-agent: prefer a real persona-agent result if one ran
+    // (full 20-agent mode), else derive the persona output from the audience-agent's own personas
+    // (the essential 7-agent mode). Downstream (strategyEngine) only reads persona.personas.
+    const personaAgentResult = pipeline.results["persona-agent"] as AgentResult<PersonaAgentOutput> | undefined;
+    const personaResult: AgentResult<PersonaAgentOutput> | undefined =
+      personaAgentResult ??
+      (audienceResult && audienceResult.data.personas?.length
+        ? { ...audienceResult, data: { personas: audienceResult.data.personas } }
+        : undefined);
 
     // ── Phase 3: Campaign Builder ──
     await markStatus("building_campaign");

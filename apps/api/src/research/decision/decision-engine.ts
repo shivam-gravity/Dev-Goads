@@ -187,7 +187,11 @@ export async function runDecisionEngine(context: ResearchContext): Promise<Decis
   const tradeoffByRecommendationId = new Map(tradeoffAnalyses.map((t) => [t.recommendationId, t]));
   const topOpportunities = topRanked
     .filter((r) => r.impact === "high")
-    .map((r) => r.expectedOutcome);
+    .map((r) => r.expectedOutcome)
+    // expectedOutcome can be undefined for a degraded/placeholder recommendation; drop those
+    // rather than letting an `undefined` reach the persisted array (Prisma rejects undefined
+    // array elements, which crashed the whole job's final update) — same guard topRisks uses.
+    .filter((o): o is string => Boolean(o));
   const topRisks = topRanked
     .map((r) => tradeoffByRecommendationId.get(r.id)?.risks[0])
     .filter((risk): risk is string => Boolean(risk));

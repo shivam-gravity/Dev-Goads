@@ -24,10 +24,15 @@ export type ScrapeSource = "inhouse" | "crawl4ai" | "merged" | "none";
 // falls back to whatever the in-house path produced.
 const INHOUSE_ENABLED = process.env.SCRAPE_INHOUSE_ENABLED !== "false" && process.env.SCRAPE_FALLBACK_ENABLED !== "false";
 
-// A third of the research orchestrator's 45s per-provider ceiling (PROVIDER_TIMEOUT_MS in
-// ResearchOrchestrator.ts). Both sources race under this same window in parallel, so the
-// wall-clock cost of running both is the SLOWER of the two, not their sum.
-const ATTEMPT_TIMEOUT_MS = 15_000;
+// Both sources race under this same window in parallel, so the wall-clock cost of running both
+// is the SLOWER of the two, not their sum. Env-tunable and raised from the old 15s: crawl4ai's
+// FIRST crawl after idle is a cold start (it spins up a headless browser context) and on a
+// JS-heavy SPA that legitimately takes ~15-16s — right at the old ceiling, so it aborted and the
+// prefetch got zero content → zero facts → every provider fell back to (flaky) web search and the
+// CORE providers timed out to 0. Warm, the same crawl returns in ~4s. 30s clears the cold start
+// with margin; the in-house path (fast when it works) still returns early, so this only extends
+// the wait when crawl4ai is the ONLY source that can render the page (exactly the SPA case).
+const ATTEMPT_TIMEOUT_MS = Number(process.env.SCRAPE_ATTEMPT_TIMEOUT_MS ?? 30_000);
 
 const SCRAPER_SERVICE_URL = process.env.SCRAPER_SERVICE_URL ?? "http://localhost:4003";
 const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY;

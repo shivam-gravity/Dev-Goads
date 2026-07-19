@@ -233,9 +233,14 @@ function fallbackFields(businessName: string): AudienceFields {
  * spirit as CompetitorProvider/Competitor Intelligence's confidence formulas, tuned
  * separately since this is a different kind of synthesis (one profile from 2 searches,
  * not N independently-enriched entities). */
-function computeConfidence(usedFallback: boolean, citationCount: number, hadMemoryCorroboration: boolean): number {
+// factGrounded: synthesis anchored in the business's own verified facts (fact-first pipeline) —
+// stronger than a web citation, so it earns a high floor even with zero web citations rather
+// than being treated as an ungrounded estimate.
+function computeConfidence(usedFallback: boolean, citationCount: number, hadMemoryCorroboration: boolean, factGrounded = false): number {
   if (usedFallback) return 0.1;
-  const base = citationCount === 0 ? 0.4 : Math.min(0.55 + citationCount * 0.07, 0.9);
+  const base = factGrounded
+    ? Math.min(0.8 + citationCount * 0.03, 0.9)
+    : (citationCount === 0 ? 0.4 : Math.min(0.55 + citationCount * 0.07, 0.9));
   return Math.round(Math.min(base + (hadMemoryCorroboration ? 0.05 : 0), 1) * 100) / 100;
 }
 
@@ -337,10 +342,19 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
     };
   }
 
+  // Fact-first: when the up-front crawl produced verified facts, the business's own site already
+  // defines who it sells to, so we SKIP the two live web searches entirely. Those searches go
+  // through the self-hosted SearXNG+crawl4ai backend, whose cold-start/concurrency latency is the
+  // single biggest source of provider timeouts (a cold SPA render can blow the provider budget →
+  // score 0). The searches only ever SUPPLEMENTED the facts (which win on conflict anyway), so
+  // dropping them when facts exist trades marginal third-party colour for a fast, reliable,
+  // fact-grounded result. With no facts (crawl failed), we still run them — the prior behavior.
+  const hasFacts = !!input.verifiedFacts?.length;
+  const emptySignal = { narrative: "", citations: [] as Citation[] };
   const memoryQueryText = `${businessLabel} — ${input.industry ?? "its category"}`;
   const [audienceSignal, reviewSignal, priorMatches] = await Promise.all([
-    searchAudienceSignals(input),
-    searchReviewSignals(input),
+    hasFacts ? Promise.resolve(emptySignal) : searchAudienceSignals(input),
+    hasFacts ? Promise.resolve(emptySignal) : searchReviewSignals(input),
     readMemory({ kind: MEMORY_KIND, queryText: memoryQueryText, workspaceId: input.workspaceId, excludeBusinessId: input.businessId, topK: 2 }),
   ]);
 
@@ -383,7 +397,7 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
     estimatedLtvProxy,
     evidence: citations.map((c) => `${c.title} (${c.url})`),
     citations,
-    confidence: computeConfidence(usedFallback, citations.length, priorMatches.length > 0),
+    confidence: computeConfidence(usedFallback, citations.length, priorMatches.length > 0, !!input.verifiedFacts?.length),
     generatedAt: new Date().toISOString(),
   };
 

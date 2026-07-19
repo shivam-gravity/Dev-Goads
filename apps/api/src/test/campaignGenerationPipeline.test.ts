@@ -490,7 +490,9 @@ test("campaignGenerationPipeline - (d) an expired/absent cache (lookup returns n
 
   assert.strictEqual(orchestratorCalled, true, "an expired/absent cache entry must run fresh research");
   assert.strictEqual(result.researchJobId, "research-1");
-  assert.strictEqual(forwardedTtl, 7 * 24 * 60 * 60 * 1000, "the default 7-day TTL must be passed to the cache lookup");
+  // 6-hour URL deep-research cache TTL (env CAMPAIGN_RESEARCH_CACHE_TTL_MS=21600000, matching the
+  // code default) — a cached run older than this is a cache miss and gets re-researched fresh.
+  assert.strictEqual(forwardedTtl, 6 * 60 * 60 * 1000, "the 6-hour cache TTL must be passed to the cache lookup");
 });
 
 test("campaignGenerationPipeline - (e) another business's cached research is NEVER served to the agents", async () => {

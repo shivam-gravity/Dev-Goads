@@ -73,6 +73,10 @@ export interface AudienceAgentOutput {
   painPoints: string[];
   interestTags: string[];
   targetingNotes: string;
+  /** Named audience personas with Meta-ads interest targeting — the audience-agent's v2 prompt
+   * already builds these; emitting them here lets this one agent do the persona-agent's job too
+   * (merged to keep the essential agent count at 7). Same shape as PersonaAgentOutput.personas. */
+  personas: PersonaAgentPersona[];
 }
 
 export interface CompetitorAgentOutput {

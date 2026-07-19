@@ -38,6 +38,31 @@ export class SearchProvider implements ResearchProvider<GeneralSearchData> {
       if (!cached) cache.set(cacheKey, result);
 
       const citations = result.citations;
+
+      // Fact-first fallback: when the live web search comes back empty (the self-hosted backend
+      // often does for a niche B2B site), fold the up-front verified facts + site excerpt into the
+      // overview narrative instead of returning nothing (which scored ~0.05 and dragged the
+      // aggregate). This provider is cross-cutting supporting evidence, so a grounded, fact-based
+      // overview is exactly the "what it does / who it serves" summary it's meant to supply.
+      if (!result.narrative && (input.verifiedFacts?.length || input.websiteExcerpt)) {
+        const factsText = input.verifiedFacts?.length
+          ? input.verifiedFacts.slice(0, 30).map((f) => `- ${f.field}: ${f.value}`).join("\n")
+          : "";
+        const narrative = [
+          `Overview grounded in the business's own website${input.businessName ? ` ("${input.businessName}")` : ""}:`,
+          factsText,
+          input.websiteExcerpt ? input.websiteExcerpt.slice(0, 1500) : "",
+        ].filter(Boolean).join("\n\n");
+        const factCitation = [{ url: input.url, title: `Verified from ${hostnameOf(input.url)}` }];
+        return {
+          status: "success",
+          data: { narrative, searchesUsed: result.searchesUsed, dataSource: `Grounded in ${input.verifiedFacts?.length ?? 0} verified facts from the site` },
+          citations: factCitation,
+          evidence: citationsToEvidence(factCitation),
+          confidence: 0.7,
+        };
+      }
+
       const data: GeneralSearchData = {
         narrative: result.narrative,
         searchesUsed: result.searchesUsed,

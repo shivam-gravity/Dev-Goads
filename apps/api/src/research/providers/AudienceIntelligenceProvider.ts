@@ -65,7 +65,9 @@ export class AudienceIntelligenceProvider implements ResearchProvider<AudienceDa
         dataSource,
       };
 
-      return { status: usedFallback ? "partial" : "success", data, citations: report.citations, evidence: citationsToEvidence(report.citations) };
+      // Pass the engine's own fact-aware confidence through (see ProviderOutcome.confidence) so a
+      // fact-grounded, citation-light result isn't docked to ~0.35 by the citation-based scorer.
+      return { status: usedFallback ? "partial" : "success", data, citations: report.citations, evidence: citationsToEvidence(report.citations), confidence: usedFallback ? undefined : report.confidence };
     });
   }
 }
