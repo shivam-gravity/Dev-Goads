@@ -15,6 +15,7 @@ import { applyCopyLimitsForNetwork } from "../strategy/platformCopyLimits.js";
 import { getBusiness } from "../business/businessService.js";
 import { eventBus } from "../../infra/eventBus.js";
 import { ensureFuseGuardrails } from "../automation/campaignFuse.js";
+import { syncLaunchedHierarchy } from "../drafts/draftsService.js";
 import { logger } from "../logger/logger.js";
 
 export interface CampaignLaunchedEvent {
@@ -415,6 +416,15 @@ export async function launchCampaign(campaignId: string, workspaceId = "demo"): 
       : "failed";
   campaign.updatedAt = new Date().toISOString();
   await saveCampaign(campaign);
+
+  // Mirror the launched platform hierarchy into the AdSet/Ad tables the Ads Manager reads, so a
+  // published campaign's ads actually show up there (they're otherwise only on the campaign's
+  // variants JSON + the ad network). Best-effort: a mirror failure must not fail the launch.
+  try {
+    await syncLaunchedHierarchy(campaign.id, campaign.workspaceId, campaign.variants as any);
+  } catch (err) {
+    logger.warn(`launchCampaign: failed to mirror launched hierarchy into Ads Manager tables for ${campaign.id}`, err);
+  }
 
   // Seed the always-on safety guardrails ("fuse") for this workspace the moment a campaign goes
   // live, so absolute max-CPA / min-ROAS / spend-cap protection is active by default rather than

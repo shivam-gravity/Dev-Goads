@@ -175,3 +175,85 @@ export async function updateAd(id: string, patch: Partial<Pick<Ad, "name" | "sta
   await saveAd(a);
   return a;
 }
+
+/**
+ * Minimal shape of a launched campaign variant this sync needs — mirrors the CampaignVariant fields
+ * populated by launchMetaHierarchy/launchGoogleHierarchy, kept local so draftsService doesn't depend
+ * on the orchestrator's types.
+ */
+interface LaunchedVariantLike {
+  id: string;
+  network: string;
+  status: string;
+  externalId?: string;
+  adSetExternalId?: string;
+  audienceName?: string;
+  creative: { headline: string; body: string; callToAction: string; imageUrl?: string; videoUrl?: string };
+}
+
+/**
+ * Mirror a just-launched campaign's platform hierarchy into the AdSet/Ad tables the Ads Manager
+ * reads. The launch flow writes real Meta/Google ad-set + ad ids onto the campaign's `variants`
+ * JSON, but the Ads Manager lists prisma.adSet/prisma.ad rows — so a published campaign showed an
+ * empty "Total Ads 0 / Ad Sets 0" hierarchy. This bridges the two: one AdSet row per distinct
+ * `adSetExternalId`, one Ad row per launched variant under it.
+ *
+ * Idempotent: row ids are derived deterministically from the campaign + external ids, so re-running
+ * a launch upserts in place instead of duplicating. Skips variants that never launched (no
+ * externalId/adSetExternalId — e.g. failed or skipped networks), so nothing invented appears.
+ */
+export async function syncLaunchedHierarchy(
+  campaignId: string,
+  workspaceId: string | undefined,
+  variants: LaunchedVariantLike[],
+): Promise<{ adSets: number; ads: number }> {
+  const now = new Date().toISOString();
+  const launched = variants.filter((v) => v.externalId && v.adSetExternalId);
+  const seenAdSets = new Set<string>();
+  let adSetCount = 0;
+  let adCount = 0;
+
+  for (const v of launched) {
+    const adSetRowId = `launched-${campaignId}-${v.adSetExternalId}`;
+    const status: "active" | "paused" | "draft" = v.status === "active" ? "active" : v.status === "paused" ? "paused" : "draft";
+
+    if (!seenAdSets.has(adSetRowId)) {
+      seenAdSets.add(adSetRowId);
+      await saveAdSet({
+        id: adSetRowId,
+        campaignId,
+        workspaceId,
+        name: v.audienceName ? v.audienceName.slice(0, 80) : `Ad set ${v.adSetExternalId}`,
+        status,
+        dailyBudgetCents: 0, // budget lives at campaign/variant level; ad-set figure is set by the platform
+        targeting: {},
+        placements: [],
+        bidStrategy: "LOWEST_COST_WITHOUT_CAP",
+        createdAt: now,
+        updatedAt: now,
+      });
+      adSetCount++;
+    }
+
+    await saveAd({
+      id: `launched-${campaignId}-${v.externalId}`,
+      adSetId: adSetRowId,
+      workspaceId,
+      name: `${v.network} · ${(v.creative.headline || v.id).slice(0, 60)}`,
+      status,
+      creative: {
+        headline: v.creative.headline,
+        body: v.creative.body,
+        callToAction: v.creative.callToAction,
+        imageUrl: v.creative.imageUrl,
+      },
+      format: v.creative.videoUrl ? "video" : "single_image",
+      externalId: v.externalId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    adCount++;
+  }
+
+  return { adSets: adSetCount, ads: adCount };
+}
