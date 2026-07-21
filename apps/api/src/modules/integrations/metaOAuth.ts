@@ -190,6 +190,23 @@ export async function listAdAccounts(workspaceId: string): Promise<{ id: string;
   }));
 }
 
+/**
+ * Fetch a specific ad account's billing currency straight from Meta, given a raw token + account id
+ * (i.e. before any Integration row exists). Used by the CRM SSO handoff, which receives an
+ * ad-account id but not its currency — hardcoding "USD" there mis-converts every budget on non-USD
+ * accounts (an INR account then fails Meta's minimum-budget check, subcode 1885272). Best-effort:
+ * returns null on any error so the caller can fall back rather than block the login.
+ */
+export async function fetchAdAccountCurrency(accessToken: string, adAccountId: string): Promise<string | null> {
+  try {
+    const bare = String(adAccountId).replace(/^act_/, "");
+    const json = await graphGet(`/act_${bare}`, { fields: "currency", access_token: accessToken });
+    return typeof json?.currency === "string" ? json.currency : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function listPages(workspaceId: string): Promise<{ id: string; name: string }[]> {
   const credentials = await getMetaCredentials(workspaceId);
   if (!credentials) return MOCK_PAGES;

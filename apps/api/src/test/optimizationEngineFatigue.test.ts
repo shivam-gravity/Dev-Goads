@@ -13,7 +13,7 @@ for (const key of [
   "TIKTOK_ACCESS_TOKEN", "TIKTOK_ADVERTISER_ID",
 ]) delete process.env[key];
 
-const { buildCampaignFromStrategy, launchCampaign } = await import("../modules/orchestrator/campaignOrchestrator.js");
+const { buildCampaignFromStrategy, launchCampaign, activateVariant } = await import("../modules/orchestrator/campaignOrchestrator.js");
 const { runOptimizationPass } = await import("../modules/optimization/optimizationEngine.js");
 
 after(disconnectTestInfra);
@@ -23,8 +23,8 @@ async function seedTestStrategy(id: string, businessId: string) {
     id,
     businessId,
     summary: "Fatigue test strategy",
-    recommendedNetworks: ["tiktok"],
-    budgetSplit: { tiktok: 1 },
+    recommendedNetworks: ["meta"],
+    budgetSplit: { meta: 1 },
     audiences: ["Custom Lookalike"],
     creatives: [{ headline: "Original Headline", body: "Original body copy", callToAction: "Shop Now" }],
     createdAt: new Date().toISOString(),
@@ -36,17 +36,19 @@ async function seedTestStrategy(id: string, businessId: string) {
   });
 }
 
-/** TikTok is the one network whose mock launch defaults to "active" (Meta/Google mock-launch
- * paused by design, see campaignOrchestrator.test.ts) — using it means runOptimizationPass's
- * `activeVariants` filter includes this variant without an extra activateVariant call. */
-async function launchTestCampaignWithTikTokVariant(): Promise<{ campaignId: string; variantId: string; businessId: string }> {
+/** Launch a Meta variant (mock mode → paused by the safety default) and explicitly activate it,
+ * so runOptimizationPass's `activeVariants` filter includes it. Previously this used TikTok, whose
+ * mock launch defaulted to "active", but TikTok is now "coming soon"/skipped at launch — so we
+ * activate a Meta variant instead to get the same active-variant precondition. */
+async function launchTestCampaignWithActiveVariant(): Promise<{ campaignId: string; variantId: string; businessId: string }> {
   const strategyId = `strat_fatigue_test_${Date.now()}_${Math.random()}`;
   const businessId = "biz_test_1";
   await seedTestStrategy(strategyId, businessId);
   const draft = await buildCampaignFromStrategy(strategyId, "Fatigue Test Campaign", 10000);
   const launched = await launchCampaign(draft.id, "demo-fatigue-test");
-  const variant = launched.variants.find((v) => v.network === "tiktok" && v.status === "active");
-  if (!variant) throw new Error("Expected an active TikTok variant in mock mode");
+  const variant = launched.variants.find((v) => v.network === "meta" && v.externalId);
+  if (!variant) throw new Error("Expected a launched Meta variant in mock mode");
+  await activateVariant(launched.id, variant.id);
   return { campaignId: launched.id, variantId: variant.id, businessId };
 }
 
@@ -56,7 +58,7 @@ async function seedHighFrequencyMetrics(campaignId: string, variantId: string): 
     id: randomUUID(),
     campaignId,
     variantId,
-    network: "tiktok",
+    network: "meta",
     date: new Date().toISOString().slice(0, 10),
     impressions: 8000,
     reach: 2000,
@@ -67,7 +69,7 @@ async function seedHighFrequencyMetrics(campaignId: string, variantId: string): 
 }
 
 test("runOptimizationPass - a high-frequency (fatigued) variant gets a regenerate_creative decision and a real queued GenerationJob", async () => {
-  const { campaignId, variantId, businessId } = await launchTestCampaignWithTikTokVariant();
+  const { campaignId, variantId, businessId } = await launchTestCampaignWithActiveVariant();
   await seedHighFrequencyMetrics(campaignId, variantId);
 
   const decisions = await runOptimizationPass(campaignId);
@@ -83,7 +85,7 @@ test("runOptimizationPass - a high-frequency (fatigued) variant gets a regenerat
 });
 
 test("runOptimizationPass - a fatigued variant does not trigger a second refresh within the cooldown window", async () => {
-  const { campaignId, variantId, businessId } = await launchTestCampaignWithTikTokVariant();
+  const { campaignId, variantId, businessId } = await launchTestCampaignWithActiveVariant();
   await seedHighFrequencyMetrics(campaignId, variantId);
 
   const firstPass = await runOptimizationPass(campaignId);
@@ -101,12 +103,12 @@ test("runOptimizationPass - a fatigued variant does not trigger a second refresh
 });
 
 test("runOptimizationPass - a healthy (low-frequency, stable) variant never triggers a fatigue refresh", async () => {
-  const { campaignId, variantId, businessId } = await launchTestCampaignWithTikTokVariant();
+  const { campaignId, variantId, businessId } = await launchTestCampaignWithActiveVariant();
   await analyticsStore.recordMetric({
     id: randomUUID(),
     campaignId,
     variantId,
-    network: "tiktok",
+    network: "meta",
     date: new Date().toISOString().slice(0, 10),
     impressions: 1000,
     reach: 950,

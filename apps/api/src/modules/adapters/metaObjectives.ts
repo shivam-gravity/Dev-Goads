@@ -45,8 +45,13 @@ export type MetaCampaignObjective = keyof typeof META_CAMPAIGN_OBJECTIVES;
 
 /** Returns the best optimization_goal for an ad set given the campaign objective and whether a pixel is present. */
 export function resolveOptimizationGoal(objective: MetaCampaignObjective, hasPixel: boolean): string {
-  if (hasPixel && (objective === "OUTCOME_SALES" || objective === "OUTCOME_LEADS")) {
-    return "OFFSITE_CONVERSIONS";
+  if (objective === "OUTCOME_SALES" || objective === "OUTCOME_LEADS") {
+    // Conversion optimization (OFFSITE_CONVERSIONS) REQUIRES a promoted object (pixel + event);
+    // without one Meta rejects the ad set with "Select a promoted object" (subcode 1815430).
+    // The default goal for these objectives IS OFFSITE_CONVERSIONS, so we must degrade explicitly
+    // when there's no pixel — optimize for landing-page views, which needs no promoted object and
+    // is the closest lower-funnel proxy. With a pixel, use conversions as intended.
+    return hasPixel ? "OFFSITE_CONVERSIONS" : "LANDING_PAGE_VIEWS";
   }
   return META_CAMPAIGN_OBJECTIVES[objective].defaultOptimizationGoal;
 }

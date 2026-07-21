@@ -211,7 +211,7 @@ export interface CampaignSuggestion {
   imagePrompt: string;
 }
 
-export type CampaignStatus = "draft" | "launching" | "active" | "paused" | "completed" | "failed";
+export type CampaignStatus = "draft" | "launching" | "active" | "paused" | "completed" | "failed" | "skipped";
 
 export interface CampaignVariant {
   id: string;
@@ -324,7 +324,7 @@ export interface NormalizedPerformance {
 export interface OptimizationDecision {
   campaignId: string;
   chosenVariantId: string;
-  action: "increase_budget" | "decrease_budget" | "pause" | "hold" | "regenerate_creative";
+  action: "increase_budget" | "decrease_budget" | "pause" | "hold" | "regenerate_creative" | "pause_audience";
   reason: string;
   decidedAt: string;
 }

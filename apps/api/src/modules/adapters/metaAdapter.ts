@@ -31,8 +31,14 @@ function mockId(prefix: string) {
  * still supported for single-tenant/local setups) > null (mock mode).
  */
 function resolveCredentials(explicit?: MetaCredentials): MetaCredentials | null {
-  if (explicit) return explicit;
-  if (hasLiveCredentials) return { accessToken: ENV_META_ACCESS_TOKEN!, adAccountId: ENV_META_AD_ACCOUNT_ID!, currency: "USD" };
+  // Every call site builds the Graph path as `act_${adAccountId}`, so the stored id must be BARE.
+  // The CRM SSO handoff (and some OAuth flows) persist it already-prefixed as `act_<n>`, which
+  // otherwise yields `act_act_<n>` and a GraphMethodException (subcode 33, "object does not exist").
+  // Normalize here, once, so all six endpoints get exactly one prefix regardless of source.
+  const bare = (c: MetaCredentials): MetaCredentials =>
+    c.adAccountId ? { ...c, adAccountId: String(c.adAccountId).replace(/^act_/, "") } : c;
+  if (explicit) return bare(explicit);
+  if (hasLiveCredentials) return bare({ accessToken: ENV_META_ACCESS_TOKEN!, adAccountId: ENV_META_AD_ACCOUNT_ID!, currency: "USD" });
   return null;
 }
 
@@ -52,6 +58,26 @@ function toMetaMinorUnits(dailyBudgetCents: number, currency: string): number {
   const wholeUnits = dailyBudgetCents / 100;
   const divisor = META_MINOR_UNIT_DIVISORS[currency.toUpperCase()] ?? 100;
   return Math.round(wholeUnits * divisor);
+}
+
+/**
+ * Meta rejects an ad set whose daily budget is below its per-currency minimum (error subcode
+ * 1885272, "Budget is too low") — an ad set under the floor never delivers, so publishing a
+ * split-too-thin budget silently fails every variant. A campaign budget divided across several
+ * audience ad sets easily drops each below the floor (e.g. $50 / 16 variants on an INR account).
+ * We floor each ad set to the minimum: spending the viable minimum beats not delivering at all.
+ * Values are Meta's documented ~$1-equivalent/day minimums in WHOLE currency units; unknown
+ * currencies fall back to the USD-equivalent 100 cents. Currency-scaled, not a flat number.
+ */
+const META_MIN_DAILY_BUDGET_WHOLE_UNITS: Record<string, number> = {
+  USD: 1, EUR: 1, GBP: 1, CAD: 1, AUD: 1, SGD: 1,
+  INR: 100, JPY: 100, MXN: 20, BRL: 5, ZAR: 20, THB: 40, PHP: 60, TRY: 20,
+};
+
+function floorAdSetBudgetCents(dailyBudgetCents: number, currency: string): number {
+  const minWhole = META_MIN_DAILY_BUDGET_WHOLE_UNITS[currency.toUpperCase()] ?? 1;
+  const minCents = minWhole * 100; // app-internal budgets are always wholeUnits * 100
+  return Math.max(dailyBudgetCents, minCents);
 }
 
 // Exponential Backoff Retry Helper
@@ -249,6 +275,10 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
       objective: input.objective,
       status: "PAUSED",
       special_ad_categories: [],
+      // Budgets live at the ad-set level (ABO — see createAdSetContainer.daily_budget), so there is no
+      // campaign-level budget. Meta now REQUIRES this flag be set explicitly for that case (Graph API
+      // error subcode 4834011 otherwise). false = don't let ad sets share 20% of budget to optimize.
+      is_adset_budget_sharing_enabled: false,
     });
     if (!json?.id) throw new Error(`Meta campaign creation failed: ${JSON.stringify(json)}`);
     return { externalId: json.id };
@@ -261,10 +291,15 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     const body: Record<string, unknown> = {
       name: input.name,
       campaign_id: input.campaignExternalId,
-      daily_budget: toMetaMinorUnits(input.dailyBudgetCents, credentials.currency),
+      daily_budget: toMetaMinorUnits(floorAdSetBudgetCents(input.dailyBudgetCents, credentials.currency), credentials.currency),
       billing_event: "IMPRESSIONS",
       // Meta requires OFFSITE_CONVERSIONS (not LINK_CLICKS) whenever a promoted_object/pixel is set.
       optimization_goal: input.promotedObject ? "OFFSITE_CONVERSIONS" : (input.objective ? resolveOptimizationGoal(input.objective as any, false) : "LINK_CLICKS"),
+      // With ABO (ad-set budgets) and no campaign bid_strategy, Meta otherwise defaults to a
+      // strategy that demands a bid cap / ROAS floor and rejects the ad set (subcode 2490487).
+      // LOWEST_COST_WITHOUT_CAP is the "Lowest Cost" strategy that needs no bid amount — the same
+      // default the native Meta wizard uses. A caller-supplied cap could switch this later.
+      bid_strategy: "LOWEST_COST_WITHOUT_CAP",
       targeting: input.targeting,
       status: "PAUSED",
     };

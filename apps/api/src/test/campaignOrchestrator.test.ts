@@ -91,15 +91,17 @@ test("Campaign Orchestrator - launchCampaign and pauseVariant execution flow", a
 
   // Launch campaign
   const launched = await launchCampaign(campaignDraft.id);
-  // Meta and Google now launch through their real object-graph hierarchy, paused by
-  // default (safety default — see launchMetaHierarchy/launchGoogleHierarchy); only
-  // TikTok's flat mock path still launches "active" today, so the campaign is "active"
-  // overall because at least one variant is.
-  assert.strictEqual(launched.status, "active", "Campaign status should change to active (TikTok variant still launches active)");
-  assert.ok(launched.variants.every(v => v.externalId), "All variants should be assigned external IDs");
+  // Meta and Google launch through their real object-graph hierarchy, paused by default (safety
+  // default — see launchMetaHierarchy/launchGoogleHierarchy). TikTok is "coming soon": its variants
+  // are skipped (no adapter call, no externalId), so with only Meta+Google live the campaign is
+  // "paused" overall.
+  assert.strictEqual(launched.status, "paused", "Campaign is paused overall (Meta/Google launch paused, TikTok skipped)");
+  const launchedVariants = launched.variants.filter(v => v.network === "meta" || v.network === "google");
+  assert.ok(launchedVariants.every(v => v.externalId), "All launched (Meta/Google) variants should be assigned external IDs");
+  assert.ok(launched.variants.filter(v => v.network === "tiktok").every(v => v.status === "skipped"), "TikTok variants are skipped (coming soon)");
 
-  // Pause a variant
-  const targetVariant = launched.variants[0];
+  // Pause a launched variant
+  const targetVariant = launchedVariants[0];
   const pausedCampaign = await pauseVariant(launched.id, targetVariant.id);
   const pausedVariant = pausedCampaign.variants.find(v => v.id === targetVariant.id);
 
@@ -126,8 +128,9 @@ test("Campaign Orchestrator - Meta and Google variants launch through their hier
   }
 
   const tiktokVariants = launched.variants.filter(v => v.network === "tiktok");
-  assert.ok(tiktokVariants.every(v => v.status === "active"), "TikTok keeps the existing flat mock behavior (active) until it gets the same hierarchy depth");
-  assert.strictEqual(launched.status, "active", "Campaign is active overall since the TikTok variant is active");
+  assert.ok(tiktokVariants.every(v => v.status === "skipped"), "TikTok is coming-soon: its variants are skipped at launch, not published");
+  assert.ok(tiktokVariants.every(v => !v.externalId), "skipped TikTok variants never get an external id");
+  assert.strictEqual(launched.status, "paused", "Campaign is paused overall (Meta/Google paused, TikTok skipped — no active variant)");
 });
 
 test("Campaign Orchestrator - buildCampaignFromStrategy applies each network's real copy limits to its own variant, not one shared truncation", async () => {

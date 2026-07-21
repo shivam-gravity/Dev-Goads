@@ -14,6 +14,8 @@ import { getStrategy } from "../strategy/strategyEngine.js";
 import { applyCopyLimitsForNetwork } from "../strategy/platformCopyLimits.js";
 import { getBusiness } from "../business/businessService.js";
 import { eventBus } from "../../infra/eventBus.js";
+import { ensureFuseGuardrails } from "../automation/campaignFuse.js";
+import { logger } from "../logger/logger.js";
 
 export interface CampaignLaunchedEvent {
   campaignId: string;
@@ -31,7 +33,7 @@ const adapters: Record<AdNetwork, AdAdapter & Partial<HierarchyCapableAdapter>> 
   tiktok: tiktokAdapter,
 };
 
-async function saveCampaign(campaign: Campaign): Promise<void> {
+export async function saveCampaign(campaign: Campaign): Promise<void> {
   await prisma.campaign.upsert({
     where: { id: campaign.id },
     create: { id: campaign.id, businessId: campaign.businessId, workspaceId: campaign.workspaceId, data: campaign as any, updatedAt: new Date(campaign.updatedAt) },
@@ -361,20 +363,12 @@ export async function launchCampaign(campaignId: string, workspaceId = "demo"): 
   const googleVariants = campaign.variants.filter((v) => v.network === "google");
   const otherVariants = campaign.variants.filter((v) => v.network !== "meta" && v.network !== "google");
 
+  // Only Meta + Google are live. TikTok (and any other network) is "coming soon": we do NOT call
+  // its adapter to launch, so it never gets an externalId and never spends. Marked "skipped" so
+  // it's visibly not-launched rather than silently failing. Flip this back on (restore the
+  // adapter.launchVariant loop) when the network graduates from coming-soon.
   for (const variant of otherVariants) {
-    const adapter = adapters[variant.network];
-    try {
-      const result = await adapter.launchVariant({
-        campaignId: campaign.id,
-        variantId: variant.id,
-        creative: variant.creative,
-        dailyBudgetCents: perVariantBudget,
-      });
-      variant.externalId = result.externalId;
-      variant.status = result.status;
-    } catch (err) {
-      variant.status = "failed";
-    }
+    variant.status = "skipped";
   }
 
   if (metaVariants.length) {
@@ -399,6 +393,17 @@ export async function launchCampaign(campaignId: string, workspaceId = "demo"): 
       : "failed";
   campaign.updatedAt = new Date().toISOString();
   await saveCampaign(campaign);
+
+  // Seed the always-on safety guardrails ("fuse") for this workspace the moment a campaign goes
+  // live, so absolute max-CPA / min-ROAS / spend-cap protection is active by default rather than
+  // only when a user hand-creates rules. Idempotent + best-effort: never block or fail a launch on it.
+  if (campaign.status !== "failed" && campaign.workspaceId) {
+    try {
+      await ensureFuseGuardrails(campaign.workspaceId);
+    } catch (err) {
+      logger.warn(`launchCampaign: failed to seed fuse guardrails for ${campaign.workspaceId}`, err);
+    }
+  }
 
   // Fire-and-forget: today's only subscriber just logs (see src/infra/eventHandlers.ts),
   // but this is the exact seam roadmap Phase 3 replaces with a Kafka producer once the

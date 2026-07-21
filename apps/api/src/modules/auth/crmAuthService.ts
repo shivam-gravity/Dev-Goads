@@ -5,6 +5,7 @@ import { CRM_JWT_SHARED_SECRET } from "../../infra/env.js";
 import { issueToken, type User } from "./authService.js";
 import { issueRefreshToken } from "./refreshTokenService.js";
 import { setMetaOAuthConnection, setGoogleManualConnection } from "../integrations/integrationService.js";
+import { fetchAdAccountCurrency } from "../integrations/metaOAuth.js";
 
 interface CrmMetaIntegration {
   adAccountId: string;
@@ -217,12 +218,18 @@ export async function crmLogin(signedToken: string): Promise<CrmAuthResult> {
   }
 
   if (payload.metaIntegration?.accessToken) {
+    // The CRM token carries the ad-account id but not its billing currency. Hardcoding "USD" here
+    // mis-converts budgets on non-USD accounts (Meta's minor units + minimum-budget floor are
+    // currency-specific), so an INR account silently fails to publish. Fetch the real currency from
+    // Meta; fall back to USD only if the lookup fails so login never blocks on it.
+    const currency =
+      (await fetchAdAccountCurrency(payload.metaIntegration.accessToken, payload.metaIntegration.adAccountId)) ?? "USD";
     await setMetaOAuthConnection(workspaceId, {
       accessToken: payload.metaIntegration.accessToken,
       expiresInSeconds: 60 * 24 * 60 * 60,
       adAccountId: payload.metaIntegration.adAccountId,
       adAccountName: payload.businessName || "CRM Ad Account",
-      currency: "USD",
+      currency,
       pageId: payload.metaIntegration.pageId,
     });
   }
