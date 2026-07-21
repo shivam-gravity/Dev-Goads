@@ -11146,6 +11146,16 @@ td {
   overflow-x: auto;
   border: 1px solid #f3f4f6;
   border-radius: 12px;
+  /* The table has more columns than fit on narrow/laptop widths, so it scrolls horizontally inside
+     this wrapper (page itself never overflows). Without a cue the last column just looks cut off /
+     "out of screen", so add a right-edge fade that appears only while there's more to scroll — the
+     standard "there's more this way" affordance. */
+  background:
+    linear-gradient(to right, #fff 30%, rgba(255, 255, 255, 0)) left center / 40px 100% no-repeat,
+    linear-gradient(to left, #fff 30%, rgba(255, 255, 255, 0)) right center / 40px 100% no-repeat,
+    linear-gradient(to right, rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0)) left center / 14px 100% no-repeat,
+    linear-gradient(to left, rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0)) right center / 14px 100% no-repeat;
+  background-attachment: local, local, scroll, scroll;
 }
 
 .polluxa-manager-table {
