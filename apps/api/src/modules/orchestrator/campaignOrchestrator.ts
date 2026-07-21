@@ -8,7 +8,7 @@ import { resolveAudienceTargetingForWorkspace, withAgentInterests } from "../ada
 import { isValidObjective } from "../adapters/metaObjectives.js";
 import { resolveGoogleTargetingForWorkspace, buildGoogleCampaignTargetingFromLocations, withAgentKeywords } from "../adapters/googleTargetingMapper.js";
 import { getMetaCredentials } from "../integrations/integrationService.js";
-import { getGoogleAdsCredentials } from "../integrations/googleOAuth.js";
+import { getGoogleAdsCredentials, type GoogleAdsCredentials } from "../integrations/googleOAuth.js";
 import type { AdNetwork, Campaign, CampaignSuggestion, CampaignVariant, CreativeAssetRef } from "../../types/index.js";
 import { getStrategy } from "../strategy/strategyEngine.js";
 import { applyCopyLimitsForNetwork } from "../strategy/platformCopyLimits.js";
@@ -267,15 +267,19 @@ async function launchGoogleHierarchy(
   workspaceId: string,
   perVariantBudgetCents: number
 ): Promise<void> {
-  const workspaceCredentials = (await getGoogleAdsCredentials(workspaceId)) ?? undefined;
-  // Same builder-selection override pattern as launchMetaHierarchy: the campaign builder
-  // lets a user pick a specific Google Ads customer per campaign instead of always using
-  // the workspace's default Integration connection.
-  const credentials = workspaceCredentials
-    ? { ...workspaceCredentials, customerId: campaign.googleCustomerId ?? workspaceCredentials.customerId }
-    : undefined;
-  const accessToken = credentials?.accessToken ?? null;
-  const developerToken = credentials?.developerToken ?? null;
+  // Same builder-selection override pattern as launchMetaHierarchy: the campaign builder lets a
+  // user pick a specific Google Ads customer per campaign instead of always using the workspace's
+  // default Integration connection.
+  const applyCustomerOverride = (c?: GoogleAdsCredentials) =>
+    c ? { ...c, customerId: campaign.googleCustomerId ?? c.customerId } : undefined;
+  let credentials = applyCustomerOverride((await getGoogleAdsCredentials(workspaceId)) ?? undefined);
+
+  // A stored Google access token can be dead while its recorded expiry still reads "in the future"
+  // (e.g. the CRM manual-connect path stores an optimistic tokenExpiresAt) — so the normal refresh
+  // gate never fires and the first live call 401s. Probe the first API call (campaign container),
+  // and on an auth failure force a token refresh from the refresh token and retry ONCE. This runs
+  // before any variant is persisted, so a clean top-of-hierarchy retry has no partial-state risk.
+  const isAuthError = (err: unknown) => /\b401\b|UNAUTHENTICATED|invalid authentication/i.test(String((err as Error)?.message ?? err));
 
   const groups = new Map<string, CampaignVariant[]>();
   for (const variant of variants) {
@@ -284,22 +288,40 @@ async function launchGoogleHierarchy(
     groups.get(key)!.push(variant);
   }
   const [firstAudienceName] = groups.keys();
-  // Locations collected directly in the builder take precedence over the SavedAudience-name
-  // bridge (which strategy-generated variants without builder state still rely on).
-  const campaignLevelGeoTargeting = campaign.locations?.length
-    ? await buildGoogleCampaignTargetingFromLocations(accessToken, developerToken, campaign.locations)
-    : (await resolveGoogleTargetingForWorkspace(workspaceId, firstAudienceName, accessToken, developerToken)).campaign;
 
-  const conversionActionResourceName = credentials && campaign.googleConversionActionId
-    ? `customers/${credentials.customerId}/conversionActions/${campaign.googleConversionActionId}`
-    : undefined;
+  let accessToken = credentials?.accessToken ?? null;
+  let developerToken = credentials?.developerToken ?? null;
 
-  let campaignExternalId: string;
-  try {
-    const container = await googleAdapter.createCampaignContainer!(
+  const buildContainer = async () => {
+    // Locations collected directly in the builder take precedence over the SavedAudience-name
+    // bridge (which strategy-generated variants without builder state still rely on).
+    const campaignLevelGeoTargeting = campaign.locations?.length
+      ? await buildGoogleCampaignTargetingFromLocations(accessToken, developerToken, campaign.locations)
+      : (await resolveGoogleTargetingForWorkspace(workspaceId, firstAudienceName, accessToken, developerToken)).campaign;
+    const conversionActionResourceName = credentials && campaign.googleConversionActionId
+      ? `customers/${credentials.customerId}/conversionActions/${campaign.googleConversionActionId}`
+      : undefined;
+    return googleAdapter.createCampaignContainer!(
       { name: campaign.name, objective: "SEARCH", dailyBudgetCents: campaign.dailyBudgetCents, targeting: campaignLevelGeoTargeting, conversionActionResourceName },
       credentials
     );
+  };
+
+  let campaignExternalId: string;
+  try {
+    let container;
+    try {
+      container = await buildContainer();
+    } catch (err) {
+      // On an auth failure, mint a genuinely fresh token (bypassing the possibly-stale expiry gate)
+      // and retry the container once. If it still fails, fall through to the outer catch.
+      if (!isAuthError(err)) throw err;
+      logger.warn(`launchGoogleHierarchy: auth error on first call for ${workspaceId} — force-refreshing token and retrying once`);
+      credentials = applyCustomerOverride((await getGoogleAdsCredentials(workspaceId, { forceRefresh: true })) ?? undefined);
+      accessToken = credentials?.accessToken ?? null;
+      developerToken = credentials?.developerToken ?? null;
+      container = await buildContainer();
+    }
     campaignExternalId = container.externalId;
     campaign.externalIds = { ...campaign.externalIds, google: campaignExternalId };
   } catch {

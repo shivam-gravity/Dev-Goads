@@ -208,7 +208,10 @@ export interface GoogleAdsCredentials {
  * The developer token prefers a per-workspace one from a manual connect, falling back to
  * the global GOOGLE_ADS_DEVELOPER_TOKEN env var used by the OAuth-connect path.
  */
-export async function getGoogleAdsCredentials(workspaceId: string): Promise<GoogleAdsCredentials | null> {
+export async function getGoogleAdsCredentials(
+  workspaceId: string,
+  opts: { forceRefresh?: boolean } = {},
+): Promise<GoogleAdsCredentials | null> {
   const raw = await getRawGoogleTokenData(workspaceId);
   if (!raw) return null;
 
@@ -219,8 +222,14 @@ export async function getGoogleAdsCredentials(workspaceId: string): Promise<Goog
     return { accessToken: raw.accessToken, customerId: raw.customerId, developerToken };
   }
 
+  // forceRefresh bypasses the expiry gate. A stored token can be dead while tokenExpiresAt still
+  // reads "in the future" — e.g. the CRM manual-connect path records an optimistic expiry but the
+  // underlying access token was already revoked/expired at the source. In that case the normal
+  // gate below never refreshes and every call 401s. The Google adapter passes forceRefresh after a
+  // 401 to recover by minting a genuinely fresh token from the refresh token. See adsMutate.
   const expiresAt = new Date(raw.tokenExpiresAt).getTime();
-  if (Number.isFinite(expiresAt) && expiresAt - Date.now() > REFRESH_SKEW_MS) {
+  const stillValid = Number.isFinite(expiresAt) && expiresAt - Date.now() > REFRESH_SKEW_MS;
+  if (!opts.forceRefresh && stillValid) {
     return { accessToken: raw.accessToken, customerId: raw.customerId, developerToken };
   }
 
