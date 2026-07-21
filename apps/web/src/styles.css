@@ -6596,7 +6596,13 @@ td {
 
 .sidebar-content.polluxa-content {
   padding: 24px 32px;
-  max-width: 1200px;
+  /* Wider cap + LEFT-aligned. The base .sidebar-content uses `margin: 0 auto`, which centers the
+     capped content inside the area next to the sidebar — with a collapsed 76px rail that leaves a
+     big empty gutter on the right and makes the page look shifted/floating rather than anchored to
+     the sidebar. Anchor it left (margin-right auto absorbs extra space) and raise the cap so wide
+     screens actually use the room. */
+  max-width: 1600px;
+  margin: 0 auto 0 0;
 }
 
 /* Collapsed rail that expands on hover, pushing the main content over */
