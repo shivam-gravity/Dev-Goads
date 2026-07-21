@@ -11,7 +11,18 @@ function fakeRecommendation(overrides: Partial<Recommendation> = {}): Recommenda
   };
 }
 
+// "Zero network calls" requires neutralizing EVERY provider the LLM router can reach, not just
+// OpenAI — it falls back through Mistral/OpenRouter/Google and the KEYLESS legs (Bedrock if
+// AWS_BEARER_TOKEN_BEDROCK is set, and local Ollama, which always attempts localhost). Deleting
+// only OPENAI_API_KEY lets a fallback leg fire a real fetch and trip the fetchCalled assertion.
 delete process.env.OPENAI_API_KEY;
+delete process.env.GROQ_API_KEY;
+delete process.env.OPENROUTER_API_KEY;
+delete process.env.MISTRAL_API_KEY;
+delete process.env.GEMINI_API_KEY;
+delete process.env.AWS_BEARER_TOKEN_BEDROCK;
+process.env.LLM_OLLAMA_FALLBACK = "false";
+process.env.LLM_BEDROCK_FALLBACK = "false";
 const t = Date.now();
 const { analyzeTradeoffs } = await import(`../research/decision/tradeoff-engine.js?t=${t}`);
 

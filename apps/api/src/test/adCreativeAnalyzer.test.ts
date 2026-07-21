@@ -22,14 +22,31 @@ delete process.env.GEMINI_API_KEY;
 const t = Date.now();
 const { analyzeAdCreative, analyzeNewCompetitorAds } = await import(`../research/creative-intelligence/AdCreativeAnalyzer.js?t=${t}`);
 
+// Deleting cloud API keys is NOT enough to force the unconfigured/fallback path: the llmRouter
+// fallback chain also tries KEYLESS local providers (Ollama on localhost) and paid Bedrock, so on
+// a dev box with Ollama running the router returns a real 0.7-confidence analysis instead of the
+// 0.1 fallback. And the env kill-switches (LLM_TASK_FALLBACK_ENABLED etc.) are captured at
+// llmRouter module-load, so an earlier test file in the same `npm test` process that already
+// imported llmRouter freezes them before we can set them — i.e. env toggles are load-order-fragile.
+// Stub global.fetch to reject instead: every provider's HTTP call fails, runStructured returns null,
+// and analyzeAdCreative deterministically hits fallbackFields() regardless of keys/Ollama/load order.
+// (Same "no network → labeled fallback" approach as audienceIntelligenceEngine.test.ts.)
+function withNoNetwork<T>(fn: () => Promise<T>): Promise<T> {
+  const original = global.fetch;
+  global.fetch = (async () => { throw new Error("network disabled in test"); }) as typeof fetch;
+  return fn().finally(() => { global.fetch = original; });
+}
+
 test("analyzeAdCreative - with no LLM provider configured, degrades to a labeled low-confidence fallback", async () => {
-  const result = await analyzeAdCreative({ id: "ad-1", platform: "meta", headline: "Big Sale", description: "50% off", cta: null, landingPageUrl: null });
+  const result = await withNoNetwork(() =>
+    analyzeAdCreative({ id: "ad-1", platform: "meta", headline: "Big Sale", description: "50% off", cta: null, landingPageUrl: null }));
   assert.strictEqual(result.confidence, 0.1);
   assert.match(result.hook, /no live analysis performed/);
 });
 
 test("analyzeAdCreative - an ad with no headline/description gets the same fallback confidence as one with content when there's no API key", async () => {
-  const empty = await analyzeAdCreative({ id: "ad-1", platform: "meta", headline: null, description: null, cta: null, landingPageUrl: null });
+  const empty = await withNoNetwork(() =>
+    analyzeAdCreative({ id: "ad-1", platform: "meta", headline: null, description: null, cta: null, landingPageUrl: null }));
   assert.strictEqual(empty.confidence, 0.1);
 });
 
@@ -60,12 +77,12 @@ async function cleanup(businessId: string, competitorId: string): Promise<void> 
 test("analyzeNewCompetitorAds - analyzes every ad lacking a creative-analysis row and persists the result", async () => {
   const { businessId, competitorId, adWithContentId } = await createFixtureCompetitorWithAds();
   try {
-    const analyzed = await analyzeNewCompetitorAds(competitorId);
+    const analyzed = await withNoNetwork(() => analyzeNewCompetitorAds(competitorId));
     assert.strictEqual(analyzed, 2, "expected both ads (with and without content) to be analyzed");
 
     const analysis = await prisma.adCreativeAnalysis.findUnique({ where: { competitorAdId: adWithContentId } });
     assert.ok(analysis, "expected an AdCreativeAnalysis row for the ad with content");
-    assert.strictEqual(analysis?.confidence, 0.1, "no OPENAI_API_KEY in this test env — expect the labeled fallback");
+    assert.strictEqual(analysis?.confidence, 0.1, "network disabled in test — expect the labeled fallback");
   } finally {
     await cleanup(businessId, competitorId);
   }
