@@ -10755,6 +10755,13 @@ td {
   align-items: stretch;
 }
 
+/* Grid children default to min-width:auto, so a long insight sentence forces its track wider than
+   the 3fr/2fr share and the card overflows its column (clipped at the right edge). min-width:0 lets
+   the tracks hold their fraction and the text wrap instead. */
+.polluxa-analysis-row > * {
+  min-width: 0;
+}
+
 .polluxa-analysis-card {
   border: 1px solid #e5e7eb;
   border-radius: 14px;
@@ -11427,10 +11434,20 @@ td {
   color: #4b5563;
 }
 
-@media (max-width: 900px) {
+/* The Overview's nested grids (overview-grid 2fr/1fr → analysis-row 3fr/2fr → opt column) are
+   fine on wide desktops but cramp and overflow on smaller/zoomed windows well before 900px. Stack
+   the top-level overview + analysis row to a single column at a much higher breakpoint (1200px) so
+   each section gets full width; the finer stat/opt grids collapse at 900px as before. */
+@media (max-width: 1200px) {
 
   .polluxa-overview-grid,
-  .polluxa-analysis-row,
+  .polluxa-analysis-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+
   .polluxa-stat-grid,
   .polluxa-opt-mode-grid {
     grid-template-columns: 1fr;
