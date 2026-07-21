@@ -53,13 +53,111 @@ function crmRoleToWorkspaceRole(crmRole: CrmPayload["role"]): string {
   }
 }
 
+export interface ExternalLoginInput {
+  email: string;
+  name?: string;
+  source?: string;
+  externalUserId?: string;
+  businessId?: string;
+  businessName?: string;
+  websiteUrl?: string;
+  partnerId?: string | null;
+}
+
+/**
+ * Shared-secret external login for the CRM data-plane proxy (sales_tech_backend/
+ * integration/devgoads_proxy.py). Unlike crmLogin (a signed-JWT browser SSO), this is a
+ * server-to-server call under /api/crm (x-internal-service-key) that maps a CRM identity to a
+ * Dev-Goads workspace + user JWT so the CRM's "Automated Ads Insights" tab can read this
+ * workspace's ads data. Idempotent: resolves-or-creates the same user/workspace/business the
+ * SSO path uses (workspace id `crm-biz-<businessId>`, business id `crm-biz-entity-<businessId>`)
+ * so both entry points land on the SAME workspace and see the same campaigns/insights.
+ */
+export async function externalLogin(input: ExternalLoginInput): Promise<{ workspaceId: string; accessToken: string; businessId: string }> {
+  const email = input.email.toLowerCase().trim();
+  const name = input.name?.trim() || email;
+  const crmUserId = input.externalUserId ? String(input.externalUserId) : undefined;
+  // Normalize the business identifier so this MUST land on the SAME workspace as the SSO path
+  // (crmLogin, which builds `crm-biz-<businessId>` from the signed token's raw business.id).
+  // The CRM's two identity sources disagree on form: the SSO token sends the bare PK (e.g. "1"),
+  // while this proxy sometimes forwards an already-workspace-shaped value (e.g. "crm-biz-1") as
+  // businessId — which naively re-prefixed to "crm-biz-crm-biz-1", a DIFFERENT (empty) workspace
+  // than the one the campaign actually launched into. Stripping any leading `crm-biz-` collapses
+  // both forms to one canonical key, so insights read the same workspace the ads launched in.
+  const rawBiz = input.businessId ? String(input.businessId) : "";
+  const canonicalBiz = rawBiz.replace(/^crm-biz-/, "");
+  // Fall back to the email when no businessId is supplied, so a workspace is still deterministic
+  // per CRM identity rather than colliding across users.
+  const bizKey = canonicalBiz || `email-${email}`;
+  const crmPartnerId = input.partnerId ? String(input.partnerId) : null;
+  const now = new Date();
+
+  const existingUser = await prisma.user.findFirst({
+    where: { OR: [...(crmUserId ? [{ crmUserId }] : []), { email }] },
+  });
+  const userId = existingUser?.id ?? randomUUID();
+
+  if (existingUser) {
+    await prisma.user.update({
+      where: { id: existingUser.id },
+      data: { name, isExternal: true, crmUserId, crmBusinessId: input.businessId ? String(input.businessId) : undefined, crmPartnerId: crmPartnerId ?? undefined },
+    });
+  } else {
+    await prisma.user.create({
+      data: { id: userId, email, name, isExternal: true, crmUserId, crmBusinessId: input.businessId ? String(input.businessId) : undefined, crmPartnerId, createdAt: now },
+    });
+  }
+
+  const workspaceId = `crm-biz-${bizKey}`;
+  const existingWorkspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
+  if (!existingWorkspace) {
+    await prisma.workspace.create({
+      data: { id: workspaceId, name: input.businessName || "CRM Business", ownerId: userId, plan: "starter", createdAt: now },
+    });
+  }
+
+  const existingMember = await prisma.workspaceMember.findFirst({ where: { workspaceId, userId } });
+  if (!existingMember) {
+    await prisma.workspaceMember.create({
+      data: { id: randomUUID(), workspaceId, userId, role: "admin", invitedAt: now, joinedAt: now },
+    });
+  }
+
+  const businessId = `crm-biz-entity-${bizKey}`;
+  const existingBusiness = await prisma.business.findUnique({ where: { id: businessId } });
+  if (!existingBusiness) {
+    let domain: string | undefined;
+    try {
+      domain = input.websiteUrl ? new URL(input.websiteUrl).hostname : undefined;
+    } catch {
+      domain = undefined;
+    }
+    await prisma.business.create({
+      data: {
+        id: businessId,
+        workspaceId,
+        domain,
+        data: { name: input.businessName ?? "CRM Business", domain, createdAt: now.toISOString() },
+        createdAt: now,
+      },
+    });
+  }
+
+  const accessToken = issueToken(userId, workspaceId, businessId);
+  return { workspaceId, accessToken, businessId };
+}
+
 export async function crmLogin(signedToken: string): Promise<CrmAuthResult> {
   const payload = jwt.verify(signedToken, CRM_JWT_SHARED_SECRET) as CrmPayload;
 
   const crmUserId = String(payload.sub);
   const email = payload.email.toLowerCase().trim();
   const name = payload.name?.trim() || email;
-  const crmBusinessId = String(payload.businessId);
+  // Canonicalize identically to externalLogin (strip any leading crm-biz-) so the SSO path and
+  // the insights external-login path ALWAYS resolve to the same `crm-biz-<id>` workspace for a
+  // given CRM business — otherwise a campaign launched via SSO and the insights read via the
+  // proxy land in two different workspaces and the insights tab shows an empty one.
+  const crmBusinessId = String(payload.businessId).replace(/^crm-biz-/, "");
   const crmPartnerId = payload.partnerId ? String(payload.partnerId) : null;
 
   const existingUser = await prisma.user.findFirst({

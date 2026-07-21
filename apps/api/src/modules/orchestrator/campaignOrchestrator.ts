@@ -88,6 +88,12 @@ export async function buildCampaignFromStrategy(strategyId: string, name: string
   const campaign: Campaign = {
     id: randomUUID(),
     businessId: strategy.businessId,
+    // Stamp the owning workspace at BUILD time (from the business), not only at launch. Without
+    // this a generated-but-unlaunched campaign persisted with workspaceId=null and was invisible
+    // to every workspace-scoped query — including the CRM Automated Insights tab, which filters
+    // campaigns by workspaceId. launchCampaign still sets it too (defensive), but stamping here
+    // means the campaign belongs to its workspace the moment it's created.
+    ...(business?.workspaceId ? { workspaceId: business.workspaceId } : {}),
     strategyId,
     name,
     status: "draft",
