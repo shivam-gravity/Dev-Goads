@@ -8015,7 +8015,7 @@ td {
 .copilot-drawer {
   position: fixed;
   top: 0;
-  right: -420px;
+  right: 0;
   bottom: 0;
   width: 400px;
   max-width: 100vw;
@@ -8025,11 +8025,22 @@ td {
   display: flex;
   flex-direction: column;
   z-index: 1000;
-  transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  /* Park off-screen with a TRANSFORM, not `right: -420px`. A negative `right` still counts toward
+     the document's scrollable width, so the closed drawer created ~400px of empty space to the
+     right that the page could scroll into ("out of screen on the right"). translateX moves it out
+     without extending scroll width; visibility:hidden + pointer-events:none make it fully inert
+     when closed so it never intercepts clicks or contributes layout. */
+  transform: translateX(100%);
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s linear 0.3s;
 }
 
 .copilot-drawer.open {
-  right: 0;
+  transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .copilot-header {
