@@ -46,7 +46,14 @@ export class CompanyProvider implements ResearchProvider<CompanyData> {
           websiteExcerpt: input.websiteExcerpt,
           maxTokens: 768,
           tool: COMPANY_TOOL,
-          structurePrompt: () => `Produce a structured company profile for ${label} from the verified facts above. State what the company does, its products, pricing, and positioning strictly from those facts — do not invent funding/HQ/employee figures the facts don't contain (use "Unknown" for those).\n\nURL: ${input.url}`,
+          // Identity is anchored on the SITE (URL + its own facts), NOT on the passed-in name. The
+          // "name" here is the workspace/business-record label the user created (e.g. a generic
+          // "Master's Business"), which is often wrong for the URL being researched and, if trusted,
+          // makes the model invent an identity to fit the label (e.g. reading "Master's" as a
+          // Master's-degree/education product). Determine the real company/product name and what it
+          // does strictly from the facts and site content; ignore the provided name where the facts
+          // contradict it.
+          structurePrompt: () => `Produce a structured company profile for the business at ${input.url}, based STRICTLY on the verified facts above and the site content — determine the real company/product name and what it does from those, not from any label. (For reference only, the user labeled this workspace ${input.businessName ? `"${input.businessName}"` : "(no name given)"}, but that label may be generic or wrong for this URL — IGNORE it wherever the facts say otherwise.) State products, pricing, and positioning strictly from the facts; use "Unknown" for funding/HQ/employee figures the facts don't contain.\n\nURL: ${input.url}`,
         });
         if (factResult) return { ...factResult, evidence: citationsToEvidence(factResult.citations) };
       }
