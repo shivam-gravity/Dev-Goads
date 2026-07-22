@@ -26,7 +26,19 @@ const worker = new Worker(
       },
     });
   },
-  { connection: redisConnection, concurrency: 2 }
+  // A full generation runs 6-13 min inside this one handler. BullMQ's DEFAULT lockDuration/
+  // stalledInterval is 30s — far shorter than the job — so the lock expired mid-run and BullMQ
+  // dead-lettered a still-running job with "stalled more than allowable limit". Set the lock to
+  // 15 min (above the pipeline's own 10-min lock TTL), renew on the usual lockDuration/2 timer,
+  // check for genuinely-dead jobs every 60s, and tolerate 2 stalls before giving up. concurrency:1
+  // so two multi-minute pipelines don't starve the single event loop and trip the stall check.
+  {
+    connection: redisConnection,
+    concurrency: 1,
+    lockDuration: 15 * 60 * 1000,
+    stalledInterval: 60 * 1000,
+    maxStalledCount: 2,
+  }
 );
 
 worker.on("completed", (job: Job) => logger.info(`Campaign generation job completed: ${job.data?.jobId}`));
