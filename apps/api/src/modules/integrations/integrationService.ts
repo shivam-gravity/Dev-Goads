@@ -88,6 +88,10 @@ export interface MetaOAuthConnectionInput {
   timezoneName?: string;
   accountStatus?: string;
   pageId?: string;
+  /** Page-scoped access token for Page-permission-gated Graph endpoints (leadgen_forms/leads),
+   * distinct from the ad-account token. Encrypted into settings.pageAccessTokenEncrypted, which
+   * getMetaCredentials already reads. Falls back to the ad-account token when not supplied. */
+  pageAccessToken?: string;
   pageName?: string;
   /** Business Manager name owning the ad account — distinct from the ad account's own name (e.g. "Polluxa Marketing" vs. "Polluxa Ads"). */
   businessName?: string;
@@ -125,8 +129,14 @@ export async function setMetaOAuthConnection(workspaceId: string, input: MetaOAu
       // carry a stale real/mock token from a previous connect, which would otherwise survive
       // the spread above and make getMetaCredentials think this is a usable real connection.
       ...(input.mock
-        ? { accessTokenEncrypted: undefined, tokenExpiresAt: undefined }
-        : { accessTokenEncrypted: encryptToken(input.accessToken), tokenExpiresAt: new Date(Date.now() + input.expiresInSeconds * 1000).toISOString() }),
+        ? { accessTokenEncrypted: undefined, tokenExpiresAt: undefined, pageAccessTokenEncrypted: undefined }
+        : {
+            accessTokenEncrypted: encryptToken(input.accessToken),
+            tokenExpiresAt: new Date(Date.now() + input.expiresInSeconds * 1000).toISOString(),
+            // Only overwrite the stored page token when the caller actually supplied one — a
+            // reconnect that omits it should preserve the previously-stored pageAccessTokenEncrypted.
+            ...(input.pageAccessToken ? { pageAccessTokenEncrypted: encryptToken(input.pageAccessToken) } : {}),
+          }),
       currency: input.currency,
       timezoneName: input.timezoneName,
       accountStatus: input.accountStatus,

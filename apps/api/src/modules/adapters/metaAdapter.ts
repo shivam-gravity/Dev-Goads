@@ -157,16 +157,21 @@ async function setStatus(externalId: string, status: "PAUSED" | "ACTIVE", creden
 export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
   network: "meta",
 
-  async launchVariant(input: LaunchVariantInput): Promise<LaunchVariantResult> {
+  async launchVariant(input: LaunchVariantInput, credentials?: MetaCredentials): Promise<LaunchVariantResult> {
     logger.info(`Initializing launchVariant on Meta Marketing network for campaign: ${input.campaignId}`);
 
-    if (!hasLiveCredentials) {
+    // Resolve per-workspace credentials FIRST (explicit > global env > null). Never read the
+    // global env tokens without checking the explicit workspace credentials — otherwise a caller
+    // that doesn't thread creds through would publish into whatever global ad account the env
+    // vars happen to point at, cross-tenant.
+    const creds = resolveCredentials(credentials);
+    if (!creds) {
       logger.info("Credentials absent. Falling back to Meta Ads mock placement.");
       return { externalId: mockId("meta_ad"), status: "active" };
     }
 
     try {
-      const url = `${GRAPH_BASE}/act_${ENV_META_AD_ACCOUNT_ID}/ads?access_token=${ENV_META_ACCESS_TOKEN}`;
+      const url = `${GRAPH_BASE}/act_${creds.adAccountId}/ads?access_token=${creds.accessToken}`;
       const res = await fetchWithRetry(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -226,27 +231,36 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     const creds = resolveCredentials(credentials);
 
     if (!creds) {
-      const impressions = Math.floor(2000 + Math.random() * 8000);
-      const reach = Math.floor(impressions * (0.55 + Math.random() * 0.3));
-      const clicks = Math.floor(impressions * (0.01 + Math.random() * 0.04));
-      const conversions = Math.floor(clicks * (0.02 + Math.random() * 0.08));
-      const spendCents = Math.floor(clicks * (30 + Math.random() * 70));
-      logger.info(`Offline mode. Generated mock insights metrics for ${externalId}`);
-      return { impressions, reach, clicks, conversions, spendCents };
+      // No connected Meta account → NO fabricated metrics. Return real zeros so the pipeline and
+      // every downstream surface (Analytics, Dashboard, Ads Manager) show an honest "no data yet"
+      // state instead of Math.random()-invented performance presented as real.
+      logger.info(`No Meta credentials for ${externalId} — returning zero metrics (no fabricated data).`);
+      return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0 };
     }
 
     try {
-      const url = `${GRAPH_BASE}/${externalId}/insights?fields=impressions,reach,clicks,actions,spend&access_token=${creds.accessToken}`;
+      // action_values carries the real purchase VALUE (revenue) per action_type, parallel to
+      // `actions` which carries the COUNT — both are needed for true ROAS (revenue / spend).
+      const url = `${GRAPH_BASE}/${externalId}/insights?fields=impressions,reach,clicks,actions,action_values,spend&access_token=${creds.accessToken}`;
       const res = await fetchWithRetry(url, { method: "GET" });
       const json = (await res.json()) as any;
 
       if (!json || !json.data) {
         logger.warn(`No stats returned in data array for Meta Ads resource: ${externalId}. Returning zero metrics.`);
-        return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0 };
+        return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0 };
       }
 
       const row = json.data[0] || {};
       const conversions = (row.actions || []).find((a: any) => a.action_type === "offsite_conversion")?.value ?? 0;
+      // Real revenue: the monetary value Meta attributes to the purchase pixel. Prefer the
+      // generic `offsite_conversion` value; fall back to the explicit purchase action types some
+      // pixel setups report under instead. In the account currency (dollars) → convert to cents.
+      const actionValues: any[] = row.action_values || [];
+      const revenueDollars =
+        actionValues.find((a) => a.action_type === "offsite_conversion")?.value ??
+        actionValues.find((a) => a.action_type === "offsite_conversion.fb_pixel_purchase")?.value ??
+        actionValues.find((a) => a.action_type === "purchase")?.value ??
+        0;
 
       const stats = {
         impressions: Number(row.impressions ?? 0),
@@ -254,6 +268,7 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
         clicks: Number(row.clicks ?? 0),
         conversions: Number(conversions),
         spendCents: Math.round(Number(row.spend ?? 0) * 100),
+        revenueCents: Math.round(Number(revenueDollars) * 100),
       };
 
       logger.info(`Meta Ads insights fetched: Clicks: ${stats.clicks}, Spend: ${stats.spendCents} cents`);

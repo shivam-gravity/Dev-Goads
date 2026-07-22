@@ -20,7 +20,7 @@ export interface SetBudgetInput {
 
 export interface AdAdapter {
   readonly network: AdNetwork;
-  launchVariant(input: LaunchVariantInput): Promise<LaunchVariantResult>;
+  launchVariant(input: LaunchVariantInput, credentials?: MetaCredentials): Promise<LaunchVariantResult>;
   pauseVariant(externalId: string, credentials?: MetaCredentials): Promise<void>;
   activateVariant(externalId: string, credentials?: MetaCredentials): Promise<void>;
   setBudget(input: SetBudgetInput, credentials?: MetaCredentials): Promise<void>;

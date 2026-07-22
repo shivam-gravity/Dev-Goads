@@ -12,6 +12,9 @@ interface CrmMetaIntegration {
   accessToken: string;
   pageId?: string;
   pageAccessToken?: string;
+  /** Remaining lifetime of accessToken as reported by the CRM. When absent we assume a
+   * long-lived (60-day) token; see the crmLogin handoff for why hardcoding that was a bug. */
+  expiresInSeconds?: number;
 }
 
 interface CrmGoogleIntegration {
@@ -226,11 +229,15 @@ export async function crmLogin(signedToken: string): Promise<CrmAuthResult> {
       (await fetchAdAccountCurrency(payload.metaIntegration.accessToken, payload.metaIntegration.adAccountId)) ?? "USD";
     await setMetaOAuthConnection(workspaceId, {
       accessToken: payload.metaIntegration.accessToken,
-      expiresInSeconds: 60 * 24 * 60 * 60,
+      // Prefer the CRM-reported lifetime; fall back to 60 days only when it's missing. Hardcoding
+      // 60 days made the DB treat a short-lived token as valid for two months, so the first live
+      // publish 401'd with no recovery path (unlike Google's refresh-on-401).
+      expiresInSeconds: payload.metaIntegration.expiresInSeconds ?? 60 * 24 * 60 * 60,
       adAccountId: payload.metaIntegration.adAccountId,
       adAccountName: payload.businessName || "CRM Ad Account",
       currency,
       pageId: payload.metaIntegration.pageId,
+      pageAccessToken: payload.metaIntegration.pageAccessToken,
     });
   }
 
