@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, Campaign, AdSet, Ad, AdInsightsResponse, Insight, LiveInsights } from "../api/client.js";
+import { api, Campaign, AdSet, Ad, AdInsightsResponse, Insight, LiveInsights, NetworkSlice } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.js";
 import StatusBadge from "../components/StatusBadge.js";
 import Reveal from "../components/Reveal.js";
@@ -369,6 +369,20 @@ export default function AdsManager({ businessId }: { businessId: string }) {
   const adSetOnNetwork = (s: AdSet) => { const p = campaignById[s.campaignId]; return p ? campaignOnNetwork(p) : network === "meta"; };
   const adOnNetwork = (a: Ad) => { const p = adSetById[a.adSetId]; return p ? adSetOnNetwork(p) : network === "meta"; };
 
+  // The active network's metric slice for a campaign — a dual-network campaign shows only its Meta
+  // numbers under the Meta tab and only its Google numbers under Google, with the daily budget split
+  // proportionally (see the /live-insights byNetwork breakdown). Falls back to the campaign-wide
+  // aggregate for older responses that predate byNetwork (backward-compatible).
+  const sliceFor = (c: Campaign): (NetworkSlice | LiveInsights) & { dailyBudgetCents?: number } | undefined => {
+    const li = liveInsightsByCampaign[c.id];
+    return li?.byNetwork?.[network as "meta" | "google"] ?? li;
+  };
+  // The network's share of a campaign's daily budget (from the slice when present, else the full budget).
+  const budgetForNetwork = (c: Campaign): number => {
+    const slice = sliceFor(c) as NetworkSlice | undefined;
+    return slice && "dailyBudgetCents" in slice && slice.dailyBudgetCents != null ? slice.dailyBudgetCents : c.dailyBudgetCents;
+  };
+
   const filteredCampaigns = campaigns
     .filter(campaignOnNetwork)
     .filter((c) => c.name.toLowerCase().includes(searchTerm.toLowerCase()))
@@ -390,19 +404,20 @@ export default function AdsManager({ businessId }: { businessId: string }) {
   const pagedAdSets = filteredAdSets.slice(pageStart, pageStart + pageSize);
   const pagedAds = filteredAds.slice(pageStart, pageStart + pageSize);
 
-  // Header/summary figures are scoped to the active network tab so they agree with the visible rows.
+  // Header/summary figures are scoped to the active network tab so they agree with the visible rows,
+  // using each campaign's network slice (split budget) rather than the campaign-wide aggregate.
   const networkCampaigns = campaigns.filter(campaignOnNetwork);
   const activeCount = networkCampaigns.filter((c) => c.status === "active").length;
-  const totalBudgetCents = networkCampaigns.reduce((sum, c) => sum + c.dailyBudgetCents, 0);
+  const totalBudgetCents = networkCampaigns.reduce((sum, c) => sum + budgetForNetwork(c), 0);
 
   // Column totals for the campaign table's Total row, summed across the active network's campaigns
   // (including the funnel breakdown). CPM/CPC/ROAS totals are derived from these sums downstream.
   const totals = useMemo(() => {
     return networkCampaigns
-      .map((c) => liveInsightsByCampaign[c.id])
+      .map((c) => sliceFor(c))
       .filter(Boolean)
       .reduce(
-      (acc, li) => ({
+      (acc, li: any) => ({
         spendCents: acc.spendCents + li.spendCents,
         impressions: acc.impressions + li.impressions,
         clicks: acc.clicks + li.clicks,
@@ -820,7 +835,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                         const bucket = bucketFor(c, globalIndex);
                         const recommendedCents = recommendedBudgetCents(c, globalIndex);
                         const hasSuggestion = bucket !== "maintain" && !acceptedIds.has(c.id) && !dismissedIds.has(c.id);
-                        const li = liveInsightsByCampaign[c.id];
+                        const li = sliceFor(c);
                         return (
                           <tr key={c.id}>
                             <td>
@@ -848,7 +863,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                             <td>
                               <span className="polluxa-pill goal">{c.conversionEvent || "Conversions"}</span>
                             </td>
-                            <td>${(c.dailyBudgetCents / 100).toFixed(2)}</td>
+                            <td>${(budgetForNetwork(c) / 100).toFixed(2)}</td>
                             <td>{li ? `$${(li.spendCents / 100).toFixed(2)}` : "—"}</td>
                             <td>{li ? li.impressions.toLocaleString() : "—"}</td>
                             <td>{li?.cpmCents != null ? `$${(li.cpmCents / 100).toFixed(2)}` : "—"}</td>

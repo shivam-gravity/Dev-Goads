@@ -134,6 +134,17 @@ export interface NormalizedPerformance {
   ctr: number; cpaCents: number | null; cpmCents: number | null; cpcCents: number | null; roas: number | null; conversionRate: number;
 }
 export interface FunnelMetrics { addToCart: number; addPaymentInfo: number; purchases: number; purchaseValueCents: number; }
+/** Per-network slice of a campaign's live metrics — one entry per network the campaign runs on,
+ * so a dual-network campaign can be shown as separate Meta and Google rows. dailyBudgetCents is the
+ * campaign's budget split proportionally by that network's live-variant count. */
+export interface NetworkSlice {
+  impressions: number; reach: number; clicks: number; conversions: number; spendCents: number; revenueCents: number;
+  dailyBudgetCents: number; liveVariantCount: number;
+  ctr: number; cpcCents: number | null; cpmCents: number | null; roas: number | null;
+  funnel: FunnelMetrics;
+  costPerAddToCartCents: number | null; costPerAddPaymentInfoCents: number | null; costPerPurchaseCents: number | null;
+  addToCartRate: number | null; purchaseRate: number | null;
+}
 export interface LiveInsights {
   campaignId: string; isLive: boolean;
   impressions: number; reach: number; clicks: number; conversions: number; spendCents: number;
@@ -141,6 +152,7 @@ export interface LiveInsights {
   funnel?: FunnelMetrics;
   costPerAddToCartCents?: number | null; costPerAddPaymentInfoCents?: number | null; costPerPurchaseCents?: number | null;
   addToCartRate?: number | null; purchaseRate?: number | null;
+  byNetwork?: Partial<Record<"meta" | "google", NetworkSlice>>;
 }
 export interface OptimizationDecision { campaignId: string; chosenVariantId: string; action: string; reason: string; decidedAt: string; }
 export interface Invoice { id: string; businessId: string; periodStart: string; periodEnd: string; adSpendCents: number; platformFeeCents: number; totalCents: number; createdAt: string; }

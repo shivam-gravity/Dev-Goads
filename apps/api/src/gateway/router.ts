@@ -1091,7 +1091,7 @@ router.get("/campaigns/:id/live-insights", asyncHandler(async (req, res) => {
 
   const emptyFunnel = { addToCart: 0, addPaymentInfo: 0, purchases: 0, purchaseValueCents: 0 };
   if (liveVariants.length === 0) {
-    return res.json({ campaignId: req.params.id, isLive: false, impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0, ctr: 0, cpcCents: null, cpmCents: null, roas: null, funnel: emptyFunnel, costPerAddToCartCents: null, costPerAddPaymentInfoCents: null, costPerPurchaseCents: null, addToCartRate: null, purchaseRate: null });
+    return res.json({ campaignId: req.params.id, isLive: false, impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0, ctr: 0, cpcCents: null, cpmCents: null, roas: null, funnel: emptyFunnel, costPerAddToCartCents: null, costPerAddPaymentInfoCents: null, costPerPurchaseCents: null, addToCartRate: null, purchaseRate: null, byNetwork: {} });
   }
 
   const workspaceId = data.workspaceId ?? campaign.workspaceId ?? "demo-workspace";
@@ -1102,53 +1102,103 @@ router.get("/campaigns/:id/live-insights", asyncHandler(async (req, res) => {
   // Optional date_preset from the Ads Manager range picker (last_7d/last_14d/…); falls back to
   // today's date, which the adapters treat as "no preset → default window".
   const datePreset = typeof req.query.range === "string" && req.query.range ? req.query.range : new Date().toISOString().slice(0, 10);
-  let impressions = 0, reach = 0, clicks = 0, conversions = 0, spendCents = 0, revenueCents = 0;
-  const funnel = { addToCart: 0, addPaymentInfo: 0, purchases: 0, purchaseValueCents: 0 };
+
+  // Accumulate metrics PER NETWORK so a dual-network campaign can be split into a Meta slice and a
+  // Google slice in the Ads Manager (one row per campaign×network) — the counts come genuinely
+  // per-variant from each ad network, so this split is accurate, not an estimate.
+  type NetAccum = { impressions: number; reach: number; clicks: number; conversions: number; spendCents: number; revenueCents: number; liveVariantCount: number; funnel: { addToCart: number; addPaymentInfo: number; purchases: number; purchaseValueCents: number } };
+  const newAccum = (): NetAccum => ({ impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0, liveVariantCount: 0, funnel: { addToCart: 0, addPaymentInfo: 0, purchases: 0, purchaseValueCents: 0 } });
+  const perNetwork: Record<string, NetAccum> = {};
+
   for (const v of liveVariants) {
+    const net = v.network === "google" ? "google" : "meta";
+    const acc = (perNetwork[net] ??= newAccum());
+    acc.liveVariantCount++;
     try {
       // Route each variant to its own network's adapter — a Google variant queried via the Meta
       // adapter (the old hardcoded behavior) returned nothing, so the Google tab showed no data.
-      const stats = v.network === "google"
+      const stats = net === "google"
         ? await googleAdapter.fetchInsights(v.externalId, datePreset, googleCredentials)
         : await metaAdapter.fetchInsights(v.externalId, datePreset, metaCredentials);
-      impressions += stats.impressions;
-      reach += stats.reach;
-      clicks += stats.clicks;
-      conversions += stats.conversions;
-      spendCents += stats.spendCents;
-      revenueCents += stats.revenueCents ?? 0;
+      acc.impressions += stats.impressions;
+      acc.reach += stats.reach;
+      acc.clicks += stats.clicks;
+      acc.conversions += stats.conversions;
+      acc.spendCents += stats.spendCents;
+      acc.revenueCents += stats.revenueCents ?? 0;
       if (stats.funnel) {
-        funnel.addToCart += stats.funnel.addToCart;
-        funnel.addPaymentInfo += stats.funnel.addPaymentInfo;
-        funnel.purchases += stats.funnel.purchases;
-        funnel.purchaseValueCents += stats.funnel.purchaseValueCents;
+        acc.funnel.addToCart += stats.funnel.addToCart;
+        acc.funnel.addPaymentInfo += stats.funnel.addPaymentInfo;
+        acc.funnel.purchases += stats.funnel.purchases;
+        acc.funnel.purchaseValueCents += stats.funnel.purchaseValueCents;
       }
     } catch { /* variant may have been deleted on the ad network */ }
   }
 
+  // Split the campaign's single daily budget across networks proportionally to each network's live
+  // variant count, so the per-network rows' budgets sum back to the campaign total (no double-count).
+  const totalLiveVariants = liveVariants.length || 1;
+  const buildSlice = (acc: NetAccum) => {
+    const { liveVariantCount, funnel, ...m } = acc;
+    return {
+      ...m,
+      funnel,
+      dailyBudgetCents: 0, // set by the caller after proportional split
+      ctr: m.impressions > 0 ? m.clicks / m.impressions : 0,
+      cpcCents: m.clicks > 0 ? Math.round(m.spendCents / m.clicks) : null,
+      cpmCents: m.impressions > 0 ? Math.round((m.spendCents / m.impressions) * 1000) : null,
+      roas: m.spendCents > 0 && m.revenueCents > 0 ? m.revenueCents / m.spendCents : null,
+      costPerAddToCartCents: funnel.addToCart > 0 ? Math.round(m.spendCents / funnel.addToCart) : null,
+      costPerAddPaymentInfoCents: funnel.addPaymentInfo > 0 ? Math.round(m.spendCents / funnel.addPaymentInfo) : null,
+      costPerPurchaseCents: funnel.purchases > 0 ? Math.round(m.spendCents / funnel.purchases) : null,
+      addToCartRate: m.clicks > 0 ? funnel.addToCart / m.clicks : null,
+      purchaseRate: m.clicks > 0 ? funnel.purchases / m.clicks : null,
+      liveVariantCount,
+    };
+  };
+  const campaignDailyBudgetCents = Number((data.dailyBudgetCents ?? 0));
+  const byNetwork: Record<string, any> = {};
+  for (const [net, acc] of Object.entries(perNetwork)) {
+    const slice = buildSlice(acc);
+    slice.dailyBudgetCents = Math.round(campaignDailyBudgetCents * (acc.liveVariantCount / totalLiveVariants));
+    byNetwork[net] = slice;
+  }
+
+  // Campaign-wide aggregate (unchanged shape) — sum across networks for the "all" / dual-network view.
+  const agg = Object.values(perNetwork).reduce((a, acc) => {
+    a.impressions += acc.impressions; a.reach += acc.reach; a.clicks += acc.clicks;
+    a.conversions += acc.conversions; a.spendCents += acc.spendCents; a.revenueCents += acc.revenueCents;
+    a.funnel.addToCart += acc.funnel.addToCart; a.funnel.addPaymentInfo += acc.funnel.addPaymentInfo;
+    a.funnel.purchases += acc.funnel.purchases; a.funnel.purchaseValueCents += acc.funnel.purchaseValueCents;
+    return a;
+  }, newAccum());
+  const { funnel } = agg;
+
   res.json({
     campaignId: req.params.id,
     isLive: true,
-    impressions,
-    reach,
-    clicks,
-    conversions,
-    spendCents,
-    revenueCents,
-    ctr: impressions > 0 ? clicks / impressions : 0,
-    cpcCents: clicks > 0 ? Math.round(spendCents / clicks) : null,
-    cpmCents: impressions > 0 ? Math.round((spendCents / impressions) * 1000) : null,
+    impressions: agg.impressions,
+    reach: agg.reach,
+    clicks: agg.clicks,
+    conversions: agg.conversions,
+    spendCents: agg.spendCents,
+    revenueCents: agg.revenueCents,
+    ctr: agg.impressions > 0 ? agg.clicks / agg.impressions : 0,
+    cpcCents: agg.clicks > 0 ? Math.round(agg.spendCents / agg.clicks) : null,
+    cpmCents: agg.impressions > 0 ? Math.round((agg.spendCents / agg.impressions) * 1000) : null,
     // True ROAS: real reported revenue / spend.
-    roas: spendCents > 0 && revenueCents > 0 ? revenueCents / spendCents : null,
+    roas: agg.spendCents > 0 && agg.revenueCents > 0 ? agg.revenueCents / agg.spendCents : null,
     funnel,
     // Cost-per-step: total spend divided by that step's count. Null (not 0) when the step has no
     // events, so the UI shows "—" rather than an infinite/meaningless cost.
-    costPerAddToCartCents: funnel.addToCart > 0 ? Math.round(spendCents / funnel.addToCart) : null,
-    costPerAddPaymentInfoCents: funnel.addPaymentInfo > 0 ? Math.round(spendCents / funnel.addPaymentInfo) : null,
-    costPerPurchaseCents: funnel.purchases > 0 ? Math.round(spendCents / funnel.purchases) : null,
+    costPerAddToCartCents: funnel.addToCart > 0 ? Math.round(agg.spendCents / funnel.addToCart) : null,
+    costPerAddPaymentInfoCents: funnel.addPaymentInfo > 0 ? Math.round(agg.spendCents / funnel.addPaymentInfo) : null,
+    costPerPurchaseCents: funnel.purchases > 0 ? Math.round(agg.spendCents / funnel.purchases) : null,
     // Step CVR relative to clicks (top of the paid funnel). Null when there are no clicks.
-    addToCartRate: clicks > 0 ? funnel.addToCart / clicks : null,
-    purchaseRate: clicks > 0 ? funnel.purchases / clicks : null,
+    addToCartRate: agg.clicks > 0 ? funnel.addToCart / agg.clicks : null,
+    purchaseRate: agg.clicks > 0 ? funnel.purchases / agg.clicks : null,
+    // Per-network slices so the Ads Manager can render one row per campaign×network.
+    byNetwork,
   });
 }));
 router.get("/campaigns/:id/trend", requireCampaignAccess, asyncHandler(async (req, res) => res.json(await getCampaignTrend(req.params.id))));
