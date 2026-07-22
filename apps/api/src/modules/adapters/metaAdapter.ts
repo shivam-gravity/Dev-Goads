@@ -84,6 +84,16 @@ function floorAdSetBudgetCents(dailyBudgetCents: number, currency: string): numb
   return Math.max(dailyBudgetCents, minCents);
 }
 
+// Meta rejects campaign/ad-set/ad/creative names over 400 chars (Graph API error subcode
+// 2446443, "Name is too long"). Ad-set names are built from the strategy's free-text
+// audienceName, which can be a multi-sentence paragraph — so clamp every name at the adapter
+// boundary rather than trusting each caller. 380 leaves headroom for the "-creative" suffix.
+const META_MAX_NAME_LENGTH = 380;
+function clampName(name: string): string {
+  const trimmed = name.trim();
+  return trimmed.length <= META_MAX_NAME_LENGTH ? trimmed : trimmed.slice(0, META_MAX_NAME_LENGTH - 1).trimEnd() + "…";
+}
+
 // Exponential Backoff Retry Helper
 async function fetchWithRetry(url: string, options: RequestInit, retries = 3, delay = 500): Promise<Response> {
   for (let i = 0; i < retries; i++) {
@@ -311,7 +321,7 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     if (!credentials) return { externalId: mockId("meta_campaign") };
 
     const json = await graphPost(`/act_${credentials.adAccountId}/campaigns`, credentials.accessToken, {
-      name: input.name,
+      name: clampName(input.name),
       objective: input.objective,
       status: "PAUSED",
       special_ad_categories: [],
@@ -329,7 +339,7 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     if (!credentials) return { externalId: mockId("meta_adset") };
 
     const body: Record<string, unknown> = {
-      name: input.name,
+      name: clampName(input.name),
       campaign_id: input.campaignExternalId,
       daily_budget: toMetaMinorUnits(floorAdSetBudgetCents(input.dailyBudgetCents, credentials.currency), credentials.currency),
       billing_event: "IMPRESSIONS",
@@ -413,13 +423,13 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     }
 
     const creativeJson = await graphPost(`/act_${credentials.adAccountId}/adcreatives`, credentials.accessToken, {
-      name: `${input.name}-creative`,
+      name: clampName(`${input.name}-creative`),
       object_story_spec: objectStorySpec,
     });
     if (!creativeJson?.id) throw new Error(`Meta ad creative creation failed: ${JSON.stringify(creativeJson)}`);
 
     const adJson = await graphPost(`/act_${credentials.adAccountId}/ads`, credentials.accessToken, {
-      name: input.name,
+      name: clampName(input.name),
       adset_id: input.adSetExternalId,
       creative: { creative_id: creativeJson.id },
       status: "PAUSED",

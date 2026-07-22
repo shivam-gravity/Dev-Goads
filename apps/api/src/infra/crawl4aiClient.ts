@@ -170,11 +170,18 @@ function crawlerConfig(formats: ScrapeFormat[], extra?: Record<string, unknown>)
     // Wait for client-side rendering before capturing HTML. Many marketing sites are SPAs
     // (Next.js/React) that ship a near-empty shell and hydrate content in JS — without waiting,
     // crawl4ai returns the shell, the page reads as "thin", no facts are extracted, and research
-    // falls to the slow/low-confidence search path (e.g. polluxa.com root scored 62% and stalled,
-    // while the content-rich /crm path scored 75%). networkidle + a short settle delay lets the
-    // app hydrate so we get the real text. Cheap for static pages (they're already idle).
-    wait_until: "networkidle",
-    delay_before_return_html: 1.5,
+    // falls to the slow/low-confidence search path.
+    //
+    // We used to wait for "networkidle", but heavy/ad-tech-laden sites (e.g. stripe.com) NEVER go
+    // idle — analytics beacons, trackers and websockets keep the network busy forever — so every
+    // crawl burned the full page_timeout, timed out under concurrent load, and returned 0 facts
+    // (which is what dropped stripe.com research to ~50% confidence and stalled generation for
+    // minutes). Measured: stripe.com took 21s with networkidle vs 5s with domcontentloaded for the
+    // IDENTICAL 29KB of markdown; polluxa.com (a real SPA) returned the same 12KB either way. So
+    // wait for DOM ready + a fixed settle delay that covers hydration, instead of an idle signal
+    // that may never come. Override via CRAWL4AI_WAIT_UNTIL if a specific site needs it.
+    wait_until: process.env.CRAWL4AI_WAIT_UNTIL ?? "domcontentloaded",
+    delay_before_return_html: Number(process.env.CRAWL4AI_SETTLE_DELAY_S ?? 2),
     page_timeout: 25000, // must stay UNDER REQUEST_TIMEOUT_MS (40s) so crawl4ai returns before the HTTP request aborts
     ...(wantScreenshot ? { screenshot: true } : {}),
     ...(jsonFormat ? { extraction_strategy: { type: "json_css", schema: jsonFormat.schema } } : {}),
