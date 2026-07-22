@@ -50,21 +50,44 @@ const FACT_EXTRACTION_TOOL = {
  * Returns the number of facts persisted. 0 (never a throw upward from missing data) when
  * the crawl has no pages or no model is configured — real facts or none, no fallback facts.
  */
-/** One fact-extraction LLM call over pre-packed content. Returns [] (never throws) when the
- * model declines to call the tool / returns no facts, so callers can retry with narrower input. */
+// Tool use is already FORCED (bedrockClient toolChoice), yet the model intermittently calls
+// emit_crawl_facts with an EMPTY facts array on content that a moment earlier yielded 30+ facts —
+// confirmed live: the identical refined polluxa.com homepage returned 31 facts then 0,0,0 across
+// back-to-back calls. That non-determinism (not the crawl, not CSS, not load) was the real cause
+// of the run-to-run confidence swings. Since a fresh call succeeds intermittently, retry a couple
+// times when the model returns zero facts on non-trivial content before giving up.
+const FACT_EXTRACTION_EMPTY_RETRIES = Math.max(0, Number(process.env.FACT_EXTRACTION_EMPTY_RETRIES ?? 2));
+
+/** One fact-extraction pass (with retry-on-empty) over pre-packed content. Returns [] (never
+ * throws) only when every attempt comes back empty, so callers can still retry with narrower input.
+ *
+ * Tool use is already FORCED (bedrockClient toolChoice), yet the model intermittently calls
+ * emit_crawl_facts with an EMPTY array on content that a moment earlier yielded 30+ facts — a
+ * known source of run-to-run swings. A couple of retries recover the common transient-empty case;
+ * a persistently-empty response (the model genuinely declining) is left to the caller's
+ * narrower-input fallback. */
 async function runFactExtraction(content: string): Promise<ExtractedFact[]> {
   if (!content.trim()) return [];
-  const { data: result } = await llmRouter.runStructured<{ facts: ExtractedFact[] }>(resolveTaskModel("crawl-fact-extraction"), {
-    maxTokens: 2048,
-    tool: FACT_EXTRACTION_TOOL,
-    messages: [
-      {
-        role: "user",
-        content: `Extract every concrete, verifiable fact from these crawled website pages. For each fact give the exact page URL it came from and your confidence in it.\n\n${content}`,
-      },
-    ],
-  });
-  return result && Array.isArray(result.facts) ? result.facts : [];
+  for (let attempt = 0; attempt <= FACT_EXTRACTION_EMPTY_RETRIES; attempt++) {
+    const { data: result } = await llmRouter.runStructured<{ facts: ExtractedFact[] }>(resolveTaskModel("crawl-fact-extraction"), {
+      // 4096, not 2048: a fact-rich homepage yields 30+ facts, and at 2048 the forced tool-call
+      // JSON gets TRUNCATED at max_tokens mid-array — Converse then returns an empty/!invalid
+      // toolUse.input, which surfaced as "0 facts" and was the real cause of the bimodal 30-or-0
+      // extraction (and thus the run-to-run confidence swings). The larger budget lets the whole
+      // fact array complete. (The retry-on-empty below still covers genuine transient empties.)
+      maxTokens: 4096,
+      tool: FACT_EXTRACTION_TOOL,
+      messages: [
+        {
+          role: "user",
+          content: `Extract every concrete, verifiable fact from these crawled website pages. For each fact give the exact page URL it came from and your confidence in it.\n\n${content}`,
+        },
+      ],
+    });
+    const facts = result && Array.isArray(result.facts) ? result.facts : [];
+    if (facts.length > 0) return facts;
+  }
+  return [];
 }
 
 export async function extractAndPersistCrawlFacts(crawlJobId: string): Promise<number> {
