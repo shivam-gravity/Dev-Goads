@@ -165,6 +165,15 @@ function crawlerConfig(formats: ScrapeFormat[], extra?: Record<string, unknown>)
     | { type: "json"; schema: Record<string, unknown>; prompt?: string }
     | undefined;
   return {
+    // Wait for client-side rendering before capturing HTML. Many marketing sites are SPAs
+    // (Next.js/React) that ship a near-empty shell and hydrate content in JS — without waiting,
+    // crawl4ai returns the shell, the page reads as "thin", no facts are extracted, and research
+    // falls to the slow/low-confidence search path (e.g. polluxa.com root scored 62% and stalled,
+    // while the content-rich /crm path scored 75%). networkidle + a short settle delay lets the
+    // app hydrate so we get the real text. Cheap for static pages (they're already idle).
+    wait_until: "networkidle",
+    delay_before_return_html: 1.5,
+    page_timeout: 45000,
     ...(wantScreenshot ? { screenshot: true } : {}),
     ...(jsonFormat ? { extraction_strategy: { type: "json_css", schema: jsonFormat.schema } } : {}),
     ...extra,
