@@ -222,7 +222,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
 
   useEffect(() => {
     setPage(1);
-  }, [mode, searchTerm, statusFilter, pageSize]);
+  }, [mode, searchTerm, statusFilter, pageSize, network]);
 
   function bucketFor(c: Campaign, _index: number): "scaleUp" | "scaleDown" | "pause" | "maintain" {
     if (c.status !== "active") return "maintain";
@@ -265,13 +265,19 @@ export default function AdsManager({ businessId }: { businessId: string }) {
     const counts = { scaleUp: 0, scaleDown: 0, pause: 0, maintain: 0 };
     let currentCents = 0;
     let recommendCents = 0;
-    campaigns.forEach((c, i) => {
-      counts[bucketFor(c, i)]++;
-      currentCents += c.dailyBudgetCents;
-      recommendCents += recommendedBudgetCents(c, i);
-    });
+    // Scope the hub to the active network tab (a campaign belongs to `network` if its `networks`
+    // array includes it; untagged legacy campaigns default to Meta) so the Scale/Pause counts and
+    // budget totals match the campaigns actually listed under this tab.
+    campaigns
+      .filter((c) => (c.networks?.length ? c.networks.includes(network as "meta" | "google") : network === "meta"))
+      .forEach((c, i) => {
+        counts[bucketFor(c, i)]++;
+        currentCents += c.dailyBudgetCents;
+        recommendCents += recommendedBudgetCents(c, i);
+      });
     return { counts, currentCents, recommendCents };
-  }, [campaigns]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaigns, network]);
 
   function handleSelectRow(id: string) {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -350,13 +356,29 @@ export default function AdsManager({ businessId }: { businessId: string }) {
     }
   }
 
+  // Lookups so the ad-set / ad tables can show their parent (Campaign / Ad Set) columns and derive
+  // each row's network — the same hierarchy context Polluxa's native Meta/Google tables surface.
+  const campaignById = useMemo(() => Object.fromEntries(campaigns.map((c) => [c.id, c])), [campaigns]);
+  const adSetById = useMemo(() => Object.fromEntries(adSets.map((s) => [s.id, s])), [adSets]);
+
+  // The active network tab scopes the tables (Meta tab shows only Meta campaigns, etc.). A campaign
+  // belongs to the tab's network if its `networks` array includes it; ad sets/ads inherit the
+  // network of their parent campaign. Campaigns predating multi-network tagging (empty `networks`)
+  // default to Meta so they don't vanish from every tab.
+  const campaignOnNetwork = (c: Campaign) => (c.networks?.length ? c.networks.includes(network as "meta" | "google") : network === "meta");
+  const adSetOnNetwork = (s: AdSet) => { const p = campaignById[s.campaignId]; return p ? campaignOnNetwork(p) : network === "meta"; };
+  const adOnNetwork = (a: Ad) => { const p = adSetById[a.adSetId]; return p ? adSetOnNetwork(p) : network === "meta"; };
+
   const filteredCampaigns = campaigns
+    .filter(campaignOnNetwork)
     .filter((c) => c.name.toLowerCase().includes(searchTerm.toLowerCase()))
     .filter((c) => statusFilter === "all" || c.status === statusFilter);
   const filteredAdSets = adSets
+    .filter(adSetOnNetwork)
     .filter((s) => s.name.toLowerCase().includes(searchTerm.toLowerCase()))
     .filter((s) => statusFilter === "all" || s.status === statusFilter);
   const filteredAds = ads
+    .filter(adOnNetwork)
     .filter((a) => a.name.toLowerCase().includes(searchTerm.toLowerCase()))
     .filter((a) => statusFilter === "all" || a.status === statusFilter);
 
@@ -368,13 +390,18 @@ export default function AdsManager({ businessId }: { businessId: string }) {
   const pagedAdSets = filteredAdSets.slice(pageStart, pageStart + pageSize);
   const pagedAds = filteredAds.slice(pageStart, pageStart + pageSize);
 
-  const activeCount = campaigns.filter((c) => c.status === "active").length;
-  const totalBudgetCents = campaigns.reduce((sum, c) => sum + c.dailyBudgetCents, 0);
+  // Header/summary figures are scoped to the active network tab so they agree with the visible rows.
+  const networkCampaigns = campaigns.filter(campaignOnNetwork);
+  const activeCount = networkCampaigns.filter((c) => c.status === "active").length;
+  const totalBudgetCents = networkCampaigns.reduce((sum, c) => sum + c.dailyBudgetCents, 0);
 
-  // Column totals for the campaign table's Total row, summed across every campaign's live metrics
+  // Column totals for the campaign table's Total row, summed across the active network's campaigns
   // (including the funnel breakdown). CPM/CPC/ROAS totals are derived from these sums downstream.
   const totals = useMemo(() => {
-    return Object.values(liveInsightsByCampaign).reduce(
+    return networkCampaigns
+      .map((c) => liveInsightsByCampaign[c.id])
+      .filter(Boolean)
+      .reduce(
       (acc, li) => ({
         spendCents: acc.spendCents + li.spendCents,
         impressions: acc.impressions + li.impressions,
@@ -386,12 +413,8 @@ export default function AdsManager({ businessId }: { businessId: string }) {
       }),
       { spendCents: 0, impressions: 0, clicks: 0, conversions: 0, revenueCents: 0, addToCart: 0, purchases: 0 },
     );
-  }, [liveInsightsByCampaign]);
-
-  // Lookups so the ad-set / ad tables can show their parent (Campaign / Ad Set) columns —
-  // the same hierarchy context Polluxa's native Meta/Google ad-set & ad tables surface.
-  const campaignById = useMemo(() => Object.fromEntries(campaigns.map((c) => [c.id, c])), [campaigns]);
-  const adSetById = useMemo(() => Object.fromEntries(adSets.map((s) => [s.id, s])), [adSets]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveInsightsByCampaign, campaigns, network]);
 
   // Human-readable targeting bits pulled from the ad set's real targeting blob (shapes vary by
   // network — Meta uses geo_locations/age_min/genders, Google uses geoTargetConstants/ageRanges),
@@ -408,10 +431,13 @@ export default function AdsManager({ businessId }: { businessId: string }) {
   }
 
   // Ad-set / ad summary counts for the stat-card row (mirrors Polluxa's Total/Active/Paused tiles).
-  const adSetActive = adSets.filter((s) => s.status === "active").length;
-  const adSetPaused = adSets.filter((s) => s.status === "paused").length;
-  const adActive = ads.filter((a) => a.status === "active").length;
-  const adPaused = ads.filter((a) => a.status === "paused").length;
+  // Scoped to the active network so the tiles match the filtered table below them.
+  const networkAdSets = adSets.filter(adSetOnNetwork);
+  const networkAds = ads.filter(adOnNetwork);
+  const adSetActive = networkAdSets.filter((s) => s.status === "active").length;
+  const adSetPaused = networkAdSets.filter((s) => s.status === "paused").length;
+  const adActive = networkAds.filter((a) => a.status === "active").length;
+  const adPaused = networkAds.filter((a) => a.status === "paused").length;
 
   const rangeLabel = RANGE_OPTIONS.find((r) => r.value === range)?.label ?? "All time";
   const briefTitle = `${NETWORK_LABELS[network]} Ads Insights Brief`;
@@ -677,18 +703,18 @@ export default function AdsManager({ businessId }: { businessId: string }) {
 
         {mode === "adsets" && (
           <SummaryCards cards={[
-            { label: "Total Ad Sets", value: adSets.length, accent: "#1A6BFF" },
+            { label: "Total Ad Sets", value: networkAdSets.length, accent: "#1A6BFF" },
             { label: "Active", value: adSetActive, accent: "#16A34A", sub: "Running now" },
             { label: "Paused", value: adSetPaused, accent: "#D97706", sub: "Temporarily stopped" },
-            { label: "Campaigns", value: campaigns.length, accent: "#7C3AED", sub: "Parent campaigns" },
+            { label: "Campaigns", value: networkCampaigns.length, accent: "#7C3AED", sub: "Parent campaigns" },
           ]} />
         )}
         {mode === "ads" && (
           <SummaryCards cards={[
-            { label: "Total Ads", value: ads.length, accent: "#1A6BFF" },
+            { label: "Total Ads", value: networkAds.length, accent: "#1A6BFF" },
             { label: "Active", value: adActive, accent: "#16A34A", sub: "Running now" },
             { label: "Paused", value: adPaused, accent: "#D97706", sub: "Temporarily stopped" },
-            { label: "Ad Sets", value: adSets.length, accent: "#7C3AED", sub: "Parent ad sets" },
+            { label: "Ad Sets", value: networkAdSets.length, accent: "#7C3AED", sub: "Parent ad sets" },
           ]} />
         )}
 
@@ -770,7 +796,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                         <td></td>
                         <td>
                           <strong>Total</strong>
-                          <div className="polluxa-total-sub">{activeCount}/{campaigns.length} Active</div>
+                          <div className="polluxa-total-sub">{activeCount}/{networkCampaigns.length} Active</div>
                         </td>
                         <td>-</td>
                         <td>-</td>
