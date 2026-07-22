@@ -13,13 +13,15 @@ import type { LLMAssignment, LLMProvider } from "./llmRouter.js";
  */
 const MISTRAL: LLMAssignment = { provider: "mistral", model: process.env.MISTRAL_MODEL ?? "mistral-small-latest" };
 const GEMINI_PRIMARY: LLMAssignment = { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
+const BEDROCK_PRIMARY: LLMAssignment = { provider: "bedrock", model: process.env.BEDROCK_MODEL ?? "us.anthropic.claude-sonnet-4-5-20250929-v1:0" };
 
-// PRIMARY workhorse for the whole pipeline. LLM_PRIMARY=gemini (the current setup) routes every
-// task to Gemini (AI Studio free tier — fast, hosted, with a real per-minute/day allowance),
-// with Mistral/OpenRouter/Ollama behind it in llmRouter's FALLBACK_CHAIN for when a call is
-// rate-limited. This is what replaced the Mistral-only / local-Ollama workarounds: a hosted-fast
-// model spreads load off Mistral's 50-req/min limit AND avoids Ollama's ~3min/call CPU latency.
-// Set LLM_PRIMARY to something other than "gemini" (or unset) to fall back to the older routing.
+// PRIMARY workhorse for the whole pipeline. LLM_PRIMARY=gemini routes every task to Gemini (AI
+// Studio free tier — fast, hosted, with a real per-minute/day allowance); LLM_PRIMARY=bedrock
+// routes every task to Bedrock Claude (PAID, high-quality, not free-tier-throttled — best for the
+// large multi-schema composite-agent calls that truncate on free tiers). Either way the OTHER
+// providers sit behind the primary in llmRouter's FALLBACK_CHAIN for when a call fails. Set
+// LLM_PRIMARY to something else (or unset) to fall back to the older Mistral/dual routing.
+const PRIMARY_IS_BEDROCK = process.env.LLM_PRIMARY === "bedrock";
 const PRIMARY_IS_GEMINI = process.env.LLM_PRIMARY === "gemini";
 
 // Master switch (default ON before Gemini became primary): route EVERY task to Mistral only.
@@ -27,7 +29,7 @@ const PRIMARY_IS_GEMINI = process.env.LLM_PRIMARY === "gemini";
 // tokens/min) that our retry-with-backoff + concurrency cap ride out cleanly. Superseded by
 // LLM_PRIMARY=gemini; kept as a fallback routing mode. Set LLM_MISTRAL_ONLY=false to restore the
 // multi-provider/dual routing.
-const MISTRAL_ONLY = !PRIMARY_IS_GEMINI && process.env.LLM_MISTRAL_ONLY !== "false";
+const MISTRAL_ONLY = !PRIMARY_IS_BEDROCK && !PRIMARY_IS_GEMINI && process.env.LLM_MISTRAL_ONLY !== "false";
 
 // LOCAL Ollama — the one free resource with NO rate limit and NO daily cap (it runs on this
 // machine). The whole confidence-instability problem was providers timing out to 0 under
@@ -40,22 +42,41 @@ const OLLAMA: LLMAssignment = { provider: "ollama", model: process.env.OLLAMA_MO
 // Master switch: route the fact-grounded research/reasoning tasks to local Ollama. On by
 // default because it's the free way to stop the rate-limit timeouts. Set LLM_LOCAL_RESEARCH=false
 // to send them back to Mistral (e.g. if a fast uncapped hosted provider is configured).
-const LOCAL_RESEARCH = !PRIMARY_IS_GEMINI && process.env.LLM_LOCAL_RESEARCH !== "false";
-// The reasoning tasks that work from already-extracted facts. Under LLM_PRIMARY=gemini they go to
-// Gemini (fast, hosted); otherwise the older split — local Ollama (LOCAL_RESEARCH) or Mistral.
-const FACT_REASONING: LLMAssignment = PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : LOCAL_RESEARCH ? OLLAMA : MISTRAL;
+const LOCAL_RESEARCH = !PRIMARY_IS_BEDROCK && !PRIMARY_IS_GEMINI && process.env.LLM_LOCAL_RESEARCH !== "false";
+// The reasoning tasks that work from already-extracted facts. Under LLM_PRIMARY=bedrock they go to
+// Bedrock Claude; under =gemini to Gemini; otherwise the older split — local Ollama or Mistral.
+const FACT_REASONING: LLMAssignment = PRIMARY_IS_BEDROCK ? BEDROCK_PRIMARY : PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : LOCAL_RESEARCH ? OLLAMA : MISTRAL;
 
-const DEFAULT_ASSIGNMENT: LLMAssignment = PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : MISTRAL;
+const DEFAULT_ASSIGNMENT: LLMAssignment = PRIMARY_IS_BEDROCK ? BEDROCK_PRIMARY : PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : MISTRAL;
 
-const GEMINI: LLMAssignment = PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : MISTRAL_ONLY ? MISTRAL : { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
-// "dual" would fire OpenRouter + Mistral concurrently; under Gemini-primary it's a single Gemini
-// call (no wasted legs, the fallback chain still covers rate-limit failures), and under
-// MISTRAL_ONLY just Mistral. Restored to real dual when neither mode is active.
-const DUAL: LLMAssignment = PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : MISTRAL_ONLY ? MISTRAL : { provider: "dual", model: "auto" };
+const GEMINI: LLMAssignment = PRIMARY_IS_BEDROCK ? BEDROCK_PRIMARY : PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : MISTRAL_ONLY ? MISTRAL : { provider: "google", model: process.env.GEMINI_MODEL ?? "gemini-2.0-flash" };
+// "dual" would fire OpenRouter + Mistral concurrently; under a single-primary mode (bedrock/gemini)
+// it's one call to that primary (no wasted legs, the fallback chain still covers failures), and
+// under MISTRAL_ONLY just Mistral. Restored to real dual when no single-primary mode is active.
+const DUAL: LLMAssignment = PRIMARY_IS_BEDROCK ? BEDROCK_PRIMARY : PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : MISTRAL_ONLY ? MISTRAL : { provider: "dual", model: "auto" };
 // Deep-research tasks (the 20 agents + research providers). Gemini-primary by default.
 const DEEP_RESEARCH: LLMAssignment = DUAL;
 
+// Decision Engine steps — the USER-VISIBLE strategy output (business summary, ranked
+// recommendations, tradeoffs, strategy synthesis). Under a single-primary mode they ride the
+// primary (Bedrock/Gemini) like everything else, so the strategy confidence a user sees is built
+// on the SAME model as the research it's derived from — the whole point of paying for Bedrock. In
+// the OLDER free-tier routing (no single primary) they stay pinned to MISTRAL for the historical
+// reason below: on the free tier these run last, after ~30 calls have saturated the shared primary's
+// per-minute budget, and would rate-limit to a placeholder summary; Mistral's separate rate budget
+// kept the visible summary reliable. That failure mode doesn't exist on paid Bedrock (not per-minute
+// throttled), so pinning there would just cap the visible confidence at the weaker model for no gain.
+const DECISION: LLMAssignment = PRIMARY_IS_BEDROCK ? BEDROCK_PRIMARY : PRIMARY_IS_GEMINI ? GEMINI_PRIMARY : MISTRAL;
+
 const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
+  // 3 composite super-agents (the default roster) — each does several of the individual agents'
+  // jobs in ONE structured call, cutting the agent layer from 20 calls to 3. They produce large
+  // multi-schema JSON, so they get DEEP_RESEARCH like the producers they absorb. reviewer-agent
+  // is the merged critic+compliance reviewer that runs last over the producer proposals.
+  "strategy-agent": DEEP_RESEARCH,
+  "creative-offer-agent": DEEP_RESEARCH,
+  "reviewer-agent": DEEP_RESEARCH,
+
   // 20 marketing agents — 70B for deep, genuine analysis
   "campaign-agent": DEEP_RESEARCH,
   "audience-agent": DEEP_RESEARCH,
@@ -78,19 +99,15 @@ const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   "seasonality-timing-agent": DEEP_RESEARCH,
   "product-agent": DEEP_RESEARCH,
 
-  // Decision Engine steps — pinned to MISTRAL, not the shared Gemini primary. These run at the
-  // very END of the pipeline (after ~30 Gemini research/agent calls have saturated Gemini's
-  // 50/min budget) and they produce the USER-VISIBLE decision output (business summary, ranked
-  // recommendations, strategy). When they got rate-limited past the timeout they returned null →
-  // the "No live research available — re-run with a live API key" PLACEHOLDER text rendered in the
-  // UI even though research itself succeeded at 0.81. They're few and sequential, so Mistral's
-  // separate rate budget makes the visible summary reliable instead of intermittently degrading.
-  "decision-summary": MISTRAL,
-  "enrichment-proof-points": MISTRAL,
-  "enrichment-regional-depth": MISTRAL,
-  "tradeoff-analysis": MISTRAL,
-  "recommendation-generation": MISTRAL,
-  "strategy-synthesis": MISTRAL,
+  // Decision Engine steps — the USER-VISIBLE strategy output. Ride the primary (DECISION) so the
+  // strategy confidence a user sees is built on the same model as its research; only the older
+  // free-tier routing keeps the historical MISTRAL pin (see DECISION's definition for why).
+  "decision-summary": DECISION,
+  "enrichment-proof-points": DECISION,
+  "enrichment-regional-depth": DECISION,
+  "tradeoff-analysis": DECISION,
+  "recommendation-generation": DECISION,
+  "strategy-synthesis": DECISION,
 
   // Research providers — 70B for accurate data extraction
   "app-store": DEEP_RESEARCH,
@@ -135,12 +152,10 @@ const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   // The single most valuable call in the run (its facts replace ~17 downstream retrievals) and
   // it's on the CRITICAL PATH — the whole fact-first pipeline is skipped if it doesn't return in
   // time, and then every provider falls back to (flaky) web search and the CORE ones time out to
-  // 0. Pinned to MISTRAL rather than the shared primary: it's ONE call that gates everything, so
-  // it must not queue behind the ~30 parallel Gemini provider/agent calls that saturate Gemini's
-  // 50-req/min budget (measured: the first fact-extraction call burned all 120s on Gemini 429
-  // backoff and timed out). Mistral has an independent rate budget and does this one structured
-  // call in seconds — spreading the single critical call off Gemini keeps the prefetch reliable.
-  "crawl-fact-extraction": MISTRAL,
+  // 0. Uses the shared primary (Bedrock). This gating call was historically pinned to MISTRAL to
+  // keep it off a saturated free-tier budget, but we now depend fully on Bedrock — which has ample
+  // throughput and no free-tier rate storm — so there's no reason to route it elsewhere.
+  "crawl-fact-extraction": DEFAULT_ASSIGNMENT,
   "ad-creative-analysis": DEEP_RESEARCH,
 
   // Meta Ads keyword validation & interest mining
@@ -149,7 +164,7 @@ const TASK_MODEL_REGISTRY: Record<string, LLMAssignment> = {
   "budget-market-calibration": DEEP_RESEARCH,
 };
 
-const VALID_PROVIDERS = new Set<string>(["openrouter", "ollama", "mistral", "google", "dual"]);
+const VALID_PROVIDERS = new Set<string>(["openrouter", "ollama", "mistral", "google", "bedrock", "dual"]);
 
 /**
  * Resolution order: per-task env override (quick experiments, no code change) → static

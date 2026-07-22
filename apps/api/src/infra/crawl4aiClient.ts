@@ -27,7 +27,9 @@ function crawl4aiToken(): string | undefined {
   return process.env.CRAWL4AI_API_TOKEN;
 }
 
-const REQUEST_TIMEOUT_MS = 30_000; // headless-browser render can be slower than a plain API
+// Must exceed the crawler's own page_timeout (below) or the HTTP request aborts before crawl4ai
+// finishes rendering — which produced the AbortError storm on networkidle waits. 40s > 25s page.
+const REQUEST_TIMEOUT_MS = 40_000;
 
 export const CRAWL4AI_NO_URL_DATA_SOURCE = "crawl4ai not configured (CRAWL4AI_BASE_URL not set)";
 
@@ -173,7 +175,7 @@ function crawlerConfig(formats: ScrapeFormat[], extra?: Record<string, unknown>)
     // app hydrate so we get the real text. Cheap for static pages (they're already idle).
     wait_until: "networkidle",
     delay_before_return_html: 1.5,
-    page_timeout: 45000,
+    page_timeout: 25000, // must stay UNDER REQUEST_TIMEOUT_MS (40s) so crawl4ai returns before the HTTP request aborts
     ...(wantScreenshot ? { screenshot: true } : {}),
     ...(jsonFormat ? { extraction_strategy: { type: "json_css", schema: jsonFormat.schema } } : {}),
     ...extra,

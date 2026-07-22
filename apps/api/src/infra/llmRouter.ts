@@ -3,6 +3,7 @@ import * as openRouterClient from "./openRouterClient.js";
 import * as ollamaClient from "./ollamaClient.js";
 import * as mistralClient from "./mistralClient.js";
 import * as geminiClient from "./geminiClient.js";
+import * as bedrockClient from "./bedrockClient.js";
 import type { ChatMessage, JsonSchemaTool } from "./llmTypes.js";
 import { assertGlobalLlmUsageAvailable } from "./llmUsageBoundary.js";
 
@@ -31,7 +32,7 @@ import { assertGlobalLlmUsageAvailable } from "./llmUsageBoundary.js";
  * "unusable" and falls through.
  */
 
-export type LLMProvider = "openrouter" | "ollama" | "mistral" | "google";
+export type LLMProvider = "openrouter" | "ollama" | "mistral" | "google" | "bedrock";
 /** "dual" is a meta-provider, not a real backend: it fires OpenRouter AND Mistral concurrently
  * and keeps the higher-quality (more complete) result — see runStructuredDual/runTextDual. Used
  * for deep-research tasks where answer quality + resilience to one provider being rate-limited
@@ -52,6 +53,7 @@ const CLIENTS = {
   ollama: ollamaClient,
   mistral: mistralClient,
   google: geminiClient,
+  bedrock: bedrockClient,
 };
 
 // Tried in order (skipping whatever was already attempted) whenever the first attempt fails or
@@ -64,9 +66,28 @@ const CLIENTS = {
 // OLLAMA_BASE_URL (the call just errors and the chain ends, same as before). Disable by setting
 // LLM_OLLAMA_FALLBACK=false.
 const OLLAMA_FALLBACK_ENABLED = process.env.LLM_OLLAMA_FALLBACK !== "false";
-const FALLBACK_CHAIN: LLMProvider[] = OLLAMA_FALLBACK_ENABLED
-  ? ["mistral", "openrouter", "google", "ollama"]
-  : ["mistral", "openrouter", "google"];
+// Bedrock (Claude) is a PAID, non-free-tier-throttled leg — the strongest-quality safety net when
+// the free providers are all rate-limited. It sits AFTER the free tiers (mistral/openrouter/google)
+// so a healthy free run never incurs Bedrock spend, but BEFORE local Ollama, since a hosted Claude
+// call is far better than a slow local 8B model when the free tiers are exhausted. Only in the
+// chain when AWS_BEARER_TOKEN_BEDROCK is set (an unconfigured client returns null and is skipped
+// anyway); disable explicitly with LLM_BEDROCK_FALLBACK=false.
+const BEDROCK_FALLBACK_ENABLED = process.env.LLM_BEDROCK_FALLBACK !== "false" && bedrockClient.isBedrockConfigured();
+// When LLM_PRIMARY=bedrock we depend FULLY on Bedrock — no free-tier providers in the chain at
+// all. Previously the chain led with mistral/openrouter, so any hiccup on the assigned Bedrock
+// call degraded straight into free-tier (OpenRouter 429 "free-models-per-day exceeded", flaky
+// Mistral) — which is exactly what produced the low-quality/slow runs. In bedrock mode the only
+// fallback is Bedrock itself; otherwise keep the historical multi-provider chain.
+const PRIMARY_IS_BEDROCK = process.env.LLM_PRIMARY === "bedrock";
+const FALLBACK_CHAIN: LLMProvider[] = PRIMARY_IS_BEDROCK
+  ? (["bedrock"] as LLMProvider[])
+  : [
+      "mistral",
+      "openrouter",
+      "google",
+      ...(BEDROCK_FALLBACK_ENABLED ? (["bedrock"] as LLMProvider[]) : []),
+      ...(OLLAMA_FALLBACK_ENABLED ? (["ollama"] as LLMProvider[]) : []),
+    ];
 
 // Kill switch — set to "false" to disable the fallback-to-Groq safety net and let an
 // assigned non-Groq provider fail outright instead, mirroring SCRAPE_FALLBACK_ENABLED's
