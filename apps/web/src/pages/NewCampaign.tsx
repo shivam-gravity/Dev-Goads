@@ -17,6 +17,7 @@ import type {
   CompetitorAdsData,
   DecisionContext,
   RankedRecommendation,
+  ResearchContextLite,
   StrategySimulationResult,
 } from "../api/client.js";
 
@@ -90,7 +91,7 @@ const PHASE_SUBLINES: Record<CampaignGenerationPipelineStatus, string[]> = {
     "Validating user occupation and industry interest keywords…",
     "Validating professional interest and content consumption keywords…",
     "Validating extended competitor and business function keywords…",
-    "Merging 27 research sources into one confidence-scored context…",
+    "Merging research sources into one confidence-scored context…",
   ],
   running_agents: [
     "Based on product analysis, mining Meta Ads audience interest keywords from multiple perspectives…",
@@ -148,7 +149,7 @@ const STEP_LABELS: Record<string, string> = {
   autocomplete: "Mining search autocomplete for audience intent signals",
   "serp-features": "Analyzing SERP features and ad opportunity gaps",
   reddit: "Mining community discussions for pain points and objections",
-  aggregating: "Fusing 27 research sources into confidence-scored context",
+  aggregating: "Fusing research sources into confidence-scored context",
   "product-agent": "Analyzing product positioning and unique selling propositions",
   "audience-agent": "Mining Meta Ads audience interest keywords from multiple dimensions",
   "competitor-agent": "Mapping competitive gaps and differentiation strategy",
@@ -219,7 +220,7 @@ function AssistantTag({ time }: { time: string }) {
   return (
     <div className="decision-assistant-tag">
       <span className="copilot-avatar">🤖</span>
-      <span className="decision-assistant-name">Polluxa AI</span>
+      <span className="decision-assistant-name">CRM Ads AI</span>
       {stamp && <span className="decision-assistant-time">{stamp}</span>}
     </div>
   );
@@ -615,36 +616,79 @@ function looksLikePageUrl(value: string): boolean {
   return !!parsed && parsed.hostname.includes(".");
 }
 
-/** "Grounded in N verified facts from your website" — the trust panel. Every concrete
- * claim the AI agents used (prices, named customers, guarantees) is shown with the exact
- * page it was read from, so the campaign is auditable rather than take-our-word-for-it.
- * Renders nothing while facts are loading or when the run produced none. */
-function VerifiedFactsSection({ jobId }: { jobId: string }) {
-  const [data, setData] = useState<CampaignGenerationFacts | null>(null);
-  const [expanded, setExpanded] = useState(false);
+/** Streams the RESEARCHED OUTPUT (company summary, market, audience, competitors) into the UI
+ * DURING the run — research completes roughly halfway through, well before the decision engine
+ * produces the final strategy, so this shows what we've learned about the business while the rest
+ * still runs. Fetches once `researchJobId` exists, re-polls while `streaming`, and is meant to be
+ * hidden by the caller once the full DecisionContextView renders at completion (avoids duplication).
+ * Renders nothing until a research context with a company summary is available. */
+function ResearchOutputPreview({ researchJobId, streaming }: { researchJobId: string; streaming?: boolean }) {
+  const [ctx, setCtx] = useState<ResearchContextLite | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    api.getCampaignGenerationFacts(jobId).then((d) => { if (!cancelled) setData(d); }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [jobId]);
+    const load = () => api.getResearchJob(researchJobId).then((r) => { if (!cancelled) setCtx(r.context); }).catch(() => {});
+    load();
+    if (!streaming) return () => { cancelled = true; };
+    const timer = window.setInterval(load, 4000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [researchJobId, streaming]);
+
+  const summary = ctx?.company?.summary?.trim();
+  if (!summary) return null;
+
+  const competitors = (ctx?.competitors?.competitors ?? []).map((c) => c.name).filter(Boolean).slice(0, 5);
+  const painPoints = (ctx?.audience?.painPoints ?? []).filter(Boolean).slice(0, 3);
+
+  return (
+    <div className="research-output-preview">
+      <p className="decision-section-title">
+        <span className="icon-badge" aria-hidden="true">🔎</span>
+        What we've learned so far{streaming ? " — still analyzing…" : ""}
+      </p>
+      <p className="research-output-summary">{summary}</p>
+      <div className="research-output-grid">
+        {ctx?.audience?.primaryAudience && (
+          <div className="research-output-item"><span className="research-output-key">Primary audience</span><span>{ctx.audience.primaryAudience}</span></div>
+        )}
+        {painPoints.length > 0 && (
+          <div className="research-output-item"><span className="research-output-key">Pain points</span><span>{painPoints.join(" · ")}</span></div>
+        )}
+        {ctx?.market?.recommendedRegion && (
+          <div className="research-output-item"><span className="research-output-key">Region</span><span>{ctx.market.recommendedRegion}</span></div>
+        )}
+        {competitors.length > 0 && (
+          <div className="research-output-item"><span className="research-output-key">Competitors</span><span>{competitors.join(" · ")}</span></div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The verified-facts trust panel: every concrete claim the AI agents used (prices, named
+ * customers, guarantees) shown with the exact page it was read from, so the campaign is
+ * auditable. Renders nothing while facts are loading or when the run produced none. */
+function VerifiedFactsSection({ jobId, streaming }: { jobId: string; streaming?: boolean }) {
+  const [data, setData] = useState<CampaignGenerationFacts | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  // Fetch once on mount, then — while the run is still in progress (`streaming`) — re-poll so newly
+  // extracted facts appear progressively instead of only at completion. The interval clears the
+  // moment `streaming` goes false (job done/failed), so a finished run fetches exactly once.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => api.getCampaignGenerationFacts(jobId).then((d) => { if (!cancelled) setData(d); }).catch(() => {});
+    load();
+    if (!streaming) return () => { cancelled = true; };
+    const timer = window.setInterval(load, 4000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [jobId, streaming]);
 
   if (!data || data.facts.length === 0) return null;
   const shown = expanded ? data.facts : data.facts.slice(0, FACTS_PREVIEW_COUNT);
-  const crawlHost = data.crawl ? (safeParseUrl(data.crawl.url)?.hostname.replace(/^www\./, "") ?? data.crawl.url) : null;
 
   return (
     <div className="verified-facts-section">
-      <p className="decision-section-title">
-        <span className="icon-badge verified-facts-badge" aria-hidden="true">✓</span>
-        Grounded in {data.facts.length} verified facts from your website
-      </p>
-      {data.crawl && (
-        <p className="verified-facts-subline">
-          We crawled {data.crawl.pagesCrawled} pages of {crawlHost} — every concrete claim in this campaign traces back
-          to one of the facts below, so nothing is invented.
-        </p>
-      )}
       <ul className="verified-facts-list">
         {shown.map((f, i) => (
           <li key={`${f.field}-${i}`} className="verified-fact-row">
@@ -739,23 +783,33 @@ export default function NewCampaign() {
   const [goingLive, setGoingLive] = useState(false);
   const [autoOptimize, setAutoOptimize] = useState(true);
 
-  // Same resumability contract as the old flow: generation runs server-side (BullMQ worker)
-  // regardless of whether this component is mounted — persisting just the job id means
-  // switching pages and back resumes exactly where it left off. The URL is persisted
-  // alongside it purely for display (the resubmit bar / decision hero eyebrow) — the job
-  // itself doesn't need it re-sent, since generation is already running server-side.
+  // Resume ONLY a still-running generation. Generation runs server-side (BullMQ worker) regardless
+  // of whether this component is mounted, so persisting the job id lets an IN-PROGRESS run resume
+  // when you navigate back. But a COMPLETED/FAILED job must NOT be auto-restored: doing so
+  // resurrected a days-old finished result (the "stale 62% / Strategy C" polluxa view) every time
+  // the page was opened, because the status fetch succeeds for a finished job and it never
+  // self-cleared. Now a terminal job clears the pointer and leaves a fresh form instead.
   useEffect(() => {
     const savedId = localStorage.getItem(activeJobKey);
     if (!savedId) return;
-    const savedUrl = localStorage.getItem(activeJobUrlKey);
-    if (savedUrl) setPageUrl(savedUrl);
+    const clearPointer = () => {
+      localStorage.removeItem(activeJobKey);
+      localStorage.removeItem(activeJobUrlKey);
+    };
     api
       .getCampaignGenerationStatus(savedId)
-      .then(setJob)
-      .catch(() => {
-        localStorage.removeItem(activeJobKey);
-        localStorage.removeItem(activeJobUrlKey);
-      });
+      .then((restored) => {
+        // Only in-flight statuses resume; a finished/failed job is stale — drop it and start clean.
+        const inProgress = restored.status !== "completed" && restored.status !== "failed";
+        if (inProgress) {
+          const savedUrl = localStorage.getItem(activeJobUrlKey);
+          if (savedUrl) setPageUrl(savedUrl);
+          setJob(restored);
+        } else {
+          clearPointer();
+        }
+      })
+      .catch(clearPointer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -778,16 +832,24 @@ export default function NewCampaign() {
     if (simulateTimerRef.current) window.clearTimeout(simulateTimerRef.current);
     simulateTimerRef.current = window.setTimeout(async () => {
       try {
-        const sim = await api.simulateCampaign({ objective, dailyBudgetCents });
+        const sim = await api.simulateCampaign({ objective, dailyBudgetCents, platforms: networks });
         setSimulation(sim);
       } catch {
         // simulator is best-effort — a failure just hides the preview
       }
     }, SIMULATE_DEBOUNCE_MS);
     return () => { if (simulateTimerRef.current) window.clearTimeout(simulateTimerRef.current); };
-  }, [objective, dailyBudgetCents, job]);
+  }, [objective, dailyBudgetCents, networks, job]);
 
-  const factsVisible = job?.status === "completed" || job?.status === "building_campaign";
+  // Verified facts are persisted in Phase 1 (crawl fact-extraction), long before the run finishes,
+  // so reveal them as soon as we're PAST research — they stream in progressively via the status
+  // poll instead of staying hidden until "completed". The facts endpoint returns [] until rows
+  // exist, so showing the section early just renders empty until the first facts land, never errors.
+  const factsVisible =
+    job?.status === "completed" ||
+    job?.status === "building_campaign" ||
+    job?.status === "running_agents" ||
+    job?.status === "aggregating";
 
   // Real-time WebSocket progress updates (instant, replaces polling as primary source)
   useEffect(() => {
@@ -967,7 +1029,7 @@ export default function NewCampaign() {
             <span className="new-campaign-word-accent">page</span> would you like to promote?
           </h2>
           <p className="new-campaign-subtext">
-            Paste your link below — 27 research providers will analyze product positioning, audience, competitors, and market data in real-time.
+            Paste your link below — 10 research providers will analyze product positioning, audience, competitors, and market data in real-time.
             The AI will mine Meta Ads interest keywords, validate them against the platform database, and generate publication-ready campaigns with genuine budget recommendations.
           </p>
 
@@ -1044,11 +1106,12 @@ export default function NewCampaign() {
 
             {simulation && (
               <div className="ncs-sim">
+                <span className="ncs-sim-title">Ballpark projection — from your objective, budget &amp; platforms</span>
                 <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estImpressionsPerDay)}</span><span className="ncs-sim-key">impressions/day</span></div>
                 <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estClicks)}</span><span className="ncs-sim-key">clicks/day</span></div>
                 <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estConversions)}</span><span className="ncs-sim-key">conv./day</span></div>
                 <div className="ncs-sim-item"><span className="ncs-sim-val">{simulation.estRoas.toFixed(1)}×</span><span className="ncs-sim-key">est. ROAS</span></div>
-                <span className="ncs-sim-note">Estimated — actual results depend on your creative, audience, and market.</span>
+                <span className="ncs-sim-note">Industry-average estimate, not a forecast for your business yet — it moves with the objective, budget, and platform mix above. You'll get real numbers for {pageUrl ? "this site" : "your site"} after Deep Research runs.</span>
               </div>
             )}
           </div>
@@ -1100,7 +1163,7 @@ export default function NewCampaign() {
                 <span>Analyzing {pageUrl || "your page"} with comprehensive product and audience analysis.</span>
               </div>
               <p className="crawler-trace-time-note">
-                Deep research across 27 sources, Meta Ads interest mining, and strategy simulation in progress — this runs in the background.
+                Deep research across every source, Meta Ads interest mining, and strategy simulation in progress — this runs in the background.
               </p>
               <ul className="crawler-trace-steps">
                 {PHASE_ORDER.map((phase, i) => {
@@ -1132,11 +1195,22 @@ export default function NewCampaign() {
             </div>
           )}
 
+          {/* Stream the researched output the moment research completes (mid-run), so the user sees
+              what we've learned while agents + strategy still run. Superseded by the full decision
+              view below once it lands, so this only shows in the gap between the two. */}
+          {isActive && job.researchJobId && !job.decisionContext && (
+            <ResearchOutputPreview researchJobId={job.researchJobId} streaming={isActive} />
+          )}
+
           {isDone && <FreshnessBadge job={job} onRefresh={handleRefresh} refreshing={refreshing} />}
 
           {job.decisionContext && <DecisionContextView decision={job.decisionContext} url={pageUrl} />}
 
-          {factsVisible && <VerifiedFactsSection jobId={job.id} />}
+          {/* Verified-facts trust panel hidden: on multi-product/case-study sites it surfaced
+              case-study page content (other companies' details — e.g. named customers, unrelated
+              industries) as if they were THIS business's own facts, which read as low-quality.
+              Kept in code (VerifiedFactsSection) for when fact extraction is scoped to first-party
+              pages only; not rendered until then. */}
 
           {factsVisible && <CompetitorAdsSection jobId={job.id} />}
 
