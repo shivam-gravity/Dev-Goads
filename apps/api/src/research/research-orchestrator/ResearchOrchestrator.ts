@@ -49,10 +49,14 @@ export interface WebsitePrefetch {
  */
 export function deriveIndustry(facts: WebsitePrefetch["facts"]): string | undefined {
   if (!facts?.length) return undefined;
+  // Prefer an explicit category/industry fact, then a concrete product/offering descriptor, and
+  // only fall back to a tagline/positioning line last — a marketing tagline ("The Future of
+  // Commerce") makes a WORSE competitor-search query than a plain product category ("ERP/CRM
+  // software"), so it's the lowest-priority source, not a middle one.
   const byPriority = [
     (f: { field: string }) => /category|industry|vertical/i.test(f.field),
-    (f: { field: string }) => /product\.description|tagline|positioning|valueprop|value_prop|offering/i.test(f.field),
-    (f: { field: string }) => /product\.(name|type)|producttype/i.test(f.field),
+    (f: { field: string }) => /product\.(name|type|description)|producttype|offering|software|platform|solution/i.test(f.field),
+    (f: { field: string }) => /tagline|positioning|valueprop|value_prop|headline/i.test(f.field),
   ];
   for (const match of byPriority) {
     const hit = facts.find(match);

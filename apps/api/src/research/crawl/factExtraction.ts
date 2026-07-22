@@ -50,6 +50,23 @@ const FACT_EXTRACTION_TOOL = {
  * Returns the number of facts persisted. 0 (never a throw upward from missing data) when
  * the crawl has no pages or no model is configured — real facts or none, no fallback facts.
  */
+/** One fact-extraction LLM call over pre-packed content. Returns [] (never throws) when the
+ * model declines to call the tool / returns no facts, so callers can retry with narrower input. */
+async function runFactExtraction(content: string): Promise<ExtractedFact[]> {
+  if (!content.trim()) return [];
+  const { data: result } = await llmRouter.runStructured<{ facts: ExtractedFact[] }>(resolveTaskModel("crawl-fact-extraction"), {
+    maxTokens: 2048,
+    tool: FACT_EXTRACTION_TOOL,
+    messages: [
+      {
+        role: "user",
+        content: `Extract every concrete, verifiable fact from these crawled website pages. For each fact give the exact page URL it came from and your confidence in it.\n\n${content}`,
+      },
+    ],
+  });
+  return result && Array.isArray(result.facts) ? result.facts : [];
+}
+
 export async function extractAndPersistCrawlFacts(crawlJobId: string): Promise<number> {
   const pages = await prisma.crawlPage.findMany({
     where: { crawlJobId, cleanedText: { not: null }, relevanceScore: { gte: MIN_RELEVANCE_FOR_FACTS } },
@@ -84,22 +101,25 @@ export async function extractAndPersistCrawlFacts(crawlJobId: string): Promise<n
   }
   const content = parts.join("\n\n");
 
-  const { data: result } = await llmRouter.runStructured<{ facts: ExtractedFact[] }>(resolveTaskModel("crawl-fact-extraction"), {
-    maxTokens: 2048,
-    tool: FACT_EXTRACTION_TOOL,
-    messages: [
-      {
-        role: "user",
-        content: `Extract every concrete, verifiable fact from these crawled website pages. For each fact give the exact page URL it came from and your confidence in it.\n\n${content}`,
-      },
-    ],
-  });
-  if (!result || !Array.isArray(result.facts) || result.facts.length === 0) {
+  let facts = await runFactExtraction(content);
+  // Resilience fallback: a single concatenated call over several pages sometimes returns ZERO
+  // facts when long narrative pages (e.g. case studies / blog posts) dilute the fact-dense
+  // homepage — observed live: polluxa.com homepage ALONE yields 25 facts, but homepage + 2
+  // case-study pages returns 0. When the combined pass comes back empty but we have more than
+  // one page, retry with ONLY the highest-relevance page (pages[0], relevance-sorted above), which
+  // is almost always the fact-rich homepage. One real page beats an empty result that ungrounds
+  // every downstream agent.
+  if (facts.length === 0 && pages.length > 1) {
+    const top = pages[0];
+    logger.info(`extractAndPersistCrawlFacts: combined pass returned 0 facts for crawl ${crawlJobId} — retrying with the top page only (${top.url})`);
+    facts = await runFactExtraction(`[Page: ${top.url}]\n${(top.cleanedText ?? "").slice(0, MAX_CONTENT_CHARS)}`);
+  }
+  if (facts.length === 0) {
     logger.info(`extractAndPersistCrawlFacts: model returned no facts for crawl ${crawlJobId}`);
     return 0;
   }
 
-  return persistCrawlFacts(crawlJobId, result.facts);
+  return persistCrawlFacts(crawlJobId, facts);
 }
 
 /**
@@ -135,18 +155,14 @@ export async function extractFactsFromPages(
   const content = parts.join("\n\n");
 
   try {
-    const { data: result } = await llmRouter.runStructured<{ facts: ExtractedFact[] }>(resolveTaskModel("crawl-fact-extraction"), {
-      maxTokens: 2048,
-      tool: FACT_EXTRACTION_TOOL,
-      messages: [
-        {
-          role: "user",
-          content: `Extract every concrete, verifiable fact from these crawled website pages. For each fact give the exact page URL it came from and your confidence in it.\n\n${content}`,
-        },
-      ],
-    });
-    if (!result || !Array.isArray(result.facts)) return [];
-    return result.facts;
+    let facts = await runFactExtraction(content);
+    // Same resilience fallback as the persisted path: if a multi-page concatenation returns zero
+    // facts (long narrative pages diluting a fact-dense homepage), retry with only the first
+    // (highest-value) page rather than handing providers an empty fact table.
+    if (facts.length === 0 && usable.length > 1) {
+      facts = await runFactExtraction(`[Page: ${usable[0].url}]\n${usable[0].text.slice(0, MAX_CONTENT_CHARS)}`);
+    }
+    return facts;
   } catch (err) {
     logger.warn("extractFactsFromPages: fact extraction failed — providers fall back to their search path", err);
     return [];
