@@ -125,6 +125,16 @@ function providerWeight(provider: string): number {
   return 1;
 }
 
+// A hard-FAILED provider (timeout / thrown error) contributed no signal — it's an
+// infrastructure hiccup, not evidence that the business genuinely has nothing to find. It's
+// already surfaced separately in metadata.providersFailed. Counting its 0.0 as a full-weight
+// vote conflates "the crawl/LLM timed out" with "we're confident this dimension is empty" and
+// lets one flaky provider (e.g. an audience-engine timeout) crater an otherwise-strong run.
+// So collapse a failed provider's weight to near-zero for the confidence mean — it stays visible
+// in providersFailed but no longer dominates the number. (partial/success are still counted in
+// full: a partial result IS real signal, just thin.)
+const FAILED_PROVIDER_WEIGHT = 0.05;
+
 /** Decision-relevance-WEIGHTED mean of per-provider confidence (see CORE/RARELY_APPLICABLE
  * above). Rounded to 2 decimals. Empty input → 0, same as the old flat average. */
 function computeOverallConfidence(results: ProviderResult<unknown>[]): number {
@@ -132,7 +142,7 @@ function computeOverallConfidence(results: ProviderResult<unknown>[]): number {
   let weightedSum = 0;
   let weightTotal = 0;
   for (const r of results) {
-    const w = providerWeight(r.provider);
+    const w = r.status === "failed" ? FAILED_PROVIDER_WEIGHT : providerWeight(r.provider);
     weightedSum += r.confidence * w;
     weightTotal += w;
   }

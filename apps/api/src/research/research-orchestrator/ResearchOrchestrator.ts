@@ -20,12 +20,11 @@ import {
 
 export const MAX_PROVIDER_ATTEMPTS = 2;
 export const PROVIDER_RETRY_DELAY_MS = 1000;
-// A provider's LLM call can now legitimately take much longer than the old 45s on a free-tier
-// model, because the openRouterClient rides out 429 rate-limit backoffs + a concurrency queue
-// (see its doc comment) rather than failing fast. This outer per-provider ceiling must exceed
-// the inner llmRouter hosted-timeout (120s), or it kills a provider mid-retry and reintroduces
-// exactly the "company provider timed out" degradation the retry logic exists to prevent.
-// Tune down (env) when on a fast paid model that doesn't need the backoff headroom.
+// A provider's LLM call can legitimately take a while, because the Bedrock client rides out
+// 429 (ThrottlingException) backoffs + a concurrency queue (see its doc comment) rather than
+// failing fast. This outer per-provider ceiling must comfortably exceed the Bedrock client's own
+// retry+backoff budget, or it kills a provider mid-retry and reintroduces exactly the "company
+// provider timed out" degradation the retry logic exists to prevent. Tune via env.
 export const PROVIDER_TIMEOUT_MS = Number(process.env.RESEARCH_PROVIDER_TIMEOUT_MS ?? 150_000);
 // How much of the up-front site crawl to hand every provider as ground-truth. Big enough to
 // carry the real value proposition / product / positioning, capped so it doesn't dominate each
