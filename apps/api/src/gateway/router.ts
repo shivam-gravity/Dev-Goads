@@ -54,11 +54,12 @@ const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL ?? "http://localhost:4001"
 const CAMPAIGN_SERVICE_URL = process.env.CAMPAIGN_SERVICE_URL ?? "http://localhost:4002";
 const SCRAPER_SERVICE_URL = process.env.SCRAPER_SERVICE_URL ?? "http://localhost:4003";
 
-import { listNotifications, markRead, markAllRead, unreadCount, seedDemoNotifications, createNotification } from "../modules/notifications/notificationService.js";
-import { listAssets, createAsset, deleteAsset, updateAssetTags, seedDemoAssets } from "../modules/assets/assetService.js";
-import { listInsights, dismissInsight, generateInsights, seedDemoInsights, recordOptimizationInsights } from "../modules/insights/insightService.js";
+import { listNotifications, markRead, markAllRead, unreadCount, createNotification } from "../modules/notifications/notificationService.js";
+import { listAssets, createAsset, deleteAsset, updateAssetTags } from "../modules/assets/assetService.js";
+import { listInsights, dismissInsight, generateInsights, recordOptimizationInsights } from "../modules/insights/insightService.js";
 import { getOrCreateIntegrations, connectIntegration, disconnectIntegration, updateIntegrationSettings, getMetaCredentials, sanitizeIntegration, setMetaManualConnection, setGoogleManualConnection } from "../modules/integrations/integrationService.js";
 import { listAdAccounts as listMetaAdAccountsGraph, listPages as listMetaPagesGraph, listInstagramAccounts as listMetaInstagramAccountsGraph, listPixels as listMetaPixelsGraph } from "../modules/integrations/metaOAuth.js";
+import { confirmPixelLive } from "../modules/integrations/metaPixelHelper.js";
 import { listAccessibleCustomers as listGoogleCustomersApi, listConversionActions as listGoogleConversionActionsApi, getGoogleAdsCredentials } from "../modules/integrations/googleOAuth.js";
 import { getProductCatalog } from "../modules/integrations/productCatalogService.js";
 import { createGenerationJob, getGenerationJob } from "../modules/generation/generationJobService.js";
@@ -81,7 +82,7 @@ import {
 import { buildMetaTargetingSpec, fetchMetaReachEstimate, estimateReachHeuristic } from "../modules/adapters/metaTargetingMapper.js";
 import {
   listDrafts, createDraft, updateDraft, publishDraft, deleteDraft, scheduleDraft,
-  listAdSets, createAdSet, listAds, createAd, updateAd, seedDemoDrafts,
+  listAdSets, createAdSet, listAds, createAd, updateAd,
 } from "../modules/drafts/draftsService.js";
 import { listSupportTickets, createSupportTicket } from "../modules/support/supportTicketService.js";
 import { getNotificationPreferences, setNotificationPreferences } from "../modules/notifications/notificationPreferenceService.js";
@@ -190,7 +191,6 @@ router.delete("/workspaces/members/:memberId", asyncHandler(async (_req, res) =>
    ═══════════════════════════════════════════════ */
 
 router.get("/workspaces/:id/notifications", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
-  await seedDemoNotifications(req.params.id);
   res.json(await listNotifications(req.params.id));
 }));
 
@@ -213,7 +213,6 @@ router.post("/workspaces/:id/notifications/read-all", requireWorkspaceMember("pa
    ═══════════════════════════════════════════════ */
 
 router.get("/workspaces/:id/assets", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
-  await seedDemoAssets(req.params.id);
   const type = req.query.type as string | undefined;
   res.json(await listAssets(req.params.id, type as any));
 }));
@@ -401,6 +400,14 @@ router.get("/workspaces/:id/integrations/meta/pages/:pageId/instagram-accounts",
 router.get("/workspaces/:id/integrations/meta/pixels", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   try { res.json(await listMetaPixelsGraph(req.params.id)); }
   catch (err) { sendError(res, err, 502, "Failed to list Meta pixels"); }
+}));
+
+// Backs the campaign-builder "confirm pixel is live" gate: checks the live Graph API for whether
+// the pixel is available AND firing recent events, so the UI can enable generation only once the
+// pixel is confirmed. Same enforcement runs server-side in POST /campaigns/generate below.
+router.get("/workspaces/:id/integrations/meta/pixels/:pixelId/confirm", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
+  try { res.json(await confirmPixelLive(req.params.id, req.params.pixelId)); }
+  catch (err) { sendError(res, err, 502, "Failed to confirm Meta pixel status"); }
 }));
 
 router.get("/workspaces/:id/integrations/google/customers", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
@@ -938,7 +945,7 @@ router.post("/campaigns/simulate", asyncHandler(async (req, res) => {
   if (!Number.isFinite(dailyBudgetCents) || dailyBudgetCents <= 0) {
     return res.status(400).json({ error: "dailyBudgetCents (positive number) is required" });
   }
-  res.json(simulateBudget({ objective: req.body?.objective, dailyBudgetCents, countries: req.body?.countries }));
+  res.json(simulateBudget({ objective: req.body?.objective, dailyBudgetCents, platforms: req.body?.platforms, countries: req.body?.countries }));
 }));
 router.get("/campaigns/:id", asyncHandler(async (req, res) => {
   const campaign = await prisma.campaign.findUnique({ where: { id: req.params.id } });
@@ -1271,17 +1278,23 @@ const campaignGenerateSchema = z.object({
   url: z.string().min(1),
   name: z.string().min(1).optional(),
   dailyBudgetCents: z.number().int().positive().max(MAX_BUDGET_CENTS).optional(),
-  channels: z.array(z.enum(["meta", "google", "tiktok", "bing"])).optional(),
+  // Only Meta + Google are live. TikTok/Bing are "coming soon" — rejected at the boundary so a
+  // channel we can't actually launch can never enter the pipeline (widen this enum when they ship).
+  channels: z.array(z.enum(["meta", "google"])).optional(),
   objective: z.string().optional(),
   countries: z.array(z.string()).optional(),
   // Bypass the research cache and force a fresh 27-provider run for this generation.
   forceRefresh: z.boolean().optional(),
+  // When set, generation is gated on this pixel being confirmed LIVE (available + firing recent
+  // events) — the server re-runs the same confirmPixelLive check the UI gate uses, so a campaign
+  // can't be generated pointing at a dead/uninstalled pixel even if the UI check is bypassed.
+  pixelId: z.string().min(1).optional(),
 });
 
 router.post("/campaigns/generate", requireWorkspaceMember("body", "workspaceId"), asyncHandler(async (req, res) => {
   const parsed = campaignGenerateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { workspaceId, businessId, url, name, dailyBudgetCents, objective, forceRefresh } = parsed.data;
+  const { workspaceId, businessId, url, name, dailyBudgetCents, objective, forceRefresh, pixelId } = parsed.data;
   // Only forward a valid post-ODAX Meta objective to the pipeline; anything else is dropped so
   // launchMetaHierarchy falls back to its default rather than sending junk to the Graph API.
   const validObjective = objective && isValidObjective(objective) ? objective : undefined;
@@ -1292,6 +1305,21 @@ router.post("/campaigns/generate", requireWorkspaceMember("body", "workspaceId")
     return res.status(403).json({ error: "This business does not belong to the given workspace" });
   }
 
+  // Live pixel gate: if a pixel was selected for this generation, it must be confirmed live
+  // (available + firing recent events) before we spend the pipeline's LLM budget and, eventually,
+  // ad budget on it. Mirrors the UI's confirm gate so bypassing the UI can't skip the check.
+  if (pixelId) {
+    let confirmation;
+    try {
+      confirmation = await confirmPixelLive(workspaceId, pixelId);
+    } catch (err) {
+      return sendError(res, err, 502, "Failed to confirm Meta pixel status before generation");
+    }
+    if (!confirmation.live) {
+      return res.status(409).json({ error: `Pixel ${pixelId} is not confirmed live — ${confirmation.reason}`, pixelConfirmation: confirmation });
+    }
+  }
+
   // Return a recent completed job for the same (workspace, business, url) if one exists
   // and forceRefresh isn't requested — avoids re-running the full pipeline when verified
   // data is already available. Normalizes URL variants (with/without https://) to match.
@@ -1299,32 +1327,44 @@ router.post("/campaigns/generate", requireWorkspaceMember("body", "workspaceId")
     const normalizedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
     const bareHost = normalizedUrl.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
     const urlVariants = [url, normalizedUrl, `https://${bareHost}`, `http://${bareHost}`, bareHost];
-    const existing = await prisma.campaignGenerationJob.findFirst({
+    // Pull the recent completed candidates (bounded), keep only those still FRESH within the TTL,
+    // then reuse the HIGHEST-CONFIDENCE one — not merely the most recent. Confidence lives inside
+    // the decisionContext JSON (no column to orderBy), so ranking happens here in code. This is
+    // what makes "show the best data we have, and only if it's fresh" actually hold: previously it
+    // returned newest-within-14-days regardless of confidence, surfacing stale low-confidence runs.
+    const candidates = await prisma.campaignGenerationJob.findMany({
       where: { workspaceId, businessId, url: { in: urlVariants }, status: "completed", decisionContext: { not: null as any } },
       orderBy: { completedAt: "desc" },
+      take: 20,
     });
+    const ttl = CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS;
+    const confidenceOf = (dc: unknown): number => {
+      const c = (dc as { confidence?: unknown } | null)?.confidence;
+      return typeof c === "number" ? c : 0;
+    };
+    const fresh = candidates.filter((c) => {
+      const researchedAt = c.completedAt ?? c.startedAt ?? c.createdAt;
+      return !isStale(researchedAt.toISOString(), ttl);
+    });
+    const existing = fresh.sort((a, b) => confidenceOf(b.decisionContext) - confidenceOf(a.decisionContext))[0];
     if (existing) {
-      const researchedAt = existing.completedAt ?? existing.startedAt ?? existing.createdAt;
-      const ttl = CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS;
-      if (!isStale(researchedAt.toISOString(), ttl)) {
-        return res.status(200).json({
-          id: existing.id,
-          workspaceId: existing.workspaceId,
-          businessId: existing.businessId,
-          url: existing.url,
-          status: existing.status,
-          researchJobId: existing.researchJobId,
-          strategyId: existing.strategyId,
-          campaignId: existing.campaignId,
-          decisionContext: existing.decisionContext,
-          agentResults: existing.agentResults,
-          error: existing.error,
-          startedAt: existing.startedAt?.toISOString(),
-          completedAt: existing.completedAt?.toISOString(),
-          createdAt: existing.createdAt.toISOString(),
-          updatedAt: existing.updatedAt.toISOString(),
-        });
-      }
+      return res.status(200).json({
+        id: existing.id,
+        workspaceId: existing.workspaceId,
+        businessId: existing.businessId,
+        url: existing.url,
+        status: existing.status,
+        researchJobId: existing.researchJobId,
+        strategyId: existing.strategyId,
+        campaignId: existing.campaignId,
+        decisionContext: existing.decisionContext,
+        agentResults: existing.agentResults,
+        error: existing.error,
+        startedAt: existing.startedAt?.toISOString(),
+        completedAt: existing.completedAt?.toISOString(),
+        createdAt: existing.createdAt.toISOString(),
+        updatedAt: existing.updatedAt.toISOString(),
+      });
     }
   }
 
@@ -1346,12 +1386,12 @@ router.get("/campaigns/generate/:id", asyncHandler(async (req: AuthedRequest, re
   res.json(job);
 }));
 
-// How long a completed generation's research is considered fresh before the UI prompts a
-// re-run — reuses the same freshnessScore/isStale math Research Memory's retrieval already
-// applies (research/knowledge/freshness.ts), just with a far shorter horizon: a business's
-// own market/competitor/pricing landscape moves much faster than the 180-day corroboration
-// window that's appropriate for cross-business RAG retrieval.
-const CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+// How long a completed generation's research is considered fresh before a new generate request
+// re-runs the pipeline instead of reusing the cached job. Reuses the same freshnessScore/isStale
+// math Research Memory's retrieval applies (research/knowledge/freshness.ts). Kept deliberately
+// short (5h) — a business's own market/competitor/pricing read goes stale fast, and reusing a
+// day-old cached run is exactly what surfaced 2-day-old low-confidence data in the UI.
+const CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS = 5 * 60 * 60 * 1000;
 
 router.get("/campaigns/generate/:id/status", asyncHandler(async (req: AuthedRequest, res) => {
   const job = await getCampaignGenerationJob(req.params.id);
