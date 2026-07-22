@@ -277,13 +277,20 @@ function truncateText(s: string, max: number) {
   return s.slice(0, max).trimEnd() + "…";
 }
 
-function StrategyCard({ strategy, simulation, isWinner }: { strategy: CampaignStrategyOption; simulation?: StrategySimulationResult; isWinner: boolean }) {
+function StrategyCard({ strategy, simulation, isWinner, onSelect, selecting, disabled }: {
+  strategy: CampaignStrategyOption;
+  simulation?: StrategySimulationResult;
+  isWinner: boolean;
+  onSelect?: () => void;
+  selecting?: boolean;
+  disabled?: boolean;
+}) {
   const platforms = strategy.platforms ?? [];
   return (
     <div className={`strategy-card-v2 ${isWinner ? "winner" : ""}`}>
       <div className="strategy-card-v2-head">
         <span className="strategy-card-v2-label">{strategy.label}</span>
-        {isWinner && <span className="decision-winner-badge">★ Winner</span>}
+        {isWinner && <span className="decision-winner-badge">★ Recommended</span>}
       </div>
 
       {simulation && (
@@ -312,6 +319,16 @@ function StrategyCard({ strategy, simulation, isWinner }: { strategy: CampaignSt
       <div className="strategy-card-v2-field"><strong>Budget</strong>{formatCents(strategy.budgetDailyCents)}/day · KPI: {truncateText(strategy.expectedKpi, 60)}</div>
       <div className="strategy-card-v2-field"><strong>Creative Direction</strong>{truncateText(strategy.creativeDirection, 100)}</div>
       <div className="strategy-card-v2-field"><strong>Messaging</strong>{truncateText(strategy.messaging, 80)}</div>
+      {onSelect && (
+        <button
+          type="button"
+          className={`btn btn-sm strategy-card-v2-select ${isWinner ? "btn-primary" : "btn-secondary"}`}
+          onClick={onSelect}
+          disabled={selecting || disabled}
+        >
+          {selecting ? "Building campaign…" : "Use this campaign"}
+        </button>
+      )}
     </div>
   );
 }
@@ -321,7 +338,7 @@ const PERSONA_AVATAR_COLORS = [
   { bg: "#e6f4ea", color: "#34a853" },
   { bg: "#fef7e0", color: "#f9ab00" },
   { bg: "#fce8e6", color: "#ea4335" },
-  { bg: "#f3e8fd", color: "#7033f5" },
+  { bg: "#f3e8fd", color: "#1c9ce0" },
 ];
 
 function PersonaCarousel({ personas }: { personas: AudiencePersonaCard[] }) {
@@ -446,7 +463,13 @@ function CollapsibleSection({ title, icon, defaultOpen = false, children }: { ti
   );
 }
 
-function DecisionContextView({ decision: raw, url }: { decision: DecisionContext; url: string }) {
+function DecisionContextView({ decision: raw, url, jobId, onSelectStrategy, selectingStrategy }: {
+  decision: DecisionContext;
+  url: string;
+  jobId?: string;
+  onSelectStrategy?: (strategyRef: string) => void;
+  selectingStrategy?: string | null;
+}) {
   const decision = normalizeDecision(raw);
   const simByStrategy = new Map(decision.simulations.map((s) => [s.strategyId, s]));
   const sortedStrategies = [...decision.strategies].sort(
@@ -571,10 +594,23 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
       )}
 
       {sortedStrategies.length > 0 && (
-        <CollapsibleSection title={`Candidate Strategies (${sortedStrategies.length})`} icon={<TargetIcon />}>
+        <CollapsibleSection title={`${sortedStrategies.length} Complete Campaign Suggestions`} icon={<TargetIcon />} defaultOpen>
+          {onSelectStrategy && (
+            <p className="strategy-grid-hint muted-text">
+              Each suggestion is a complete campaign with Meta &amp; Google ads ready to launch. Pick one to open it in the builder.
+            </p>
+          )}
           <div className="strategy-grid">
             {sortedStrategies.map((s) => (
-              <StrategyCard key={s.id} strategy={s} simulation={simByStrategy.get(s.id)} isWinner={s.id === winnerId} />
+              <StrategyCard
+                key={s.id}
+                strategy={s}
+                simulation={simByStrategy.get(s.id)}
+                isWinner={s.id === winnerId}
+                onSelect={onSelectStrategy ? () => onSelectStrategy(s.id) : undefined}
+                selecting={selectingStrategy === s.id}
+                disabled={!!selectingStrategy && selectingStrategy !== s.id}
+              />
             ))}
           </div>
         </CollapsibleSection>
@@ -782,6 +818,9 @@ export default function NewCampaign() {
   const [publishing, setPublishing] = useState(false);
   const [goingLive, setGoingLive] = useState(false);
   const [autoOptimize, setAutoOptimize] = useState(true);
+  // Which candidate strategy (by id) is currently being materialized into an editable campaign,
+  // so the picked card shows "Building…" and the others disable while the build is in flight.
+  const [selectingStrategy, setSelectingStrategy] = useState<string | null>(null);
 
   // Resume ONLY a still-running generation. Generation runs server-side (BullMQ worker) regardless
   // of whether this component is mounted, so persisting the job id lets an IN-PROGRESS run resume
@@ -966,6 +1005,23 @@ export default function NewCampaign() {
       navigate(`/campaigns/${campaign.id}`);
     } finally {
       setGoingLive(false);
+    }
+  }
+
+  // Picks one of the 3 candidate strategies and opens its complete campaign in the builder.
+  // The winner reuses the campaign the pipeline already built; a non-winner is built on demand
+  // from data already computed (POST .../select-strategy). Either way the user lands in the
+  // builder with a full Meta + Google ad set for that strategy.
+  async function handleSelectStrategy(strategyRef: string) {
+    if (!job?.id || selectingStrategy) return;
+    setSelectingStrategy(strategyRef);
+    setError(null);
+    try {
+      const result = await api.selectCampaignStrategy(job.id, strategyRef);
+      navigate(`/campaigns/${result.campaignId}/builder`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't build that campaign — try another suggestion.");
+      setSelectingStrategy(null);
     }
   }
 
@@ -1204,7 +1260,15 @@ export default function NewCampaign() {
 
           {isDone && <FreshnessBadge job={job} onRefresh={handleRefresh} refreshing={refreshing} />}
 
-          {job.decisionContext && <DecisionContextView decision={job.decisionContext} url={pageUrl} />}
+          {job.decisionContext && (
+            <DecisionContextView
+              decision={job.decisionContext}
+              url={pageUrl}
+              jobId={job.id}
+              onSelectStrategy={isDone && !publishedCampaign ? handleSelectStrategy : undefined}
+              selectingStrategy={selectingStrategy}
+            />
+          )}
 
           {/* Verified-facts trust panel hidden: on multi-product/case-study sites it surfaced
               case-study page content (other companies' details — e.g. named customers, unrelated

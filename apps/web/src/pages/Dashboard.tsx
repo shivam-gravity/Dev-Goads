@@ -193,8 +193,8 @@ export default function Dashboard({ businessId }: { businessId: string }) {
         <svg width="100%" height="240" viewBox="0 0 1000 240" preserveAspectRatio="none">
           <defs>
             <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#7033f5" stopOpacity="0.15" />
-              <stop offset="100%" stopColor="#7033f5" stopOpacity="0" />
+              <stop offset="0%" stopColor="#1c9ce0" stopOpacity="0.15" />
+              <stop offset="100%" stopColor="#1c9ce0" stopOpacity="0" />
             </linearGradient>
           </defs>
 
@@ -243,7 +243,7 @@ export default function Dashboard({ businessId }: { businessId: string }) {
             ) : null
           )}
 
-          <polyline points={linePoints} fill="none" stroke="#7033f5" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          <polyline points={linePoints} fill="none" stroke="#1c9ce0" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
           <path d={areaPath} fill="url(#chartGrad)" />
         </svg>
 
@@ -305,7 +305,7 @@ export default function Dashboard({ businessId }: { businessId: string }) {
             <div className="polluxa-section-indicator"></div>
             <h2 className="polluxa-section-title">Recent Campaigns</h2>
           </div>
-          <Link to="/campaigns" style={{ fontSize: "14px", fontWeight: 500, color: "var(--accent, #7033f5)", textDecoration: "none" }}>
+          <Link to="/campaigns" style={{ fontSize: "14px", fontWeight: 500, color: "var(--accent, #1c9ce0)", textDecoration: "none" }}>
             View all campaigns →
           </Link>
         </div>
@@ -331,7 +331,7 @@ export default function Dashboard({ businessId }: { businessId: string }) {
                 {recentCampaigns.map((c) => (
                   <tr key={c.id}>
                     <td style={{ fontWeight: 500 }}>
-                      <Link to={`/campaigns/${c.id}`} style={{ color: "var(--accent, #7033f5)", textDecoration: "none" }}>{c.name}</Link>
+                      <Link to={`/campaigns/${c.id}`} style={{ color: "var(--accent, #1c9ce0)", textDecoration: "none" }}>{c.name}</Link>
                     </td>
                     <td><StatusBadge status={c.status} /></td>
                     <td>{c.networks.map((n) => (n === "meta" ? "Meta" : "Google")).join(", ")}</td>

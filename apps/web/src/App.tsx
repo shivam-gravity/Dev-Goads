@@ -117,8 +117,8 @@ function AuthenticatedApp() {
       <aside className={`sidebar polluxa-sidebar ${sidebarOpen ? "sidebar-open" : ""} ${brandMenuOpen ? "sidebar-pinned" : ""}`}>
         <div className="sidebar-brand polluxa-brand">
           <NavLink to="/dashboard" className="brand-lockup-polluxa" onClick={() => setSidebarOpen(false)}>
-            <span className="brand-logo-badge"><img src="/logo-icon.png" alt="CRM Ads" /></span>
-            <span className="brand-text-polluxa">CRM Ads</span>
+            <span className="brand-logo-badge"><img src="/polluxa-logo.svg" alt="Polluxa" /></span>
+            <span className="brand-text-polluxa">Polluxa Ads</span>
           </NavLink>
         </div>
 
@@ -300,7 +300,7 @@ function AuthenticatedApp() {
           </button>
           <NavLink to="/" className="brand brand-lockup">
             <MascotIcon className="mascot mascot-sm" />
-            <span className="brand-text">Polluxa</span>
+            <span className="brand-text">CRM Ads</span>
           </NavLink>
         </header>
 
