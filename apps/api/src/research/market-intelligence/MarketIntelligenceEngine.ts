@@ -1,5 +1,5 @@
 import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
-import { hostnameOf, sanitizeBusinessName } from "../providers/support.js";
+import { factGroundingScore, hostnameOf, sanitizeBusinessName, type VerifiedFactInput } from "../providers/support.js";
 import { readMemory, writeMemory } from "../memory/MemoryCoordinator.js";
 import type { Citation } from "../../types/index.js";
 
@@ -127,9 +127,13 @@ function fallbackFields(subject: string): MarketFields {
 // site — so a fact-grounded result earns a high floor even with zero web citations, instead of
 // being scored as an ungrounded "AI estimate" (0.35) the way it was before. Without facts, the
 // old citation-count behavior is unchanged.
-function computeConfidence(usedFallback: boolean, citationCount: number, factGrounded = false): number {
+function computeConfidence(usedFallback: boolean, citationCount: number, facts?: VerifiedFactInput[]): number {
   if (usedFallback) return 0.1;
-  if (factGrounded) return Math.round(Math.min(0.8 + citationCount * 0.03, 0.9) * 100) / 100;
+  // Fact-grounded: score by the QUALITY of the business's own verified facts (shared 0.8 floor +
+  // a bonus for a rich/high-confidence/multi-source fact base). The fact-first path skips web
+  // search, so citationCount is 0 here — previously that pinned the score flat at 0.8; now the
+  // fact base itself moves it, the same way for every fact-first engine (see factGroundingScore).
+  if (facts?.length) return factGroundingScore(facts);
   return citationCount === 0 ? 0.35 : Math.round(Math.min(0.55 + citationCount * 0.07, 0.9) * 100) / 100;
 }
 
@@ -208,6 +212,31 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
 
   const usedFallback = !structured;
   const fields = structured ?? fallbackFields(subject);
+
+  // Strip the business's OWN name back out of the model's market signals. The subject ("Master's",
+  // derived from workspace "Master's Business") is the thing we asked the model to analyze, and
+  // ungrounded models routinely echo it back as an "emerging competitor" or as a trend/demand/
+  // seasonality token — producing nonsense like "1 emerging competitor gaining traction: Master's"
+  // and "trends: Master's". A business is never its own competitor or market trend; drop any signal
+  // whose normalized text matches the subject, the raw business name, or the domain host.
+  const selfNames = new Set(
+    [subject, cleanName, input.businessName, hostnameOf(input.url)]
+      .filter(Boolean)
+      .map((n) => String(n).toLowerCase().replace(/[^a-z0-9]/g, "")),
+  );
+  const isSelfReference = (s: string): boolean => {
+    const norm = s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!norm) return false;
+    for (const self of selfNames) {
+      if (self.length >= 3 && (norm === self || norm.includes(self) || self.includes(norm))) return true;
+    }
+    return false;
+  };
+  fields.emergingCompetitors = (fields.emergingCompetitors ?? []).filter((c) => !isSelfReference(c));
+  fields.trends = (fields.trends ?? []).filter((t) => !isSelfReference(t));
+  if (isSelfReference(fields.demand)) fields.demand = "";
+  if (isSelfReference(fields.seasonality)) fields.seasonality = "";
+
   const citations = usedFallback ? [] : [...marketResearch.citations, ...regulatoryResearch.citations];
   const opportunityScore = usedFallback ? 0 : computeOpportunityScore(fields.growthLevel, fields.demandLevel, fields.regulations.length, fields.emergingCompetitors.length);
 
@@ -215,7 +244,7 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
     ...fields,
     opportunityScore,
     citations,
-    confidence: computeConfidence(usedFallback, citations.length, !!input.verifiedFacts?.length),
+    confidence: computeConfidence(usedFallback, citations.length, input.verifiedFacts),
     generatedAt: new Date().toISOString(),
   };
 

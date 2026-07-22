@@ -51,6 +51,24 @@ export class CompanyProvider implements ResearchProvider<CompanyData> {
         if (factResult) return { ...factResult, evidence: citationsToEvidence(factResult.citations) };
       }
 
+      // Don't invent an identity from a bare domain name. With NO verified facts AND too little
+      // first-party page text, the search-based path below is instructed to "reason from general
+      // category knowledge" — which hallucinates a plausible-but-wrong company from the name alone
+      // (e.g. polluxa.com → "enterprise manufacturing PLM/WMS software"). Company IDENTITY must come
+      // from the company's own site; when we don't have it, say so honestly at low confidence rather
+      // than guess. (Facts-present and content-rich pages are unaffected — they take the paths above/below.)
+      const MIN_FIRST_PARTY_CHARS = 200;
+      const excerptLen = input.websiteExcerpt?.trim().length ?? 0;
+      const hasFacts = !!input.verifiedFacts?.length;
+      if (!hasFacts && excerptLen < MIN_FIRST_PARTY_CHARS) {
+        const data: CompanyData = {
+          name: input.businessName ?? input.url,
+          summary: `Couldn't confidently identify this company — ${input.url} returned too little readable content to determine what it does, and its identity can't be inferred from the name alone without inventing details. Add more on-page content or connect the site so research can ground itself in real facts.`,
+          dataSource: "",
+        };
+        return { status: "partial" as const, data, citations: [], evidence: [] };
+      }
+
       const { status, data, citations } = await webSearchThenStructure<CompanyData>({
         maxTokens: 768,
         tool: COMPANY_TOOL,

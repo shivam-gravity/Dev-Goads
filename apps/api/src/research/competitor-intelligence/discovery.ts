@@ -193,5 +193,21 @@ export async function discoverCompetitors(input: DiscoveryInput): Promise<{ comp
     sources.map(async (source) => ({ source: source.name, names: await source.run().catch(() => [] as { name: string; url?: string }[]) }))
   );
 
-  return mergeDiscoveredCompetitors(results);
+  const merged = mergeDiscoveredCompetitors(results);
+
+  // A business is never its own competitor. Ungrounded sources (and the business-name-seeded
+  // search queries above) routinely echo the business's own name back — e.g. workspace
+  // "Master's Business" surfacing "Master's" as a discovered competitor, which then poisons the
+  // whole "compare Master's vs. Polluxa" positioning. Drop any candidate whose name matches the
+  // business's own name or domain host.
+  const selfTokens = [input.businessName, hostnameOf(input.url)]
+    .filter(Boolean)
+    .map((n) => String(n).toLowerCase().replace(/[^a-z0-9]/g, ""))
+    .filter((n) => n.length >= 3);
+  if (selfTokens.length === 0) return merged;
+  const isSelf = (name: string): boolean => {
+    const norm = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return selfTokens.some((self) => norm === self || norm.includes(self) || self.includes(norm));
+  };
+  return { competitors: merged.competitors.filter((c) => !isSelf(c.name)), sourcesUsed: merged.sourcesUsed };
 }
