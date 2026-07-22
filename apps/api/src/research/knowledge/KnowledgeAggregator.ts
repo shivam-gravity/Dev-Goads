@@ -100,7 +100,18 @@ function reconcileCompanyFunding(company: CompanyData | null, news: NewsData | n
 //   - SUPPORTING (weight 1): useful enrichment, not decisive.
 //   - RARELY-APPLICABLE (weight 0.3): genuinely-empty for most private/B2B businesses — still
 //     counted (so a real failure isn't hidden), just not allowed to dominate the average.
-const CORE_PROVIDERS = new Set(["company", "website", "audience", "market", "competitor", "product", "keywords", "navigation"]);
+// NB: these are the provider REGISTERED names (research/providers/*.ts `readonly name`), NOT the
+// ResearchContext field names — the SEO provider registers as "seo" (not "keywords") and "search"
+// is the general-web-grounding provider both the reasoning engines lean on. The prior list used
+// "keywords" and "navigation", neither of which is a running provider name in the Meta-essential
+// set, so the real SEO provider was silently weighted as SUPPORTING (×1) instead of CORE (×3).
+// "search" (general web-grounding) is deliberately NOT core: with the fact-first pipeline the
+// business's OWN verified facts (via website/company/product/audience) are the decisive signal,
+// and a broad web search returns noisy, low-confidence hits for niche/B2B products (observed:
+// search=0.25 while the fact-grounded providers scored 0.8-0.9). Counting it ×3 let one weak
+// supplementary signal drag the whole decision-quality score down; ×1 (SUPPORTING) still counts
+// it honestly without letting it dominate.
+const CORE_PROVIDERS = new Set(["company", "website", "audience", "market", "competitor", "product", "seo"]);
 // Genuinely-empty-for-most-private/B2B-businesses signals — counted (so a real failure isn't
 // hidden) but not allowed to dominate. ad-library (public competitor ad creative) and autocomplete
 // (search-suggest mining) belong here alongside the original set: both are supplementary external

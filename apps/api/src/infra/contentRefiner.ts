@@ -32,6 +32,21 @@ const BOILERPLATE_LINE = new RegExp(
 // prose around it) — high token cost, low research value.
 const MOSTLY_LINKS = /^\s*(\[[^\]]*\]\([^)]*\)\s*[|·•\-]*\s*){2,}\s*$/;
 
+// Inline CSS / <style> / <script> that leaks into crawled markdown (SPAs like Next.js ship
+// critical CSS — e.g. nprogress — and JS chunks inline in the shell). crawl4ai emits these as
+// single very-long lines of `selector{prop:val}` / minified JS, which sail past the length-based
+// keep heuristics and then DOMINATE the char budget, starving the real page prose so the
+// fact-extractor sees CSS noise and returns ~0 facts (the root of the empty-audience/low-confidence
+// bug on polluxa.com). Detect a line as style/script if it's dense with CSS-rule or JS syntax.
+const LOOKS_LIKE_CSS_OR_JS = /\{[^{}]*[:;][^{}]*\}|@media|@keyframes|-webkit-|-ms-|function\s*\(|=>\s*\{|;\s*var\s|;\s*const\s|\.[a-zA-Z-]+\s*\{/;
+function isStyleOrScriptNoise(line: string): boolean {
+  if (!LOOKS_LIKE_CSS_OR_JS.test(line)) return false;
+  // Guard against nuking a genuine prose sentence that merely contains braces/semicolons: only
+  // drop when brace/semicolon density is high (real CSS/JS) relative to the line length.
+  const punct = (line.match(/[{};:]/g) ?? []).length;
+  return punct >= 4 && punct / line.length > 0.02;
+}
+
 /** Split the research prompt into meaningful lowercased keywords for relevance scoring.
  * Drops stopwords and short tokens so scoring keys off real subject terms (company/product/
  * market words), not filler. */
@@ -81,6 +96,7 @@ export function refineContent(content: string, prompt: string, opts: RefineOptio
     const line = rawLine.replace(/\s+/g, " ").trim();
     if (line.length < 3) continue;
     if (BOILERPLATE_LINE.test(line) || MOSTLY_LINKS.test(line)) continue;
+    if (isStyleOrScriptNoise(line)) continue;
 
     // Strip inline markdown link syntax down to just the visible text, dropping the URL — the
     // URL is rarely useful to the reasoning model and is pure token cost. `[Pricing](/p)` -> `Pricing`.
