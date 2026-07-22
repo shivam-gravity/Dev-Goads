@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { api, AnalyticsSummary, TrendPoint } from "../api/client.js";
+import { Link } from "react-router-dom";
+import { api, AnalyticsSummary, TrendPoint, Campaign } from "../api/client.js";
 import PolluxaHeader from "../components/PolluxaHeader.js";
+import StatusBadge from "../components/StatusBadge.js";
 
 interface DayTotals {
   impressions: number;
@@ -42,6 +44,7 @@ function formatMetric(value: number, metric: MetricKey): string {
 export default function Dashboard({ businessId }: { businessId: string }) {
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [totalsByDate, setTotalsByDate] = useState<Record<string, DayTotals>>({});
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [activePeriod, setActivePeriod] = useState(PERIODS[1].label);
@@ -56,6 +59,7 @@ export default function Dashboard({ businessId }: { businessId: string }) {
       try {
         const [, camps] = await Promise.all([api.getBusiness(businessId), api.listCampaigns(businessId)]);
         if (cancelled) return;
+        setCampaigns(camps);
 
         const [summaryResult, trends] = await Promise.all([
           api.getAnalyticsSummary(businessId, period.apiPeriod),
@@ -125,6 +129,13 @@ export default function Dashboard({ businessId }: { businessId: string }) {
   // Only label a handful of x-axis ticks so dense ranges (30/90 days) stay readable
   const labelStep = Math.max(1, Math.ceil(pointCount / 6));
   const avgValue = chartValues.reduce((s, v) => s + v, 0) / (chartValues.length || 1);
+
+  // The full management list lives at /campaigns (filterable, per-campaign perf, inline launch),
+  // but it has no sidebar link — surface the newest few here with a "View all" jump-off, the way
+  // an automation-first product keeps the campaign list one click from the home dashboard.
+  const recentCampaigns = [...campaigns]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 5);
 
   return (
     <div className="polluxa-dashboard">
@@ -285,6 +296,53 @@ export default function Dashboard({ businessId }: { businessId: string }) {
             </tbody>
           </table>
         </div>
+      </section>
+
+      {/* Recent Campaigns — jump-off to the full /campaigns management list (no sidebar link) */}
+      <section className="polluxa-section">
+        <div className="polluxa-section-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center" }}>
+            <div className="polluxa-section-indicator"></div>
+            <h2 className="polluxa-section-title">Recent Campaigns</h2>
+          </div>
+          <Link to="/campaigns" style={{ fontSize: "14px", fontWeight: 500, color: "var(--accent, #7033f5)", textDecoration: "none" }}>
+            View all campaigns →
+          </Link>
+        </div>
+
+        {recentCampaigns.length === 0 ? (
+          <div style={{ padding: "24px", textAlign: "center", color: "#6b7280" }}>
+            <p style={{ margin: "0 0 12px" }}>No campaigns yet.</p>
+            <Link to="/campaigns/generator" className="btn btn-primary">Generate your first campaign</Link>
+          </div>
+        ) : (
+          <div className="polluxa-table-container">
+            <table className="polluxa-table">
+              <thead>
+                <tr>
+                  <th>Campaign</th>
+                  <th>Status</th>
+                  <th>Channels</th>
+                  <th>Daily Budget</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentCampaigns.map((c) => (
+                  <tr key={c.id}>
+                    <td style={{ fontWeight: 500 }}>
+                      <Link to={`/campaigns/${c.id}`} style={{ color: "var(--accent, #7033f5)", textDecoration: "none" }}>{c.name}</Link>
+                    </td>
+                    <td><StatusBadge status={c.status} /></td>
+                    <td>{c.networks.map((n) => (n === "meta" ? "Meta" : "Google")).join(", ")}</td>
+                    <td>${(c.dailyBudgetCents / 100).toFixed(2)}</td>
+                    <td style={{ color: "#6b7280" }}>{new Date(c.createdAt).toLocaleDateString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
     </div>
   );
