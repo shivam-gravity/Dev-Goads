@@ -133,10 +133,14 @@ export interface NormalizedPerformance {
   impressions: number; reach: number; clicks: number; conversions: number; spendCents: number;
   ctr: number; cpaCents: number | null; cpmCents: number | null; cpcCents: number | null; roas: number | null; conversionRate: number;
 }
+export interface FunnelMetrics { addToCart: number; addPaymentInfo: number; purchases: number; purchaseValueCents: number; }
 export interface LiveInsights {
   campaignId: string; isLive: boolean;
   impressions: number; reach: number; clicks: number; conversions: number; spendCents: number;
   ctr: number; cpcCents: number | null; cpmCents: number | null; roas: number | null;
+  funnel?: FunnelMetrics;
+  costPerAddToCartCents?: number | null; costPerAddPaymentInfoCents?: number | null; costPerPurchaseCents?: number | null;
+  addToCartRate?: number | null; purchaseRate?: number | null;
 }
 export interface OptimizationDecision { campaignId: string; chosenVariantId: string; action: string; reason: string; decidedAt: string; }
 export interface Invoice { id: string; businessId: string; periodStart: string; periodEnd: string; adSpendCents: number; platformFeeCents: number; totalCents: number; createdAt: string; }
@@ -227,6 +231,16 @@ export interface DecisionContext {
   simulations: StrategySimulationResult[]; generatedAt: string;
 }
 export type CampaignGenerationPipelineStatus = "pending" | "researching" | "aggregating" | "running_agents" | "building_campaign" | "completed" | "failed";
+
+/** The subset of the backend ResearchContext the campaign UI streams in mid-run. All optional —
+ * a field is null until its provider settles, so the preview fills in progressively. */
+export interface ResearchContextLite {
+  company?: { name?: string; summary?: string } | null;
+  market?: { marketSummary?: string; opportunityScore?: number; recommendedRegion?: string } | null;
+  audience?: { primaryAudience?: string; painPoints?: string[] } | null;
+  competitors?: { competitors?: { name: string }[] } | null;
+  metadata?: { overallConfidence?: number };
+}
 
 export interface CampaignGenerationJobStatus {
   id: string; status: CampaignGenerationPipelineStatus; researchJobId?: string; strategyId?: string;
@@ -478,6 +492,10 @@ export const api = {
   createResearchSession: (workspaceId: string, url: string, businessId?: string, force?: boolean) =>
     request<ResearchSession>(`/workspaces/${workspaceId}/research-sessions${force ? "?force=true" : ""}`, { method: "POST", body: JSON.stringify({ url, businessId }) }),
   getResearchSession: (id: string) => request<ResearchSession>(`/research-sessions/${id}`),
+  // Full ResearchJob (incl. its aggregated ResearchContext). Used to stream the researched output
+  // — company summary, market, audience, competitors — into the campaign UI DURING the run, since
+  // research completes (~halfway) well before the decision engine produces the final strategy.
+  getResearchJob: (id: string) => request<{ id: string; status: string; context: ResearchContextLite | null }>(`/research/${id}`),
 
   // Decision Intelligence campaign generation (Research Orchestrator -> Decision Engine
   // + AI Agent Coordinator -> Campaign Builder, all in one pipeline run — see
@@ -488,9 +506,13 @@ export const api = {
   getCampaignGenerationFacts: (id: string) => request<CampaignGenerationFacts>(`/campaigns/generate/${id}/facts`),
   getCampaignGenerationProgress: (id: string) => request<CampaignGenerationProgress>(`/campaigns/generate/${id}/progress`),
   getCampaignGenerationCitations: (id: string) => request<CampaignGenerationCitations>(`/campaigns/generate/${id}/citations`),
+  // Materialize one of the 3 candidate strategies (by id "strategy-a" or label "Strategy A")
+  // into an editable draft campaign — the results page's "pick one of 3 suggestions" action.
+  selectCampaignStrategy: (jobId: string, strategy: string) =>
+    request<Campaign & { campaignId: string; reusedWinner: boolean }>(`/campaigns/generate/${jobId}/select-strategy`, { method: "POST", body: JSON.stringify({ strategy }) }),
   // adsgo.ai-style flow: objective picker + interactive budget/goal simulator
   getCampaignObjectives: () => request<{ objectives: CampaignObjectiveOption[] }>("/campaigns/objectives"),
-  simulateCampaign: (input: { objective?: string; dailyBudgetCents: number; countries?: string[] }) =>
+  simulateCampaign: (input: { objective?: string; dailyBudgetCents: number; platforms?: ("meta" | "google")[]; countries?: string[] }) =>
     request<BudgetSimulation>("/campaigns/simulate", { method: "POST", body: JSON.stringify(input) }),
 
   // Business
@@ -530,7 +552,8 @@ export const api = {
     request<Campaign>(`/campaigns/${campaignId}/apply-creative-media`, { method: "POST", body: JSON.stringify(media) }),
   ingestMetrics: (id: string) => request<unknown[]>(`/campaigns/${id}/ingest`, { method: "POST" }),
   getPerformance: (id: string) => request<NormalizedPerformance[]>(`/campaigns/${id}/performance`),
-  getLiveInsights: (id: string) => request<LiveInsights>(`/campaigns/${id}/live-insights`),
+  getLiveInsights: (id: string, range?: string) =>
+    request<LiveInsights>(`/campaigns/${id}/live-insights${range ? `?range=${encodeURIComponent(range)}` : ""}`),
   getCampaignTrend: (id: string) => request<TrendPoint[]>(`/campaigns/${id}/trend`),
   optimize: (id: string) => request<OptimizationDecision[]>(`/campaigns/${id}/optimize`, { method: "POST" }),
   setAutoOptimize: (id: string, enabled: boolean) =>

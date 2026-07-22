@@ -16,6 +16,16 @@ import { logger } from "../logger/logger.js";
 const ADS_API_VERSION = "v24";
 const ADS_API_BASE = `https://googleads.googleapis.com/${ADS_API_VERSION}`;
 
+// Maps the Ads Manager range picker's Meta-style presets to GAQL predefined date ranges. Google
+// has no built-in 14/90-day range, so last_14d falls back to LAST_30_DAYS and last_90d/maximum
+// omit the clause entirely (account default). Presets not listed here disable the DURING clause.
+const GOOGLE_DATE_RANGES: Record<string, string> = {
+  today: "TODAY",
+  last_7d: "LAST_7_DAYS",
+  last_14d: "LAST_30_DAYS",
+  last_30d: "LAST_30_DAYS",
+};
+
 const ENV_GOOGLE_ADS_DEVELOPER_TOKEN = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
 const ENV_GOOGLE_ADS_CUSTOMER_ID = process.env.GOOGLE_ADS_CUSTOMER_ID;
 const ENV_GOOGLE_ADS_ACCESS_TOKEN = process.env.GOOGLE_ADS_ACCESS_TOKEN;
@@ -294,31 +304,34 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
     }
   },
 
-  async fetchInsights(externalId: string, _date?: string, _credentials?: unknown) {
+  async fetchInsights(externalId: string, dateOrPreset?: string, explicit?: GoogleAdsCredentials) {
     logger.info(`Fetching performance insights for Google Ads resource: ${externalId}`);
+    const creds = resolveCredentials(explicit);
 
-    if (!hasLiveCredentials) {
+    if (!creds) {
       // No connected Google Ads account → NO fabricated metrics. Return real zeros for an honest
       // "no data yet" state instead of Math.random()-invented performance shown as real.
       logger.info(`No Google credentials for ${externalId} — returning zero metrics (no fabricated data).`);
       return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0 };
     }
 
+    // Map the Ads Manager range picker's Meta-style presets to GAQL predefined date ranges. Google
+    // has no >30-day preset, so last_90d/maximum omit the DURING clause (account default window).
+    const duringClause = GOOGLE_DATE_RANGES[dateOrPreset ?? ""] ? ` DURING ${GOOGLE_DATE_RANGES[dateOrPreset ?? ""]}` : "";
+    const url = `${ADS_API_BASE}/customers/${creds.customerId}/googleAds:search`;
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${creds.accessToken}`,
+      "developer-token": creds.developerToken,
+    };
+
     try {
       // metrics.conversions_value is the real revenue Google attributes to the ad's conversions
       // (in the account currency, as a decimal) — needed for true ROAS (revenue / spend).
+      // Unsegmented so impressions/clicks/cost aren't duplicated across rows.
       const query = `SELECT metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value, metrics.cost_micros
-                     FROM ad_group_ad WHERE ad_group_ad.resource_name = '${externalId}'`;
-      const url = `https://googleads.googleapis.com/v24/customers/${ENV_GOOGLE_ADS_CUSTOMER_ID}/googleAds:search`;
-      const res = await fetchWithRetry(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${ENV_GOOGLE_ADS_ACCESS_TOKEN}`,
-          "developer-token": ENV_GOOGLE_ADS_DEVELOPER_TOKEN!,
-        },
-        body: JSON.stringify({ query }),
-      });
+                     FROM ad_group_ad WHERE ad_group_ad.resource_name = '${externalId}'${duringClause}`;
+      const res = await fetchWithRetry(url, { method: "POST", headers, body: JSON.stringify({ query }) });
 
       const json = (await res.json()) as any;
 
@@ -330,6 +343,30 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
 
       const metrics = json.results[0].metrics || {};
       const impressions = Number(metrics.impressions ?? 0);
+
+      // Funnel breakout: segment conversions by conversion_action_category in a SEPARATE query so the
+      // repeated core metrics (impressions/clicks/cost) from segmentation don't inflate the totals
+      // above. Google's ecommerce categories map onto our Meta-shaped funnel: ADD_TO_CART → addToCart,
+      // BEGIN_CHECKOUT → addPaymentInfo (closest analog; Google has no add_payment_info), PURCHASE →
+      // purchases. Best-effort — a failure here must not drop the core metrics, so it's caught.
+      const funnel = { addToCart: 0, addPaymentInfo: 0, purchases: 0, purchaseValueCents: 0 };
+      try {
+        const funnelQuery = `SELECT segments.conversion_action_category, metrics.conversions, metrics.conversions_value
+                             FROM ad_group_ad WHERE ad_group_ad.resource_name = '${externalId}'${duringClause}`;
+        const fRes = await fetchWithRetry(url, { method: "POST", headers, body: JSON.stringify({ query: funnelQuery }) });
+        const fJson = (await fRes.json()) as any;
+        for (const row of fJson?.results ?? []) {
+          const category = row?.segments?.conversionActionCategory;
+          const count = Number(row?.metrics?.conversions ?? 0);
+          const valueCents = Math.round(Number(row?.metrics?.conversionsValue ?? 0) * 100);
+          if (category === "ADD_TO_CART") funnel.addToCart += count;
+          else if (category === "BEGIN_CHECKOUT") funnel.addPaymentInfo += count;
+          else if (category === "PURCHASE") { funnel.purchases += count; funnel.purchaseValueCents += valueCents; }
+        }
+      } catch (err) {
+        logger.warn(`Google funnel breakdown query failed for ${externalId} — returning core metrics without funnel.`, err);
+      }
+
       const stats = {
         impressions,
         // No ad_group_ad-level reach field exists in the Google Ads API for Search — same
@@ -340,6 +377,7 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
         spendCents: Math.round(Number(metrics.costMicros ?? 0) / 10000),
         // conversionsValue is a decimal currency amount (e.g. 129.99) → cents.
         revenueCents: Math.round(Number(metrics.conversionsValue ?? 0) * 100),
+        funnel,
       };
       logger.info(`Google Ads insights metrics fetched: Clicks: ${stats.clicks}, Spend: ${stats.spendCents} cents`);
       return stats;

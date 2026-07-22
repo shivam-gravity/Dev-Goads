@@ -17,6 +17,10 @@ import { logger } from "../logger/logger.js";
 const GRAPH_VERSION = "v22.0";
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
+// Meta Insights date_preset values the Ads Manager range picker may request. Anything not in this
+// set (e.g. a daily YYYY-MM-DD from the ingestion worker) is ignored and Meta's default window used.
+const META_DATE_PRESETS = new Set(["today", "last_7d", "last_14d", "last_30d", "last_90d", "maximum"]);
+
 const ENV_META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
 const ENV_META_AD_ACCOUNT_ID = process.env.META_AD_ACCOUNT_ID;
 const hasLiveCredentials = Boolean(ENV_META_ACCESS_TOKEN && ENV_META_AD_ACCOUNT_ID);
@@ -226,7 +230,7 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     }
   },
 
-  async fetchInsights(externalId: string, _date?: string, credentials?: MetaCredentials) {
+  async fetchInsights(externalId: string, dateOrPreset?: string, credentials?: MetaCredentials) {
     logger.info(`Fetching performance insights for Meta Ads resource: ${externalId}`);
     const creds = resolveCredentials(credentials);
 
@@ -239,9 +243,13 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     }
 
     try {
+      // Honor a Meta date_preset (last_7d/last_14d/last_30d/last_90d/today/maximum) when the caller
+      // passes one, so the Ads Manager date-range picker actually scopes the numbers. A bare
+      // YYYY-MM-DD (the daily-ingestion caller) or nothing falls through to Meta's default window.
+      const preset = META_DATE_PRESETS.has(dateOrPreset ?? "") ? `&date_preset=${dateOrPreset}` : "";
       // action_values carries the real purchase VALUE (revenue) per action_type, parallel to
       // `actions` which carries the COUNT — both are needed for true ROAS (revenue / spend).
-      const url = `${GRAPH_BASE}/${externalId}/insights?fields=impressions,reach,clicks,actions,action_values,spend&access_token=${creds.accessToken}`;
+      const url = `${GRAPH_BASE}/${externalId}/insights?fields=impressions,reach,clicks,actions,action_values,spend${preset}&access_token=${creds.accessToken}`;
       const res = await fetchWithRetry(url, { method: "GET" });
       const json = (await res.json()) as any;
 
@@ -251,16 +259,32 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
       }
 
       const row = json.data[0] || {};
-      const conversions = (row.actions || []).find((a: any) => a.action_type === "offsite_conversion")?.value ?? 0;
+      const actions: any[] = row.actions || [];
+      const actionValues: any[] = row.action_values || [];
+      // Meta reports each conversion step under its own action_type; naming varies across pixel
+      // setups (bare `purchase` vs the fully-qualified `offsite_conversion.fb_pixel_purchase`),
+      // so match either spelling. Sum in case both the generic and qualified rows are present
+      // would double-count, so prefer the first match per step, in specificity order.
+      const actionCount = (types: string[]): number => {
+        for (const t of types) {
+          const hit = actions.find((a) => a.action_type === t)?.value;
+          if (hit != null) return Number(hit);
+        }
+        return 0;
+      };
+      const conversions = actionCount(["offsite_conversion"]);
+      const addToCart = actionCount(["offsite_conversion.fb_pixel_add_to_cart", "add_to_cart"]);
+      const addPaymentInfo = actionCount(["offsite_conversion.fb_pixel_add_payment_info", "add_payment_info"]);
+      const purchases = actionCount(["offsite_conversion.fb_pixel_purchase", "purchase"]);
       // Real revenue: the monetary value Meta attributes to the purchase pixel. Prefer the
       // generic `offsite_conversion` value; fall back to the explicit purchase action types some
       // pixel setups report under instead. In the account currency (dollars) → convert to cents.
-      const actionValues: any[] = row.action_values || [];
       const revenueDollars =
         actionValues.find((a) => a.action_type === "offsite_conversion")?.value ??
         actionValues.find((a) => a.action_type === "offsite_conversion.fb_pixel_purchase")?.value ??
         actionValues.find((a) => a.action_type === "purchase")?.value ??
         0;
+      const purchaseValueCents = Math.round(Number(revenueDollars) * 100);
 
       const stats = {
         impressions: Number(row.impressions ?? 0),
@@ -268,7 +292,8 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
         clicks: Number(row.clicks ?? 0),
         conversions: Number(conversions),
         spendCents: Math.round(Number(row.spend ?? 0) * 100),
-        revenueCents: Math.round(Number(revenueDollars) * 100),
+        revenueCents: purchaseValueCents,
+        funnel: { addToCart, addPaymentInfo, purchases, purchaseValueCents },
       };
 
       logger.info(`Meta Ads insights fetched: Clicks: ${stats.clicks}, Spend: ${stats.spendCents} cents`);

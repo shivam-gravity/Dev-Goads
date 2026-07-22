@@ -68,13 +68,29 @@ test("Meta Ads Adapter (live) - fetchInsights parses metrics from the insights e
       return {
         ok: true,
         json: async () => ({
-          data: [{ impressions: "2000", reach: "1500", clicks: "80", spend: "40.00", actions: [{ action_type: "offsite_conversion", value: "6" }] }],
+          data: [{
+            impressions: "2000", reach: "1500", clicks: "80", spend: "40.00",
+            // Each funnel step is its own action_type row alongside the conversion count.
+            actions: [
+              { action_type: "offsite_conversion", value: "6" },
+              { action_type: "add_to_cart", value: "20" },
+              { action_type: "add_payment_info", value: "9" },
+              { action_type: "purchase", value: "6" },
+            ],
+            // action_values carries the real purchase VALUE parallel to actions' count.
+            action_values: [{ action_type: "offsite_conversion", value: "150.00" }],
+          }],
         }),
       } as Response;
     }) as typeof fetch,
     async () => {
       const stats = await metaAdapter.fetchInsights("meta_123456", "2026-07-06");
-      assert.deepStrictEqual(stats, { impressions: 2000, reach: 1500, clicks: 80, conversions: 6, spendCents: 4000 });
+      // revenueCents = action_values offsite_conversion (150.00) * 100 → true ROAS input.
+      // funnel breaks out per-step counts (add_to_cart/add_payment_info/purchase) from `actions`.
+      assert.deepStrictEqual(stats, {
+        impressions: 2000, reach: 1500, clicks: 80, conversions: 6, spendCents: 4000, revenueCents: 15000,
+        funnel: { addToCart: 20, addPaymentInfo: 9, purchases: 6, purchaseValueCents: 15000 },
+      });
     }
   );
 });

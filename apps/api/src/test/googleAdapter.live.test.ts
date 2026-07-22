@@ -70,7 +70,7 @@ test("Google Ads Adapter (live) - fetchInsights parses metrics from the search e
       return {
         ok: true,
         json: async () => ({
-          results: [{ metrics: { impressions: "1000", clicks: "50", conversions: "5", costMicros: "2000000" } }],
+          results: [{ metrics: { impressions: "1000", clicks: "50", conversions: "5", conversionsValue: "129.99", costMicros: "2000000" } }],
         }),
       } as Response;
     }) as typeof fetch,
@@ -79,7 +79,12 @@ test("Google Ads Adapter (live) - fetchInsights parses metrics from the search e
       // reach has no native ad_group_ad-level field in the Google Ads API for Search, so
       // the adapter estimates it as impressions * 0.65 (see googleAdapter.ts's comment) —
       // not read from the response, so it's derived here rather than added to the fixture.
-      assert.deepStrictEqual(stats, { impressions: 1000, reach: 650, clicks: 50, conversions: 5, spendCents: 200 });
+      // revenueCents = conversionsValue (129.99) * 100, rounded → true ROAS input.
+      // funnel is all-zero here: the segmented funnel query's rows carry no conversion_action_category.
+      assert.deepStrictEqual(stats, {
+        impressions: 1000, reach: 650, clicks: 50, conversions: 5, spendCents: 200, revenueCents: 12999,
+        funnel: { addToCart: 0, addPaymentInfo: 0, purchases: 0, purchaseValueCents: 0 },
+      });
     }
   );
 });

@@ -22,7 +22,9 @@ export async function ingestCampaignMetrics(campaignId: string): Promise<Perform
     if (!variant.externalId) continue;
     const adapter = adapters[variant.network];
     const credentials = variant.network === "meta" ? metaCredentials : undefined;
-    const raw = await adapter.fetchInsights(variant.externalId, date, credentials);
+    // `funnel` is a real-time UI-only breakdown (see AdInsightStats) — the persisted daily
+    // PerformanceMetric doesn't carry it, so drop it before spreading into the stored record.
+    const { funnel: _funnel, ...raw } = await adapter.fetchInsights(variant.externalId, date, credentials);
 
     const metric: PerformanceMetric = {
       id: randomUUID(),

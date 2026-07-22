@@ -4728,6 +4728,31 @@ td {
   border-color: var(--accent-light);
 }
 
+/* Deferred ("Coming Soon") store/catalog sources: non-interactive, no hover affordance. */
+.product-method-row.disabled,
+.product-method-row:disabled {
+  cursor: not-allowed;
+}
+
+.product-method-row.disabled:hover,
+.product-method-row:disabled:hover {
+  border-color: var(--border);
+}
+
+.coming-soon-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--surface-tint);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
 .product-method-icon {
   width: 40px;
   height: 40px;
@@ -6596,13 +6621,13 @@ td {
 
 .sidebar-content.polluxa-content {
   padding: 24px 32px;
-  /* Wider cap + LEFT-aligned. The base .sidebar-content uses `margin: 0 auto`, which centers the
-     capped content inside the area next to the sidebar — with a collapsed 76px rail that leaves a
-     big empty gutter on the right and makes the page look shifted/floating rather than anchored to
-     the sidebar. Anchor it left (margin-right auto absorbs extra space) and raise the cap so wide
-     screens actually use the room. */
-  max-width: 1600px;
-  margin: 0 auto 0 0;
+  /* CENTERED within the area next to the sidebar. A left-anchor (margin-right:auto) dumped ALL the
+     leftover width into one big dead gutter on the right on wide monitors (~240px on a 1920px
+     screen), making the page look lopsided. Centering splits any leftover space evenly so the
+     content stays balanced at every width; the cap is raised so wide screens still fill out. The
+     rail is a fixed 76px, so there's no "floating" ambiguity the old left-anchor was guarding against. */
+  max-width: 1680px;
+  margin: 0 auto;
 }
 
 /* Collapsed rail that expands on hover, pushing the main content over */
@@ -6696,6 +6721,30 @@ td {
   align-items: center;
   justify-content: center;
   position: relative;
+  background: none;
+  border: none;
+  padding: 4px;
+}
+
+.header-bell:hover {
+  color: var(--accent, #7033f5);
+}
+
+.header-bell-badge {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 2px #fff;
 }
 
 .header-profile-dropdown-wrap {
@@ -10327,6 +10376,15 @@ td {
   color: #6b7280;
 }
 
+.gen-field-option-empty {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.gen-field-option-empty:hover {
+  background: transparent;
+}
+
 .gen-url-drop {
   display: flex;
   align-items: center;
@@ -10860,6 +10918,12 @@ td {
   line-height: 1.5;
   color: #4b5563;
   margin: 0;
+  /* Force wrapping: this text INHERITED white-space:nowrap from an ancestor, so a long insight
+     ("Network Performance — The campaign is performing well…") rendered on one 930px line and
+     spilled out of its ~400px card. Wrap normally and break over-long tokens so it can never
+     overflow the card again, regardless of length. */
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Optimization hub */
@@ -10911,6 +10975,7 @@ td {
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
   background: #ffffff;
   border: 1px solid #dbe7ff;
   border-radius: 10px;
@@ -10918,7 +10983,43 @@ td {
   font-size: 12.5px;
   font-weight: 600;
   color: #1d4ed8;
+  cursor: pointer;
+  text-align: left;
 }
+.polluxa-opt-rule-pill:hover { border-color: #1d4ed8; }
+.polluxa-opt-rule-edit-icon { margin-left: auto; opacity: 0.6; }
+
+.polluxa-opt-rule-editor {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  background: #ffffff;
+  border: 1px solid #1d4ed8;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+.polluxa-opt-rule-editor .polluxa-opt-rule-static { font-weight: 600; color: #1d4ed8; }
+.polluxa-opt-rule-editor select {
+  border: 1px solid #dbe7ff;
+  border-radius: 8px;
+  padding: 4px 6px;
+  font-size: 12px;
+  background: #f8faff;
+}
+
+/* Secondary metric shown parenthetically inside a table cell (CTR next to CPC, CVR next to cost). */
+.polluxa-metric-sub { color: #9ca3af; font-size: 11px; }
+
+/* Per-row optimization rationale ("Reason" column) — tinted by recommendation bucket. */
+.polluxa-reason-cell { max-width: 260px; }
+.polluxa-reason { font-size: 11.5px; line-height: 1.35; color: #6b7280; display: inline-block; }
+.polluxa-reason-scaleUp { color: #16a34a; }
+.polluxa-reason-scaleDown { color: #d97706; }
+.polluxa-reason-pause { color: #dc2626; }
+
+.polluxa-range-select { min-width: 130px; }
 
 .polluxa-opt-summary-title {
   font-size: 12px;
@@ -13026,6 +13127,11 @@ td {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  /* The base .wizard-form caps width at 520px (fine for narrow onboarding forms), but the
+     Settings card sits in the wide center column — that cap left a big dead white strip on the
+     right. Let it fill the card so the two-up rows below stretch edge to edge. */
+  max-width: none;
+  width: 100%;
 }
 
 .settings-locations-row {
@@ -13806,6 +13912,18 @@ td {
 .strategy-card-v2.winner {
   border: 1.5px solid var(--accent);
   background: var(--surface-tint);
+}
+
+.strategy-grid-hint {
+  font-size: 12.5px;
+  margin: 0 0 12px;
+}
+
+/* Selection CTA pinned to the bottom of each suggestion card so all three "Use this campaign"
+   buttons line up regardless of how much each card's copy differs in height. */
+.strategy-card-v2-select {
+  margin-top: auto;
+  width: 100%;
 }
 
 .strategy-card-v2-head {

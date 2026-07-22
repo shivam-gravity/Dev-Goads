@@ -29,6 +29,22 @@ function statsFromInsights(insights: AdInsightsResponse | null): BriefStat[] {
   ];
 }
 
+/** Summary stat tiles shown above the Ad set / Ad tables — same Total/Active/Paused pattern the
+ * Polluxa native Meta/Google ad-set & ad tabs open with, so the hierarchy views feel consistent. */
+function SummaryCards({ cards }: { cards: { label: string; value: string | number; accent: string; sub?: string }[] }) {
+  return (
+    <div className="polluxa-summary-cards">
+      {cards.map((c) => (
+        <div className="polluxa-summary-card" key={c.label} style={{ borderTopColor: c.accent }}>
+          <div className="polluxa-summary-card-label">{c.label}</div>
+          <div className="polluxa-summary-card-value">{c.value}</div>
+          {c.sub && <div className="polluxa-summary-card-sub">{c.sub}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ToggleSwitch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   return (
     <button
@@ -96,6 +112,26 @@ export default function AdsManager({ businessId }: { businessId: string }) {
   const [overviewOpen, setOverviewOpen] = useState(true);
   const [applyMode, setApplyMode] = useState<"recommended" | "auto">("auto");
 
+  // Editable optimization rule (goal + constraint the auto-optimizer targets) — mirrors AdsGo's
+  // "Budget $500, PURCHASE, CPA↓" editable rule instead of a read-only summary. Persisted per
+  // workspace so it survives reload; the budget mirrors the campaigns' combined daily budget.
+  const [ruleGoal, setRuleGoal] = useState<string>(() => localStorage.getItem("polluxa_opt_goal") ?? "PURCHASE");
+  const [ruleConstraint, setRuleConstraint] = useState<string>(() => localStorage.getItem("polluxa_opt_constraint") ?? "CPA_DOWN");
+  const [editingRule, setEditingRule] = useState(false);
+  const OPT_GOALS = ["PURCHASE", "LEADS", "TRAFFIC", "AWARENESS", "APP_INSTALLS"];
+  const OPT_CONSTRAINTS: { value: string; label: string }[] = [
+    { value: "CPA_DOWN", label: "Lower CPA ↓" },
+    { value: "ROAS_UP", label: "Maximize ROAS ↑" },
+    { value: "CPC_DOWN", label: "Lower CPC ↓" },
+    { value: "SPEND_CAP", label: "Cap spend" },
+  ];
+  function saveRule(goal: string, constraint: string) {
+    setRuleGoal(goal);
+    setRuleConstraint(constraint);
+    localStorage.setItem("polluxa_opt_goal", goal);
+    localStorage.setItem("polluxa_opt_constraint", constraint);
+  }
+
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -105,6 +141,17 @@ export default function AdsManager({ businessId }: { businessId: string }) {
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  // Reporting window for the live metrics — maps to Meta date_preset values on the backend.
+  const RANGE_OPTIONS: { value: string; label: string }[] = [
+    { value: "today", label: "Today" },
+    { value: "last_7d", label: "Last 7 days" },
+    { value: "last_14d", label: "Last 14 days" },
+    { value: "last_30d", label: "Last 30 days" },
+    { value: "last_90d", label: "Last 90 days" },
+    { value: "maximum", label: "All time" },
+  ];
+  const [range, setRange] = useState<string>("last_14d");
 
   async function loadData() {
     setLoading(true);
@@ -121,7 +168,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
       const adsBySet = await Promise.all(allSets.map((s) => api.listAds(s.id).catch(() => [])));
       setAds(adsBySet.flat());
 
-      const liveInsightsList = await Promise.all(camps.map((c) => api.getLiveInsights(c.id).catch(() => null)));
+      const liveInsightsList = await Promise.all(camps.map((c) => api.getLiveInsights(c.id, range).catch(() => null)));
       setLiveInsightsByCampaign(Object.fromEntries(camps.map((c, i) => [c.id, liveInsightsList[i]]).filter(([, v]) => v)));
     } catch (err) {
       setError("Failed to load Ads Manager hierarchy data.");
@@ -132,7 +179,8 @@ export default function AdsManager({ businessId }: { businessId: string }) {
 
   useEffect(() => {
     loadData();
-  }, [businessId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId, range]);
 
   useEffect(() => {
     api.getAdInsights(businessId, network).then(setAdInsights).catch(() => setAdInsights(null));
@@ -194,6 +242,25 @@ export default function AdsManager({ businessId }: { businessId: string }) {
     return c.dailyBudgetCents;
   }
 
+  // Human-readable rationale for each recommendation, grounded in the campaign's real live metrics
+  // (the same LiveInsights the bucket decision is derived from) — this is the "Reason" column that
+  // makes a budget move explainable rather than a bare arrow. Returns "" for campaigns with no
+  // actionable recommendation so the cell shows a dash.
+  function reasonFor(c: Campaign, index: number): string {
+    const bucket = bucketFor(c, index);
+    const li = liveInsightsByCampaign[c.id];
+    if (bucket === "maintain") {
+      if (!li || li.spendCents === 0) return "No spend yet — not enough data to recommend a change.";
+      return "Performing within target — hold budget.";
+    }
+    const roasStr = li?.roas != null ? `${li.roas.toFixed(2)}x ROAS` : "no return yet";
+    const spendStr = li ? `$${(li.spendCents / 100).toFixed(2)} spent` : "";
+    if (bucket === "scaleUp") return `Strong efficiency (${roasStr}) — scale budget +20% to capture more volume.`;
+    if (bucket === "scaleDown") return `Below-target return (${roasStr}, ${spendStr}) — trim budget 15% to protect margin.`;
+    if (bucket === "pause") return `${spendStr} with ${li?.clicks ?? 0} clicks and 0 conversions — pause to stop wasted spend.`;
+    return "";
+  }
+
   const optSummary = useMemo(() => {
     const counts = { scaleUp: 0, scaleDown: 0, pause: 0, maintain: 0 };
     let currentCents = 0;
@@ -220,16 +287,38 @@ export default function AdsManager({ businessId }: { businessId: string }) {
     }
   }
 
-  async function handleBulkPause() {
+  // Persist a status change for one campaign: pause/activate its live variants on the ad network
+  // when it has any, otherwise flip the campaign's own status. Mirrors toggleOn's persistence so
+  // the bulk action actually reaches the server (the old bulk-pause only touched local state).
+  async function persistCampaignStatus(id: string, target: "active" | "paused") {
+    const camp = campaigns.find((c) => c.id === id);
+    if (!camp) return;
+    const liveVariants = (camp.variants ?? []).filter((v) => v.externalId);
+    if (liveVariants.length === 0) {
+      await api.updateCampaign(id, { status: target } as any);
+      return;
+    }
+    if (target === "paused") {
+      for (const v of liveVariants.filter((v) => v.status === "active")) await api.pauseVariant(id, v.id);
+    } else {
+      for (const v of liveVariants.filter((v) => v.status === "paused")) await api.activateVariant(id, v.id);
+    }
+  }
+
+  async function handleBulkStatus(target: "active" | "paused") {
+    // Activating spends real budget — gate it behind an explicit confirm, same as single-variant activate.
+    if (target === "active" && !confirm(`Activate ${selectedIds.length} campaign(s)? Active campaigns spend your budget.`)) return;
+    const ids = [...selectedIds];
     try {
-      await Promise.all(selectedIds.map((id) => api.updateCampaign(id, { name: campaigns.find((c) => c.id === id)?.name || "" })));
+      await Promise.all(ids.map((id) => persistCampaignStatus(id, target)));
       setOnIds((prev) => {
         const next = new Set(prev);
-        selectedIds.forEach((id) => next.delete(id));
+        ids.forEach((id) => (target === "active" ? next.add(id) : next.delete(id)));
         return next;
       });
+      await loadData();
     } catch {
-      setError("Some campaigns failed to pause.");
+      setError(`Some campaigns failed to ${target === "paused" ? "pause" : "activate"}.`);
     }
     setSelectedIds([]);
   }
@@ -241,6 +330,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
 
   async function toggleOn(id: string) {
     const isOn = onIds.has(id);
+    const target = isOn ? "paused" : "active";
     setOnIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -248,23 +338,9 @@ export default function AdsManager({ businessId }: { businessId: string }) {
       return next;
     });
     try {
-      const camp = campaigns.find((c) => c.id === id);
-      if (!camp) return;
-      const liveVariants = (camp.variants ?? []).filter((v) => v.externalId);
-      if (liveVariants.length === 0) {
-        await api.updateCampaign(id, { status: isOn ? "paused" : "active" } as any);
-        return;
-      }
-      if (isOn) {
-        for (const v of liveVariants.filter((v) => v.status === "active")) {
-          await api.pauseVariant(id, v.id);
-        }
-      } else {
-        for (const v of liveVariants.filter((v) => v.status === "paused")) {
-          await api.activateVariant(id, v.id);
-        }
-      }
+      await persistCampaignStatus(id, target);
     } catch {
+      // Revert the optimistic toggle if the network call failed.
       setOnIds((prev) => {
         const next = new Set(prev);
         if (isOn) next.add(id);
@@ -295,7 +371,49 @@ export default function AdsManager({ businessId }: { businessId: string }) {
   const activeCount = campaigns.filter((c) => c.status === "active").length;
   const totalBudgetCents = campaigns.reduce((sum, c) => sum + c.dailyBudgetCents, 0);
 
-  const today = new Date().toISOString().slice(0, 10);
+  // Column totals for the campaign table's Total row, summed across every campaign's live metrics
+  // (including the funnel breakdown). CPM/CPC/ROAS totals are derived from these sums downstream.
+  const totals = useMemo(() => {
+    return Object.values(liveInsightsByCampaign).reduce(
+      (acc, li) => ({
+        spendCents: acc.spendCents + li.spendCents,
+        impressions: acc.impressions + li.impressions,
+        clicks: acc.clicks + li.clicks,
+        conversions: acc.conversions + li.conversions,
+        revenueCents: acc.revenueCents + (li.funnel?.purchaseValueCents ?? Math.round((li.roas ?? 0) * li.spendCents)),
+        addToCart: acc.addToCart + (li.funnel?.addToCart ?? 0),
+        purchases: acc.purchases + (li.funnel?.purchases ?? 0),
+      }),
+      { spendCents: 0, impressions: 0, clicks: 0, conversions: 0, revenueCents: 0, addToCart: 0, purchases: 0 },
+    );
+  }, [liveInsightsByCampaign]);
+
+  // Lookups so the ad-set / ad tables can show their parent (Campaign / Ad Set) columns —
+  // the same hierarchy context Polluxa's native Meta/Google ad-set & ad tables surface.
+  const campaignById = useMemo(() => Object.fromEntries(campaigns.map((c) => [c.id, c])), [campaigns]);
+  const adSetById = useMemo(() => Object.fromEntries(adSets.map((s) => [s.id, s])), [adSets]);
+
+  // Human-readable targeting bits pulled from the ad set's real targeting blob (shapes vary by
+  // network — Meta uses geo_locations/age_min/genders, Google uses geoTargetConstants/ageRanges),
+  // so each getter is defensive and falls back to "—" rather than fabricating a value.
+  function adSetLocation(s: AdSet): string {
+    const t = s.targeting as any;
+    const geo = t?.geo_locations?.countries ?? t?.geoTargetConstants ?? t?.countries;
+    if (Array.isArray(geo) && geo.length) return geo.slice(0, 2).join(", ") + (geo.length > 2 ? ` +${geo.length - 2}` : "");
+    return "All";
+  }
+  function adSetObjective(s: AdSet): string {
+    const t = s.targeting as any;
+    return t?.optimization_goal ?? t?.optimizationGoal ?? s.bidStrategy ?? "—";
+  }
+
+  // Ad-set / ad summary counts for the stat-card row (mirrors Polluxa's Total/Active/Paused tiles).
+  const adSetActive = adSets.filter((s) => s.status === "active").length;
+  const adSetPaused = adSets.filter((s) => s.status === "paused").length;
+  const adActive = ads.filter((a) => a.status === "active").length;
+  const adPaused = ads.filter((a) => a.status === "paused").length;
+
+  const rangeLabel = RANGE_OPTIONS.find((r) => r.value === range)?.label ?? "All time";
   const briefTitle = `${NETWORK_LABELS[network]} Ads Insights Brief`;
   const briefStats = statsFromInsights(adInsights);
   const activeAiInsights = aiInsights.filter((i) => !i.dismissed);
@@ -354,16 +472,23 @@ export default function AdsManager({ businessId }: { businessId: string }) {
         <div className="polluxa-overview-header">
           <h2 className="polluxa-overview-title">Overview</h2>
           <div className="polluxa-network-tabs">
-            {(["meta", "google", "tiktok"] as Network[]).map((n) => (
-              <button
-                key={n}
-                type="button"
-                className={`polluxa-network-tab ${network === n ? "active" : ""}`}
-                onClick={() => setNetwork(n)}
-              >
-                {NETWORK_LABELS[n]}
-              </button>
-            ))}
+            {(["meta", "google", "tiktok"] as Network[]).map((n) => {
+              // Only Meta + Google are live; TikTok is a disabled "Coming soon" tab.
+              const comingSoon = n === "tiktok";
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  className={`polluxa-network-tab ${network === n ? "active" : ""} ${comingSoon ? "disabled" : ""}`}
+                  onClick={() => { if (!comingSoon) setNetwork(n); }}
+                  disabled={comingSoon}
+                  title={comingSoon ? "Coming soon" : undefined}
+                  style={comingSoon ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
+                >
+                  {NETWORK_LABELS[n]}{comingSoon ? " — Coming soon" : ""}
+                </button>
+              );
+            })}
           </div>
           <button
             type="button"
@@ -386,7 +511,7 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                       <span className="polluxa-brief-title">
                         {briefTitle} {adInsights?.isDemo && <span className="polluxa-demo-badge">Demo</span>}
                       </span>
-                      <div className="polluxa-brief-period">All time</div>
+                      <div className="polluxa-brief-period">{rangeLabel}</div>
                     </div>
                     <button type="button" className="polluxa-icon-btn" onClick={loadData} aria-label="Refresh">
                       ↻
@@ -433,9 +558,24 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                     </div>
                   </div>
 
-                  <div className="polluxa-opt-rule-pill">
-                    <span className="polluxa-opt-rule-icon">◎</span> Budget ${(totalBudgetCents / 100).toFixed(0)}/day · {activeCount} active
-                  </div>
+                  {editingRule ? (
+                    <div className="polluxa-opt-rule-editor">
+                      <span className="polluxa-opt-rule-icon">◎</span>
+                      <span className="polluxa-opt-rule-static">Budget ${(totalBudgetCents / 100).toFixed(0)}/day</span>
+                      <select value={ruleGoal} onChange={(e) => setRuleGoal(e.target.value)} aria-label="Optimization goal">
+                        {OPT_GOALS.map((g) => <option key={g} value={g}>{g}</option>)}
+                      </select>
+                      <select value={ruleConstraint} onChange={(e) => setRuleConstraint(e.target.value)} aria-label="Optimization constraint">
+                        {OPT_CONSTRAINTS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                      </select>
+                      <button type="button" className="polluxa-accept-btn" onClick={() => { saveRule(ruleGoal, ruleConstraint); setEditingRule(false); }}>Save</button>
+                    </div>
+                  ) : (
+                    <button type="button" className="polluxa-opt-rule-pill" onClick={() => setEditingRule(true)} title="Edit optimization rule">
+                      <span className="polluxa-opt-rule-icon">◎</span> Budget ${(totalBudgetCents / 100).toFixed(0)}/day · {ruleGoal} · {OPT_CONSTRAINTS.find((c) => c.value === ruleConstraint)?.label ?? ruleConstraint}
+                      <span className="polluxa-opt-rule-edit-icon"> ✎</span>
+                    </button>
+                  )}
 
                   <div className="polluxa-opt-summary-title">Summary</div>
                   <div className="polluxa-opt-summary-grid">
@@ -535,6 +675,23 @@ export default function AdsManager({ businessId }: { businessId: string }) {
           </button>
         </div>
 
+        {mode === "adsets" && (
+          <SummaryCards cards={[
+            { label: "Total Ad Sets", value: adSets.length, accent: "#1A6BFF" },
+            { label: "Active", value: adSetActive, accent: "#16A34A", sub: "Running now" },
+            { label: "Paused", value: adSetPaused, accent: "#D97706", sub: "Temporarily stopped" },
+            { label: "Campaigns", value: campaigns.length, accent: "#7C3AED", sub: "Parent campaigns" },
+          ]} />
+        )}
+        {mode === "ads" && (
+          <SummaryCards cards={[
+            { label: "Total Ads", value: ads.length, accent: "#1A6BFF" },
+            { label: "Active", value: adActive, accent: "#16A34A", sub: "Running now" },
+            { label: "Paused", value: adPaused, accent: "#D97706", sub: "Temporarily stopped" },
+            { label: "Ad Sets", value: adSets.length, accent: "#7C3AED", sub: "Parent ad sets" },
+          ]} />
+        )}
+
         <div className="polluxa-table-filter-row">
           <input
             type="text"
@@ -549,15 +706,21 @@ export default function AdsManager({ businessId }: { businessId: string }) {
             <option value="active">Active Only</option>
             <option value="paused">Paused Only</option>
           </select>
-          <div className="polluxa-date-range-display">
-            {today} <span>→</span> {today}
-          </div>
+          <select
+            value={range}
+            onChange={(e) => setRange(e.target.value)}
+            className="polluxa-account-select polluxa-range-select"
+            aria-label="Reporting date range"
+          >
+            {RANGE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </select>
         </div>
 
         {selectedIds.length > 0 && (
           <div className="bulk-actions-bar">
             <span>{selectedIds.length} Selected</span>
-            <button className="btn btn-sm btn-secondary" onClick={handleBulkPause}>⏸ Pause</button>
+            <button className="btn btn-sm btn-secondary" onClick={() => handleBulkStatus("active")}>▶ Activate</button>
+            <button className="btn btn-sm btn-secondary" onClick={() => handleBulkStatus("paused")}>⏸ Pause</button>
             <button className="btn btn-sm btn-secondary" onClick={handleBulkDuplicate}>📋 Duplicate</button>
           </div>
         )}
@@ -589,11 +752,16 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                         <th>Daily Budget</th>
                         <th>Spend</th>
                         <th>Impressions</th>
+                        <th>CPM</th>
                         <th>Clicks</th>
-                        <th>CTR</th>
-                        <th>Conversions</th>
-                        <th>ROAS</th>
+                        <th>CPC (CTR)</th>
+                        <th>Add To Cart</th>
+                        <th>Cost / ATC (CVR)</th>
+                        <th>Purchases</th>
+                        <th>Cost / Purchase</th>
+                        <th>Purchase Value (ROAS)</th>
                         <th>Recommend</th>
+                        <th>Reason</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -608,11 +776,16 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                         <td>-</td>
                         <td>-</td>
                         <td>${(totalBudgetCents / 100).toFixed(2)}</td>
-                        <td>${(Object.values(liveInsightsByCampaign).reduce((s, li) => s + li.spendCents, 0) / 100).toFixed(2)}</td>
-                        <td>{Object.values(liveInsightsByCampaign).reduce((s, li) => s + li.impressions, 0).toLocaleString()}</td>
-                        <td>{Object.values(liveInsightsByCampaign).reduce((s, li) => s + li.clicks, 0).toLocaleString()}</td>
-                        <td>-</td>
-                        <td>{Object.values(liveInsightsByCampaign).reduce((s, li) => s + li.conversions, 0).toLocaleString()}</td>
+                        <td>${(totals.spendCents / 100).toFixed(2)}</td>
+                        <td>{totals.impressions.toLocaleString()}</td>
+                        <td>{totals.impressions > 0 ? `$${(totals.spendCents / (totals.impressions / 1000) / 100).toFixed(2)}` : "—"}</td>
+                        <td>{totals.clicks.toLocaleString()}</td>
+                        <td>{totals.clicks > 0 ? `$${(totals.spendCents / totals.clicks / 100).toFixed(2)}` : "—"}</td>
+                        <td>{totals.addToCart.toLocaleString()}</td>
+                        <td>{totals.addToCart > 0 ? `$${(totals.spendCents / totals.addToCart / 100).toFixed(2)}` : "—"}</td>
+                        <td>{totals.purchases.toLocaleString()}</td>
+                        <td>{totals.purchases > 0 ? `$${(totals.spendCents / totals.purchases / 100).toFixed(2)}` : "—"}</td>
+                        <td>{totals.spendCents > 0 && totals.revenueCents > 0 ? `${(totals.revenueCents / totals.spendCents).toFixed(2)}x` : "—"}</td>
                         <td>-</td>
                         <td>-</td>
                       </tr>
@@ -652,10 +825,26 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                             <td>${(c.dailyBudgetCents / 100).toFixed(2)}</td>
                             <td>{li ? `$${(li.spendCents / 100).toFixed(2)}` : "—"}</td>
                             <td>{li ? li.impressions.toLocaleString() : "—"}</td>
+                            <td>{li?.cpmCents != null ? `$${(li.cpmCents / 100).toFixed(2)}` : "—"}</td>
                             <td>{li ? li.clicks.toLocaleString() : "—"}</td>
-                            <td>{li ? `${li.ctr.toFixed(2)}%` : "—"}</td>
-                            <td>{li ? li.conversions.toLocaleString() : "—"}</td>
-                            <td>{li?.roas != null ? `${li.roas.toFixed(2)}x` : "—"}</td>
+                            <td>
+                              {li?.cpcCents != null ? `$${(li.cpcCents / 100).toFixed(2)}` : "—"}
+                              {li ? <span className="polluxa-metric-sub"> ({li.ctr.toFixed(2)}%)</span> : null}
+                            </td>
+                            <td>{li?.funnel ? li.funnel.addToCart.toLocaleString() : "—"}</td>
+                            <td>
+                              {li?.costPerAddToCartCents != null ? `$${(li.costPerAddToCartCents / 100).toFixed(2)}` : "—"}
+                              {li?.addToCartRate != null ? <span className="polluxa-metric-sub"> ({(li.addToCartRate * 100).toFixed(2)}%)</span> : null}
+                            </td>
+                            <td>{li?.funnel ? li.funnel.purchases.toLocaleString() : "—"}</td>
+                            <td>
+                              {li?.costPerPurchaseCents != null ? `$${(li.costPerPurchaseCents / 100).toFixed(2)}` : "—"}
+                              {li?.purchaseRate != null ? <span className="polluxa-metric-sub"> ({(li.purchaseRate * 100).toFixed(2)}%)</span> : null}
+                            </td>
+                            <td>
+                              {li?.funnel ? `$${(li.funnel.purchaseValueCents / 100).toFixed(2)}` : "—"}
+                              {li?.roas != null ? <span className="polluxa-metric-sub"> ({li.roas.toFixed(2)}x)</span> : null}
+                            </td>
                             <td>
                               {hasSuggestion ? (
                                 <div className="polluxa-recommend-cell">
@@ -688,12 +877,15 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                                 <span className="polluxa-recommend-empty">—</span>
                               )}
                             </td>
+                            <td className="polluxa-reason-cell">
+                              <span className={`polluxa-reason polluxa-reason-${bucket}`}>{reasonFor(c, globalIndex)}</span>
+                            </td>
                           </tr>
                         );
                       })}
                       {pagedCampaigns.length === 0 && (
                         <tr>
-                          <td colSpan={14}>
+                          <td colSpan={16}>
                             <div className="polluxa-table-empty">
                               <p>No campaigns match your filters.</p>
                             </div>
@@ -715,27 +907,47 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                             checked={selectedIds.length === filteredAdSets.length && filteredAdSets.length > 0}
                           />
                         </th>
-                        <th>Name</th>
+                        <th>Ad Set Name</th>
+                        <th>Campaign</th>
                         <th>Status</th>
+                        <th>Objective</th>
+                        <th>Location</th>
+                        <th>Placements</th>
                         <th>Bid Strategy</th>
-                        <th>Daily Budget</th>
+                        <th>Budget/Day</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {pagedAdSets.map((s) => (
-                        <tr key={s.id}>
-                          <td>
-                            <input type="checkbox" checked={selectedIds.includes(s.id)} onChange={() => handleSelectRow(s.id)} />
-                          </td>
-                          <td><strong>{s.name}</strong></td>
-                          <td><StatusBadge status={s.status} /></td>
-                          <td>{s.bidStrategy}</td>
-                          <td>${(s.dailyBudgetCents / 100).toFixed(2)}</td>
-                        </tr>
-                      ))}
+                      {pagedAdSets.map((s) => {
+                        const parent = campaignById[s.campaignId];
+                        return (
+                          <tr key={s.id}>
+                            <td>
+                              <input type="checkbox" checked={selectedIds.includes(s.id)} onChange={() => handleSelectRow(s.id)} />
+                            </td>
+                            <td>
+                              <div className="polluxa-campaign-cell">
+                                <strong>{s.name}</strong>
+                                <span className="polluxa-campaign-id">({s.id})</span>
+                              </div>
+                            </td>
+                            <td>{parent ? parent.name : <span className="polluxa-recommend-empty">—</span>}</td>
+                            <td><StatusBadge status={s.status} /></td>
+                            <td><span className="polluxa-pill goal">{adSetObjective(s)}</span></td>
+                            <td><span className="polluxa-pill location">{adSetLocation(s)}</span></td>
+                            <td>
+                              {s.placements?.length
+                                ? <span className="polluxa-pill">{s.placements.slice(0, 2).join(", ")}{s.placements.length > 2 ? ` +${s.placements.length - 2}` : ""}</span>
+                                : <span className="polluxa-recommend-empty">Automatic</span>}
+                            </td>
+                            <td>{s.bidStrategy || "—"}</td>
+                            <td>${(s.dailyBudgetCents / 100).toFixed(2)}</td>
+                          </tr>
+                        );
+                      })}
                       {pagedAdSets.length === 0 && (
                         <tr>
-                          <td colSpan={5}>
+                          <td colSpan={9}>
                             <div className="polluxa-table-empty">
                               <p>No ad sets yet. Ad sets you create for a campaign will appear here.</p>
                             </div>
@@ -757,30 +969,44 @@ export default function AdsManager({ businessId }: { businessId: string }) {
                             checked={selectedIds.length === filteredAds.length && filteredAds.length > 0}
                           />
                         </th>
-                        <th>Name</th>
+                        <th>Ad Name</th>
+                        <th>Campaign</th>
+                        <th>Ad Set</th>
                         <th>Status</th>
                         <th>Format</th>
+                        <th>Headline</th>
+                        <th>CTA</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {pagedAds.map((a) => (
-                        <tr key={a.id}>
-                          <td>
-                            <input type="checkbox" checked={selectedIds.includes(a.id)} onChange={() => handleSelectRow(a.id)} />
-                          </td>
-                          <td>
-                            <div className="flex gap-2 items-center">
-                              {a.creative.imageUrl && <img src={a.creative.imageUrl} alt="Ad Thumbnail" style={{ width: 28, height: 28, borderRadius: 4 }} />}
-                              <strong>{a.name}</strong>
-                            </div>
-                          </td>
-                          <td><StatusBadge status={a.status} /></td>
-                          <td>{a.format}</td>
-                        </tr>
-                      ))}
+                      {pagedAds.map((a) => {
+                        const parentSet = adSetById[a.adSetId];
+                        const parentCampaign = parentSet ? campaignById[parentSet.campaignId] : undefined;
+                        return (
+                          <tr key={a.id}>
+                            <td>
+                              <input type="checkbox" checked={selectedIds.includes(a.id)} onChange={() => handleSelectRow(a.id)} />
+                            </td>
+                            <td>
+                              <div className="polluxa-ad-name-cell">
+                                {a.creative.imageUrl
+                                  ? <img src={a.creative.imageUrl} alt="" className="polluxa-ad-thumb" />
+                                  : <span className="polluxa-ad-thumb placeholder" aria-hidden>🖼</span>}
+                                <strong>{a.name}</strong>
+                              </div>
+                            </td>
+                            <td>{parentCampaign ? parentCampaign.name : <span className="polluxa-recommend-empty">—</span>}</td>
+                            <td>{parentSet ? parentSet.name : <span className="polluxa-recommend-empty">—</span>}</td>
+                            <td><StatusBadge status={a.status} /></td>
+                            <td><span className="polluxa-pill">{a.format.replace(/_/g, " ")}</span></td>
+                            <td className="polluxa-ad-headline">{a.creative.headline || "—"}</td>
+                            <td>{a.creative.callToAction || "—"}</td>
+                          </tr>
+                        );
+                      })}
                       {pagedAds.length === 0 && (
                         <tr>
-                          <td colSpan={4}>
+                          <td colSpan={8}>
                             <div className="polluxa-table-empty">
                               <p>No ads yet. Ads you create within an ad set will appear here.</p>
                             </div>

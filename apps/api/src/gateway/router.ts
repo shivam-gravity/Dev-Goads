@@ -46,12 +46,12 @@ import { launchCampaign, pauseVariant, activateVariant, reallocateBudget, applyC
 import { ingestCampaignMetrics } from "../modules/pipeline/performancePipeline.js";
 import { runOptimizationPass } from "../modules/optimization/optimizationEngine.js";
 import { metaAdapter } from "../modules/adapters/metaAdapter.js";
+import { googleAdapter } from "../modules/adapters/googleAdapter.js";
 import { isValidObjective, listObjectives } from "../modules/adapters/metaObjectives.js";
 import { simulateBudget } from "../modules/adapters/budgetSimulator.js";
 
-// Extracted services (roadmap Phase 2) — routes below are proxied, not handled locally.
-const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL ?? "http://localhost:4001";
-const CAMPAIGN_SERVICE_URL = process.env.CAMPAIGN_SERVICE_URL ?? "http://localhost:4002";
+// scraper-service is the only extracted service that actually runs; its routes are proxied
+// (see scraperProxy below). Auth and campaigns are handled inline in this gateway.
 const SCRAPER_SERVICE_URL = process.env.SCRAPER_SERVICE_URL ?? "http://localhost:4003";
 
 import { listNotifications, markRead, markAllRead, unreadCount, createNotification } from "../modules/notifications/notificationService.js";
@@ -69,6 +69,7 @@ import { createResearchJob, getResearchJob as getResearchOrchestratorJob, getRes
 import { toStrategyInput } from "../research/knowledge/toStrategyInput.js";
 import { createCampaignGenerationJob, getCampaignGenerationJob } from "../modules/orchestrator/campaignGenerationService.js";
 import { TOTAL_PIPELINE_UNITS } from "../modules/orchestrator/campaignGenerationPipeline.js";
+import { buildCampaignForSelectedStrategy } from "../modules/orchestrator/strategySelectionService.js";
 import { getProgressSteps } from "../infra/liveProgress.js";
 import { freshnessScore, isStale } from "../research/knowledge/freshness.js";
 import { listDeadLetterEntries } from "../infra/deadLetterQueue.js";
@@ -94,6 +95,7 @@ import {
 import { getPaymentMethod, setPaymentMethod, validatePaymentMethodInput } from "../modules/billing/paymentMethodService.js";
 import { listAutomationRules, createAutomationRule, deleteAutomationRule } from "../modules/automation/automationRuleService.js";
 import { getOptimizationGoal, setOptimizationGoal } from "../modules/optimization/optimizationGoalService.js";
+import { ACTIVE_NETWORKS, isCatalogSourceEnabled, CATALOG_COMING_SOON_MESSAGE } from "../config/platforms.js";
 
 export const router = Router();
 
@@ -103,14 +105,43 @@ export const router = Router();
 import { authRateLimiter } from "./middleware/rateLimit.js";
 
 export const authEntryRouter = Router();
-const authProxy = proxyTo(AUTH_SERVICE_URL);
-authEntryRouter.post("/auth/register", authRateLimiter, authProxy);
-authEntryRouter.post("/auth/login", authRateLimiter, authProxy);
-authEntryRouter.post("/auth/google", authRateLimiter, authProxy);
 
 import { crmLogin } from "../modules/auth/crmAuthService.js";
 import { rotateRefreshToken, revokeAllForUser } from "../modules/auth/refreshTokenService.js";
-import { issueToken } from "../modules/auth/authService.js";
+import { issueToken, register, login, googleAuth } from "../modules/auth/authService.js";
+
+// Handled inline against the local authService (auth-service was never built). Each returns
+// { user, token, refreshToken, workspaceId } — the exact shape the web client's AuthResponse
+// expects. Rate-limited like the rest of the unauthenticated entry points.
+authEntryRouter.post("/auth/register", authRateLimiter, asyncHandler(async (req, res) => {
+  const { name, email, password } = req.body ?? {};
+  if (!name || !email || !password) return res.status(400).json({ error: "name, email and password are required" });
+  try {
+    res.json(await register({ name, email, password }));
+  } catch (err: any) {
+    res.status(409).json({ error: err.message || "Registration failed" });
+  }
+}));
+
+authEntryRouter.post("/auth/login", authRateLimiter, asyncHandler(async (req, res) => {
+  const { email, password } = req.body ?? {};
+  if (!email || !password) return res.status(400).json({ error: "email and password are required" });
+  try {
+    res.json(await login(email, password));
+  } catch (err: any) {
+    res.status(401).json({ error: err.message || "Invalid email or password" });
+  }
+}));
+
+authEntryRouter.post("/auth/google", authRateLimiter, asyncHandler(async (req, res) => {
+  const { name, email, googleId } = req.body ?? {};
+  if (!name || !email || !googleId) return res.status(400).json({ error: "name, email and googleId are required" });
+  try {
+    res.json(await googleAuth(name, email, googleId));
+  } catch (err: any) {
+    res.status(401).json({ error: err.message || "Google authentication failed" });
+  }
+}));
 
 authEntryRouter.post("/auth/crm-login", authRateLimiter, asyncHandler(async (req, res) => {
   const { token } = req.body;
@@ -137,7 +168,7 @@ authEntryRouter.post("/auth/refresh", asyncHandler(async (req, res) => {
 }));
 
 /* ═══════════════════════════════════════════════
-   AUTH — handled inline (auth-service not running)
+   AUTH — handled inline in this gateway
    ═══════════════════════════════════════════════ */
 
 router.post("/auth/logout", asyncHandler(async (req: AuthedRequest, res) => {
@@ -157,7 +188,7 @@ router.patch("/auth/me", asyncHandler(async (req: AuthedRequest, res) => {
 }));
 
 /* ═══════════════════════════════════════════════
-   WORKSPACES — handled inline (auth-service not running)
+   WORKSPACES — handled inline in this gateway
    ═══════════════════════════════════════════════ */
 
 router.get("/workspaces/:id", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
@@ -569,6 +600,14 @@ const catalogSourceSchema = z.enum(["all", "shopify", "facebook", "google", "woo
 router.get("/workspaces/:id/products", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = catalogSourceSchema.safeParse(req.query.source ?? "all");
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  // MVP guardrail: all store/catalog sync sources are deferred ("coming soon"). Reject any
+  // explicit source here so a hand-crafted request can't import from a store even if the UI is
+  // bypassed. "all" is allowed through and returns an empty set below (no source is enabled), so
+  // the picker degrades to an empty state rather than erroring on its default load. See
+  // config/platforms.ts (ACTIVE_CATALOG_SOURCES) to re-enable a source.
+  if (parsed.data !== "all" && !isCatalogSourceEnabled(parsed.data)) {
+    return res.status(501).json({ error: CATALOG_COMING_SOON_MESSAGE, code: "CATALOG_COMING_SOON" });
+  }
   res.json(await getProductCatalog(req.params.id, parsed.data));
 }));
 
@@ -924,7 +963,7 @@ router.post("/creatives/variations", asyncHandler(async (req, res) => {
   catch (err) { sendError(res, err, 502, "Variation generation failed"); }
 }));
 
-// Campaigns — handled inline (campaign-service not running)
+// Campaigns — handled inline in this gateway
 router.post("/campaigns", asyncHandler(async (req: AuthedRequest, res) => {
   const campaign = await prisma.campaign.create({ data: { id: randomUUID(), businessId: req.body.businessId, workspaceId: req.body.workspaceId, data: req.body } });
   res.json({ id: campaign.id, ...campaign.data as object });
@@ -1050,21 +1089,41 @@ router.get("/campaigns/:id/live-insights", asyncHandler(async (req, res) => {
   const variants: any[] = data.variants ?? [];
   const liveVariants = variants.filter((v: any) => v.externalId && (v.status === "active" || v.status === "paused"));
 
+  const emptyFunnel = { addToCart: 0, addPaymentInfo: 0, purchases: 0, purchaseValueCents: 0 };
   if (liveVariants.length === 0) {
-    return res.json({ campaignId: req.params.id, isLive: false, impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, ctr: 0, cpcCents: null, cpmCents: null, roas: null });
+    return res.json({ campaignId: req.params.id, isLive: false, impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0, ctr: 0, cpcCents: null, cpmCents: null, roas: null, funnel: emptyFunnel, costPerAddToCartCents: null, costPerAddPaymentInfoCents: null, costPerPurchaseCents: null, addToCartRate: null, purchaseRate: null });
   }
 
-  const credentials = (await getMetaCredentials(data.workspaceId ?? campaign.workspaceId ?? "demo-workspace")) ?? undefined;
-  let impressions = 0, reach = 0, clicks = 0, conversions = 0, spendCents = 0;
+  const workspaceId = data.workspaceId ?? campaign.workspaceId ?? "demo-workspace";
+  // Resolve each network's credentials once (not per-variant) — a campaign can hold both Meta and
+  // Google variants, and each adapter needs its own account creds.
+  const metaCredentials = (await getMetaCredentials(workspaceId)) ?? undefined;
+  const googleCredentials = (await getGoogleAdsCredentials(workspaceId)) ?? undefined;
+  // Optional date_preset from the Ads Manager range picker (last_7d/last_14d/…); falls back to
+  // today's date, which the adapters treat as "no preset → default window".
+  const datePreset = typeof req.query.range === "string" && req.query.range ? req.query.range : new Date().toISOString().slice(0, 10);
+  let impressions = 0, reach = 0, clicks = 0, conversions = 0, spendCents = 0, revenueCents = 0;
+  const funnel = { addToCart: 0, addPaymentInfo: 0, purchases: 0, purchaseValueCents: 0 };
   for (const v of liveVariants) {
     try {
-      const stats = await metaAdapter.fetchInsights(v.externalId, new Date().toISOString().slice(0, 10), credentials);
+      // Route each variant to its own network's adapter — a Google variant queried via the Meta
+      // adapter (the old hardcoded behavior) returned nothing, so the Google tab showed no data.
+      const stats = v.network === "google"
+        ? await googleAdapter.fetchInsights(v.externalId, datePreset, googleCredentials)
+        : await metaAdapter.fetchInsights(v.externalId, datePreset, metaCredentials);
       impressions += stats.impressions;
       reach += stats.reach;
       clicks += stats.clicks;
       conversions += stats.conversions;
       spendCents += stats.spendCents;
-    } catch { /* variant may have been deleted on Meta */ }
+      revenueCents += stats.revenueCents ?? 0;
+      if (stats.funnel) {
+        funnel.addToCart += stats.funnel.addToCart;
+        funnel.addPaymentInfo += stats.funnel.addPaymentInfo;
+        funnel.purchases += stats.funnel.purchases;
+        funnel.purchaseValueCents += stats.funnel.purchaseValueCents;
+      }
+    } catch { /* variant may have been deleted on the ad network */ }
   }
 
   res.json({
@@ -1075,10 +1134,21 @@ router.get("/campaigns/:id/live-insights", asyncHandler(async (req, res) => {
     clicks,
     conversions,
     spendCents,
+    revenueCents,
     ctr: impressions > 0 ? clicks / impressions : 0,
     cpcCents: clicks > 0 ? Math.round(spendCents / clicks) : null,
     cpmCents: impressions > 0 ? Math.round((spendCents / impressions) * 1000) : null,
-    roas: spendCents > 0 && conversions > 0 ? (conversions * 5000) / spendCents : null,
+    // True ROAS: real reported revenue / spend.
+    roas: spendCents > 0 && revenueCents > 0 ? revenueCents / spendCents : null,
+    funnel,
+    // Cost-per-step: total spend divided by that step's count. Null (not 0) when the step has no
+    // events, so the UI shows "—" rather than an infinite/meaningless cost.
+    costPerAddToCartCents: funnel.addToCart > 0 ? Math.round(spendCents / funnel.addToCart) : null,
+    costPerAddPaymentInfoCents: funnel.addPaymentInfo > 0 ? Math.round(spendCents / funnel.addPaymentInfo) : null,
+    costPerPurchaseCents: funnel.purchases > 0 ? Math.round(spendCents / funnel.purchases) : null,
+    // Step CVR relative to clicks (top of the paid funnel). Null when there are no clicks.
+    addToCartRate: clicks > 0 ? funnel.addToCart / clicks : null,
+    purchaseRate: clicks > 0 ? funnel.purchases / clicks : null,
   });
 }));
 router.get("/campaigns/:id/trend", requireCampaignAccess, asyncHandler(async (req, res) => res.json(await getCampaignTrend(req.params.id))));
@@ -1112,7 +1182,7 @@ router.post("/campaigns/:id/auto-optimize", asyncHandler(async (req, res) => {
   res.json({ id: updated.id, autoOptimize: enabled });
 }));
 
-// Billing — inline stubs (campaign-service not running)
+// Billing — handled inline in this gateway
 router.post("/businesses/:id/invoices", requireBusinessAccess("params", "id"), asyncHandler(async (_req, res) => res.json([])));
 router.get("/businesses/:id/invoices", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
   const invoices = await prisma.invoice.findMany({ where: { businessId: req.params.id } }).catch(() => []);
@@ -1269,7 +1339,7 @@ router.get("/research/:id/status", asyncHandler(async (req: AuthedRequest, res) 
    Coordinator (10 agents) -> Campaign Builder -> Persist -> Return Response. One POST
    kicks off a single async job (campaignGenerationPipeline.ts, driven by
    workers/campaignGenerationWorker.ts) that supersedes nothing existing — every route
-   above and the campaign-service proxy below keep working unchanged.
+   above keeps working unchanged.
    ═══════════════════════════════════════════════ */
 
 const campaignGenerateSchema = z.object({
@@ -1278,9 +1348,11 @@ const campaignGenerateSchema = z.object({
   url: z.string().min(1),
   name: z.string().min(1).optional(),
   dailyBudgetCents: z.number().int().positive().max(MAX_BUDGET_CENTS).optional(),
-  // Only Meta + Google are live. TikTok/Bing are "coming soon" — rejected at the boundary so a
-  // channel we can't actually launch can never enter the pipeline (widen this enum when they ship).
-  channels: z.array(z.enum(["meta", "google"])).optional(),
+  // Only the ACTIVE_NETWORKS (Meta + Google today) are accepted. TikTok/LinkedIn/etc. are
+  // "coming soon" — rejected at the boundary so a channel we can't actually launch can never
+  // enter the pipeline. Driven by the central platform catalog (config/platforms.ts) so the
+  // accepted set widens automatically when a network graduates.
+  channels: z.array(z.enum(ACTIVE_NETWORKS)).optional(),
   objective: z.string().optional(),
   countries: z.array(z.string()).optional(),
   // Bypass the research cache and force a fresh 27-provider run for this generation.
@@ -1539,6 +1611,26 @@ router.get("/campaigns/generate/:id/recommendations", asyncHandler(async (req: A
     return res.status(403).json({ error: "You do not have access to this campaign generation job" });
   }
   res.json(await getCampaignRecommendations(job.id));
+}));
+
+// Materialize ONE of a job's 3 candidate strategies (Strategy A/B/C) into an editable draft
+// Campaign — powers the results page's "pick one of 3 complete campaign suggestions" flow.
+// Selecting the winning strategy returns the campaign the pipeline already built (no duplicate);
+// selecting another builds a fresh draft on demand from data already computed (no re-research).
+router.post("/campaigns/generate/:id/select-strategy", asyncHandler(async (req: AuthedRequest, res) => {
+  const job = await getCampaignGenerationJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Campaign generation job not found" });
+  if (!(await getMembership(job.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this campaign generation job" });
+  }
+  const parsed = z.object({ strategy: z.string().min(1) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const { campaign, reusedWinner } = await buildCampaignForSelectedStrategy(job.id, parsed.data.strategy);
+    res.json({ campaignId: campaign.id, reusedWinner, ...campaign });
+  } catch (err) {
+    sendError(res, err, 422, "Could not build a campaign for that strategy");
+  }
 }));
 
 /* ═══════════════════════════════════════════════

@@ -1,4 +1,5 @@
-import type { AdCreative, AdNetwork, CampaignVariant, PerformanceMetric } from "../../types/index.js";
+import type { AdCreative, AdNetwork, CampaignVariant, AdInsightStats } from "../../types/index.js";
+import type { GoogleAdsCredentials } from "../integrations/googleOAuth.js";
 
 export interface LaunchVariantInput {
   campaignId: string;
@@ -24,7 +25,10 @@ export interface AdAdapter {
   pauseVariant(externalId: string, credentials?: MetaCredentials): Promise<void>;
   activateVariant(externalId: string, credentials?: MetaCredentials): Promise<void>;
   setBudget(input: SetBudgetInput, credentials?: MetaCredentials): Promise<void>;
-  fetchInsights(externalId: string, date: string, credentials?: MetaCredentials): Promise<Omit<PerformanceMetric, "id" | "campaignId" | "variantId" | "network" | "date">>;
+  // Credentials are network-specific: Meta variants pass MetaCredentials, Google variants pass
+  // GoogleAdsCredentials. The union keeps the shared AdAdapter type honest while each adapter's
+  // own resolveCredentials narrows to the shape it needs.
+  fetchInsights(externalId: string, date: string, credentials?: MetaCredentials | GoogleAdsCredentials): Promise<AdInsightStats>;
 }
 
 /**
