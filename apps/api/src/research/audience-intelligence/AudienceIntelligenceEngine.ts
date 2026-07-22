@@ -1,5 +1,5 @@
 import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
-import { hostnameOf } from "../providers/support.js";
+import { factGroundingScore, hostnameOf, type VerifiedFactInput } from "../providers/support.js";
 import { readMemory, writeMemory } from "../memory/MemoryCoordinator.js";
 import { computeLtvProxy, type LtvProxyResult } from "./ltvProxy.js";
 import { getProductCatalog } from "../../modules/integrations/productCatalogService.js";
@@ -236,10 +236,12 @@ function fallbackFields(businessName: string): AudienceFields {
 // factGrounded: synthesis anchored in the business's own verified facts (fact-first pipeline) —
 // stronger than a web citation, so it earns a high floor even with zero web citations rather
 // than being treated as an ungrounded estimate.
-function computeConfidence(usedFallback: boolean, citationCount: number, hadMemoryCorroboration: boolean, factGrounded = false): number {
+function computeConfidence(usedFallback: boolean, citationCount: number, hadMemoryCorroboration: boolean, facts?: VerifiedFactInput[]): number {
   if (usedFallback) return 0.1;
-  const base = factGrounded
-    ? Math.min(0.8 + citationCount * 0.03, 0.9)
+  // Fact-grounded: score by fact-base QUALITY (shared floor + bonus), not the always-0 citation
+  // count of the fact-first path. Memory corroboration still adds a small independent bump.
+  const base = facts?.length
+    ? factGroundingScore(facts)
     : (citationCount === 0 ? 0.4 : Math.min(0.55 + citationCount * 0.07, 0.9));
   return Math.round(Math.min(base + (hadMemoryCorroboration ? 0.05 : 0), 1) * 100) / 100;
 }
@@ -371,14 +373,15 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
     : "";
 
   const structured = await runStructured<AudienceFields>({
-    // Larger than most 1024-token structured-extraction calls elsewhere — this schema is
-    // unusually wide (icp + 6 array fields up to 6 items each, a 3-6-entry `personas` array
-    // with 4 sub-fields per entry, buyingCommittee, and a 3-6-stage customerJourney with
-    // full descriptions). Both 1024 and 1536 were observed live truncating mid-object
-    // (JSON.parse failing on the tool-call arguments, e.g. "Unterminated string") once
-    // `personas` was added — this is the same 2048 budget decision-engine.ts/
-    // strategy-engine.ts/tradeoff-engine.ts already use for comparably wide syntheses.
-    maxTokens: 2048,
+    // 4096: this schema is unusually wide (icp + 6 array fields up to 6 items each, a 3-6-entry
+    // `personas` array with 4 sub-fields per entry, buyingCommittee, and a 3-6-stage
+    // customerJourney with full descriptions). 1024/1536 were already known to truncate; 2048
+    // STILL truncated on a rich fact-grounded synthesis (unterminated tool-call JSON → null →
+    // fallback → the provider scored 0.0 and, with retries, blew the 150s ceiling — the single
+    // biggest research wall-clock sink AND the last provider dragging confidence). Doubling the
+    // budget lets the full profile serialize. Same truncation class as the StrategyAgent 4096→8192
+    // and crawl-fact-extraction 2048→4096 fixes.
+    maxTokens: 4096,
     tool: AUDIENCE_TOOL,
     messages: [
       {
@@ -397,7 +400,7 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
     estimatedLtvProxy,
     evidence: citations.map((c) => `${c.title} (${c.url})`),
     citations,
-    confidence: computeConfidence(usedFallback, citations.length, priorMatches.length > 0, !!input.verifiedFacts?.length),
+    confidence: computeConfidence(usedFallback, citations.length, priorMatches.length > 0, input.verifiedFacts),
     generatedAt: new Date().toISOString(),
   };
 
