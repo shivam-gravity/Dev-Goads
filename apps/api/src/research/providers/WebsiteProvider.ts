@@ -2,6 +2,7 @@ import { normalizeUrl } from "../../modules/onboarding/scraper.js";
 import { crawl4aiScrape } from "../../infra/crawl4aiClient.js";
 import { outageDataSource } from "../../infra/scrapeTypes.js";
 import { crawlUrlWithFallback, scrapeUrlWithFallback, sourceLabel } from "../../infra/scrapeFallback.js";
+import { refineContent } from "../../infra/contentRefiner.js";
 import { logger } from "../../modules/logger/logger.js";
 import { createCrawlJob, markCrawlJobFailed, persistCrawlPages } from "../crawl/crawlPersistence.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
@@ -105,7 +106,14 @@ export class WebsiteProvider implements ResearchProvider<WebsiteData> {
           title: page.metadata?.title || pageUrl,
           pageType: classifyPage(pageUrl, index === 0),
           relevanceScore: index === 0 ? 1 : 0.5,
-          cleanedText: (page.markdown ?? "").slice(0, MAX_EXCERPT_LENGTH),
+          // Refine the raw crawl markdown before persisting: crawl4ai's markdown carries inline
+          // CSS/JS (SPAs ship critical CSS like nprogress in the shell) and nav/footer boilerplate.
+          // extractCrawlFacts reads this cleanedText straight from the DB, so storing raw markdown
+          // fed the fact-extractor CSS noise → ~0 facts → un-grounded providers/agents and low
+          // research confidence. refineContent strips that deterministically (relevanceFilter off:
+          // this is the business's own site, keep all real prose). Falls back to the raw slice if
+          // refinement somehow empties it, so a page never persists blank.
+          cleanedText: (refineContent(page.markdown ?? "", "", { maxChars: MAX_EXCERPT_LENGTH, relevanceFilter: false }) || (page.markdown ?? "")).slice(0, MAX_EXCERPT_LENGTH),
           html: page.html ?? "",
         };
       });

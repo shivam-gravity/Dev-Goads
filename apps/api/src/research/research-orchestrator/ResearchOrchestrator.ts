@@ -42,6 +42,26 @@ export interface WebsitePrefetch {
 }
 
 /**
+ * Best-effort industry/category string from the verified facts, for grounding category-sensitive
+ * provider searches (competitor discovery especially). Deterministic, no LLM: prefer an explicit
+ * category/industry fact, else the product description/tagline, else the product name. Returns
+ * undefined when the facts carry nothing usable (crawl failed) — callers already handle that.
+ */
+export function deriveIndustry(facts: WebsitePrefetch["facts"]): string | undefined {
+  if (!facts?.length) return undefined;
+  const byPriority = [
+    (f: { field: string }) => /category|industry|vertical/i.test(f.field),
+    (f: { field: string }) => /product\.description|tagline|positioning|valueprop|value_prop|offering/i.test(f.field),
+    (f: { field: string }) => /product\.(name|type)|producttype/i.test(f.field),
+  ];
+  for (const match of byPriority) {
+    const hit = facts.find(match);
+    if (hit?.value) return hit.value.trim().slice(0, 120);
+  }
+  return undefined;
+}
+
+/**
  * The fact-first pipeline's Stage 1+2, run ONCE before the provider fan-out:
  *   1. Crawl the target URL and refine it (boilerplate stripped) → the ground-truth excerpt.
  *   2. Extract a source-attributed fact table from it with a SINGLE structured LLM call.
@@ -223,12 +243,22 @@ export async function runResearchOrchestrator(jobId: string, options: RunResearc
       logger.info(`Research job ${jobId}: extracted ${prefetch.facts.length} verified facts up-front — identity providers will reason from these instead of each searching`);
     }
 
+    // Derive the business's industry/category from the verified facts so category-sensitive
+    // providers (competitor discovery, audience, pricing) search with a REAL category instead of
+    // falling back to the vague "its category" — which turned a niche B2B query into junk hits
+    // (e.g. sports-score sites surfaced as "competitors" of an ERP/CRM company). Best-effort and
+    // deterministic: pick the most descriptive product/category fact; undefined when none exist,
+    // exactly as before (so no facts = same behavior as today, just no worse).
+    const industry = deriveIndustry(prefetch.facts);
+    if (industry) logger.info(`Research job ${jobId}: derived industry "${industry}" from verified facts — category-sensitive providers will use it`);
+
     const input: ResearchProviderInput = {
       jobId,
       workspaceId: job.workspaceId,
       businessId: job.businessId,
       url: job.url,
       businessName,
+      industry,
       websiteExcerpt: prefetch.excerpt,
       verifiedFacts: prefetch.facts,
     };
