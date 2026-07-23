@@ -61,8 +61,20 @@ async function workspaceOfCampaign(campaignId: string): Promise<Resolution> {
   return { found: true, workspaceId: campaign.workspaceId ?? (await workspaceOfBusiness(campaign.businessId)) };
 }
 
+// A pre-launch draft campaign has no prisma.adSet rows; the Ads Manager lists ad sets DERIVED from
+// the campaign's variants under a synthetic id `draft-<campaignId>-<network>-<hash>` (see
+// draftsService.listAdSets). Such an id owns via its embedded campaign, so ownership still resolves
+// to the campaign's workspace — parse the campaignId (a UUID = the first 5 dash-separated segments).
+function campaignIdFromDraftAdSetId(adSetId: string): string | null {
+  if (!adSetId.startsWith("draft-")) return null;
+  const parts = adSetId.slice("draft-".length).split("-");
+  return parts.length >= 5 ? parts.slice(0, 5).join("-") : null;
+}
+
 /** AdSet.workspaceId is not reliably populated (see draftsService.createAdSet) — walk up via its campaign. */
 async function workspaceOfAdSet(adSetId: string): Promise<Resolution> {
+  const draftCampaignId = campaignIdFromDraftAdSetId(adSetId);
+  if (draftCampaignId) return workspaceOfCampaign(draftCampaignId);
   const adSet = await prisma.adSet.findUnique({ where: { id: adSetId }, select: { workspaceId: true, campaignId: true } });
   if (!adSet) return { found: false };
   if (adSet.workspaceId) return { found: true, workspaceId: adSet.workspaceId };
