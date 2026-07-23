@@ -214,7 +214,11 @@ async function launchMetaHierarchy(
     const container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: metaObjective }, credentials);
     campaignExternalId = container.externalId;
     campaign.externalIds = { ...campaign.externalIds, meta: campaignExternalId };
-  } catch {
+  } catch (err) {
+    // Campaign container is the top of the Meta hierarchy — if it fails, EVERY variant is marked
+    // failed (no ad set/ad can exist without it). Log the real Graph API error; otherwise the whole
+    // campaign shows a silent "Failed" with no way to tell budget/objective/token issues apart.
+    logger.error(`launchMetaHierarchy: campaign container failed for ${campaign.id} (objective=${metaObjective}) — marking all ${variants.length} variants failed`, err);
     variants.forEach((v) => { v.status = "failed"; });
     return;
   }
@@ -266,11 +270,18 @@ async function launchMetaHierarchy(
           variant.externalId = result.externalId;
           variant.status = result.status;
           variant.adSetExternalId = adSet.externalId;
-        } catch {
+        } catch (err) {
+          // Per-variant failure (creative upload or ad create) — the ad set survived, so only THIS
+          // variant is lost. Log which one and why so a partial failure is diagnosable.
+          logger.error(`launchMetaHierarchy: ad create failed for variant ${variant.id} in "${audienceName}" (campaign ${campaign.id})`, err);
           variant.status = "failed";
         }
       }
-    } catch {
+    } catch (err) {
+      // Ad-set-level failure (targeting resolution or ad set create) fails the whole audience group.
+      // On an INR/non-USD account this is where a below-minimum daily budget gets rejected — log the
+      // Graph API message so the currency-minimum cause is visible instead of a silent group "Failed".
+      logger.error(`launchMetaHierarchy: ad set failed for audience "${audienceName}" (campaign ${campaign.id}, budget ${perVariantBudgetCents * groupVariants.length} cents) — marking ${groupVariants.length} variants failed`, err);
       groupVariants.forEach((v) => { v.status = "failed"; });
     }
   }
@@ -346,7 +357,11 @@ async function launchGoogleHierarchy(
     }
     campaignExternalId = container.externalId;
     campaign.externalIds = { ...campaign.externalIds, google: campaignExternalId };
-  } catch {
+  } catch (err) {
+    // Top of the Google hierarchy (budget + campaign). Failure here fails EVERY variant — log the
+    // real Ads API error (survives the auth-retry above), so a budget/targeting/token cause isn't
+    // hidden behind a blanket "Failed".
+    logger.error(`launchGoogleHierarchy: campaign container failed for ${campaign.id} — marking all ${variants.length} variants failed`, err);
     variants.forEach((v) => { v.status = "failed"; });
     return;
   }
@@ -378,11 +393,17 @@ async function launchGoogleHierarchy(
           variant.externalId = result.externalId;
           variant.status = result.status;
           variant.adSetExternalId = adGroup.externalId;
-        } catch {
+        } catch (err) {
+          // Per-variant failure (responsive search ad create) — the ad group survived, only THIS
+          // variant is lost. Log which one and why.
+          logger.error(`launchGoogleHierarchy: ad create failed for variant ${variant.id} in "${audienceName}" (campaign ${campaign.id})`, err);
           variant.status = "failed";
         }
       }
-    } catch {
+    } catch (err) {
+      // Ad-group-level failure (targeting or ad group create) fails the whole audience group. Log the
+      // Ads API message instead of a silent group "Failed".
+      logger.error(`launchGoogleHierarchy: ad group failed for audience "${audienceName}" (campaign ${campaign.id}, budget ${perVariantBudgetCents * groupVariants.length} cents) — marking ${groupVariants.length} variants failed`, err);
       groupVariants.forEach((v) => { v.status = "failed"; });
     }
   }
