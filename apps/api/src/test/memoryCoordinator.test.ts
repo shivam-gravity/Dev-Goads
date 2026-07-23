@@ -1,7 +1,41 @@
 import "dotenv/config";
 import { test } from "node:test";
 import assert from "node:assert";
-import { findExistingByDedupKey, getMetadataByDedupKey, readMemory, writeMemory } from "../research/memory/MemoryCoordinator.js";
+import os from "node:os";
+import path from "node:path";
+
+// writeMemory/readMemory embed their content via Bedrock (llmClient.createEmbedding ->
+// bedrockClient.createEmbedding), which reads AWS_BEARER_TOKEN_BEDROCK + the global LLM-usage
+// ledger at MODULE LOAD. On CI there are no Bedrock creds, so createEmbedding threw and writeMemory
+// hit its graceful-skip path (returns {id:"", deduped:false}) — making every write-path assertion
+// here fail on a fresh runner while passing on a dev box that has real creds. Make the test hermetic:
+// set a fake Bedrock token, opt the usage boundary out of the way (explicit huge budget + a temp
+// ledger so we never touch the real one or trip the monthly cap), and install a stable fetch
+// indirection that returns a deterministic unit embedding. All read at load time, so they MUST be
+// set before the dynamic import below — same constraint/pattern as bedrockClient.test.ts.
+process.env.LLM_MONTHLY_TOKEN_BUDGET = String(Number.MAX_SAFE_INTEGER);
+process.env.LLM_USAGE_LEDGER_PATH = path.join(os.tmpdir(), "polluxa-memcoord-test-usage.json");
+process.env.AWS_BEARER_TOKEN_BEDROCK = "test-bedrock-token";
+process.env.AWS_REGION = process.env.AWS_REGION ?? "us-east-1";
+process.env.BEDROCK_EMBEDDING_DIMENSIONS = "8";
+
+// A fixed unit-length 8-dim vector — the exact value is irrelevant to these dedup/TTL tests (they
+// never assert on similarity scores), it only needs to be a valid embedding so writeMemory persists.
+const FAKE_EMBEDDING = (() => {
+  const v = [1, 0, 0, 0, 0, 0, 0, 0];
+  return v;
+})();
+
+global.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+  const url = String(input);
+  // Titan embeddings InvokeModel endpoint — return the documented { embedding, inputTextTokenCount } shape.
+  if (url.includes("bedrock") || url.includes("invoke") || url.includes("titan-embed") || url.includes("amazonaws.com")) {
+    return new Response(JSON.stringify({ embedding: FAKE_EMBEDDING, inputTextTokenCount: 4 }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  throw new Error(`memoryCoordinator.test.ts: unexpected fetch to ${url}`);
+}) as typeof fetch;
+
+const { findExistingByDedupKey, getMetadataByDedupKey, readMemory, writeMemory } = await import("../research/memory/MemoryCoordinator.js");
 
 test("writeMemory - creates a new entry the first time, then updates (deduped) on a repeat write for the same dedupKey", async () => {
   const workspaceId = `ws-memcoord-${Date.now()}`;
