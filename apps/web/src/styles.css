@@ -6734,6 +6734,158 @@ td {
   gap: 20px;
 }
 
+/* ─── Manage Funds (header wallet chip + panel; mirrors the CRM WalletWidget) ─── */
+.manage-funds {
+  position: relative;
+}
+.manage-funds-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  background: var(--surface-tint);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--accent-dark);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.manage-funds-chip:hover {
+  border-color: var(--accent);
+}
+.manage-funds-chip-label {
+  color: var(--muted);
+  font-weight: 500;
+}
+.manage-funds-chip-balance {
+  color: var(--ink);
+  font-weight: 700;
+}
+.manage-funds-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 340px;
+  max-width: 90vw;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.14);
+  padding: 16px;
+  z-index: 500;
+}
+.manage-funds-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+.manage-funds-add-btn {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  padding: 6px 12px;
+  border-radius: 999px;
+  text-decoration: none;
+}
+.manage-funds-add-btn:hover {
+  background: var(--accent-dark);
+}
+.manage-funds-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 14px;
+}
+.manage-funds-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.manage-funds-stat-label {
+  font-size: 11px;
+  color: var(--muted-2);
+}
+.manage-funds-stat-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.manage-funds-source-note {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.manage-funds-source-note code {
+  font-size: 10.5px;
+  color: var(--accent-dark);
+}
+.manage-funds-muted {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 4px 0;
+}
+.manage-funds-wallet {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.manage-funds-wallet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.manage-funds-wallet-head strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+.manage-funds-tx {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.manage-funds-tx-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.manage-funds-tx-type {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--accent-dark);
+  background: var(--surface-tint);
+  padding: 2px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.manage-funds-tx-desc {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.manage-funds-tx-amt {
+  font-weight: 700;
+  white-space: nowrap;
+}
+.manage-funds-tx-amt.pos { color: #16a34a; }
+.manage-funds-tx-amt.neg { color: #dc2626; }
+
 .header-meta-item {
   display: flex;
   align-items: center;
@@ -8609,6 +8761,12 @@ td {
   background: radial-gradient(ellipse 60% 100% at 50% 0%, rgba(112, 51, 245, 0.08), transparent 70%);
 }
 
+/* Results state: no large top padding, so the sticky resubmit-bar header sits at the very top and
+   the results scroll under it. */
+.new-campaign-hero--results {
+  padding-top: 0;
+}
+
 .new-campaign-avatars {
   display: flex;
   margin-bottom: 32px;
@@ -8723,13 +8881,22 @@ td {
 }
 
 .new-campaign-resubmit-bar {
+  /* Sticky header: pins to the top of the viewport (the window/body scrolls — no overflow
+     ancestor) so the results below scroll UNDER it. `align-self: stretch` overrides the hero's
+     `align-items: center` so the bar spans the hero's full width; the opaque background covers
+     content passing beneath it. */
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  align-self: stretch;
   width: 100%;
-  max-width: 900px;
-  margin: 0 auto 28px;
+  margin: 0 0 28px;
+  padding: 16px 24px;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: 16px;
+  background: var(--bg, #f6f6f6);
+  border-bottom: 1px solid var(--border, #e2e8f0);
 }
 
 .new-campaign-resubmit-row {
@@ -8737,8 +8904,8 @@ td {
   align-items: center;
   gap: 12px;
   width: 100%;
-  max-width: 640px;
-  margin-left: auto;
+  max-width: 900px;
+  margin: 0 auto;
 }
 
 .new-campaign-resubmit-input {

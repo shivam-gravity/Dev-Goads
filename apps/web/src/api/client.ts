@@ -157,6 +157,22 @@ export interface LiveInsights {
 export interface OptimizationDecision { campaignId: string; chosenVariantId: string; action: string; reason: string; decidedAt: string; }
 export interface Invoice { id: string; businessId: string; periodStart: string; periodEnd: string; adSpendCents: number; platformFeeCents: number; totalCents: number; createdAt: string; }
 export interface PaymentMethod { workspaceId: string; brand: "visa" | "mastercard" | "amex" | "discover" | "unknown"; last4: string; expiry: string; updatedAt: string; }
+
+/** Connected Meta ad account's real billing snapshot (money amounts in the currency's MINOR unit). */
+export interface MetaAccountFunding {
+  adAccountId: string;
+  currency: string;
+  balanceMinor: number;
+  amountSpentMinor: number;
+  spendCapMinor: number | null;
+  accountStatus?: string;
+  fundingSource?: string;
+  billingUrl: string;
+}
+export interface WalletBalance { workspaceId: string; balanceCents: number; currency: string; lastTopUpAt: string | null; updatedAt: string; }
+export interface WalletTransaction { id: string; workspaceId: string; type: "top_up" | "ad_spend" | "refund" | "adjustment"; amountCents: number; balanceAfterCents: number; description: string; referenceId?: string; createdAt: string; }
+/** Manage Funds payload: real Meta billing (or null if not connected) + the internal wallet ledger. */
+export interface FundsSnapshot { meta: MetaAccountFunding | null; wallet: WalletBalance | null; transactions: WalletTransaction[]; }
 export interface SupportTicket { id: string; workspaceId: string; subject: string; message: string; status: "open" | "resolved"; createdAt: string; }
 export interface NotificationPreferences { emailAlerts: boolean; slackAlerts: boolean; digestAlerts: boolean; }
 export type RbacMatrix = Record<string, Record<string, boolean>>;
@@ -359,7 +375,7 @@ export interface GenerationJob { id: string; workspaceId: string; businessId: st
 export type ProductCatalogSource = "shopify" | "facebook" | "google";
 export interface ProductCatalogItem { id: string; source: ProductCatalogSource; name: string; category: string; priceCents: number; imageUrl: string; url: string; }
 export interface CatalogSourceResult { source: ProductCatalogSource; connected: boolean; accountName?: string; items: ProductCatalogItem[]; }
-export interface Draft { id: string; workspaceId: string; name: string; type: "campaign" | "ad_set" | "ad"; status: "draft" | "review" | "scheduled" | "published"; data: Record<string, unknown>; aiRecommendation?: string; score?: number; scheduledAt?: string; publishedAt?: string; createdAt: string; updatedAt: string; }
+export interface Draft { id: string; workspaceId: string; name: string; type: "campaign" | "ad_set" | "ad"; status: "draft" | "review" | "scheduled" | "published"; data: Record<string, unknown>; aiRecommendation?: string; score?: number; scheduledAt?: string; publishedAt?: string; createdAt: string; updatedAt: string; /** "campaign" = a draft-status Campaign surfaced on /drafts read-only (publish/edit/delete route to the campaign endpoints); "draft"/absent = a real Draft-table row. */ origin?: "draft" | "campaign"; }
 export interface AdSet { id: string; campaignId: string; name: string; status: "active" | "paused" | "draft"; dailyBudgetCents: number; targeting: Record<string, unknown>; placements: string[]; bidStrategy: string; startDate?: string; endDate?: string; createdAt: string; updatedAt: string; }
 export interface Ad { id: string; adSetId: string; name: string; status: "active" | "paused" | "draft" | "rejected"; creative: { headline: string; body: string; callToAction: string; imageUrl?: string }; format: "single_image" | "carousel" | "video" | "collection"; externalId?: string; createdAt: string; updatedAt: string; }
 
@@ -598,6 +614,7 @@ export const api = {
   getPaymentMethod: (workspaceId: string) => request<PaymentMethod | null>(`/workspaces/${workspaceId}/payment-method`),
   setPaymentMethod: (workspaceId: string, input: { cardNumber: string; expiry: string; cvc: string }) =>
     request<PaymentMethod>(`/workspaces/${workspaceId}/payment-method`, { method: "PUT", body: JSON.stringify(input) }),
+  getFunds: (workspaceId: string) => request<FundsSnapshot>(`/workspaces/${workspaceId}/funds`),
 
   // Support tickets
   listSupportTickets: (workspaceId: string) => request<SupportTicket[]>(`/workspaces/${workspaceId}/support-tickets`),
