@@ -16,6 +16,14 @@ export interface Draft {
   publishedAt?: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Where this draft actually lives, so the client can route publish/edit/delete to the right
+   * backend. "draft" = a row in the Draft table (the CampaignBuilder "Save as draft" flow).
+   * "campaign" = a Campaign row with status "draft" (the Campaign Generator flow, which never wrote
+   * to the Draft table) surfaced here read-only so unpublished campaigns aren't invisible on /drafts.
+   * Absent is treated as "draft" for backward compatibility with already-persisted rows.
+   */
+  origin?: "draft" | "campaign";
 }
 
 async function generateAiRecommendation(name: string, type: Draft["type"], data: Record<string, unknown>): Promise<string | undefined> {
@@ -43,7 +51,45 @@ async function save(d: Draft): Promise<void> {
 
 export async function listDrafts(workspaceId: string): Promise<Draft[]> {
   const rows = await prisma.draft.findMany({ where: { workspaceId }, orderBy: { updatedAt: "desc" } });
-  return rows.map((r) => r.data as unknown as Draft);
+  const savedDrafts: Draft[] = rows.map((r) => ({ ...(r.data as unknown as Draft), origin: "draft" }));
+
+  // Also surface unpublished CAMPAIGNS (Campaign rows with status "draft") here. The Campaign
+  // Generator writes Campaign rows directly and never touched the Draft table, so those drafts were
+  // invisible on /drafts even though they showed on /campaigns. Merge them read-only, tagged
+  // origin:"campaign" so the client routes publish/edit/delete to the campaign endpoints instead of
+  // the Draft ones. Matched by the workspaceId column OR via the workspace's businesses, since a
+  // Campaign's workspaceId column is only reliably set once launched (see schema.prisma) — a draft
+  // built before launch may carry only businessId.
+  const businesses = await prisma.business.findMany({ where: { workspaceId }, select: { id: true } });
+  const businessIds = businesses.map((b) => b.id);
+  const campaignRows = await prisma.campaign.findMany({
+    where: { OR: [{ workspaceId }, ...(businessIds.length ? [{ businessId: { in: businessIds } }] : [])] },
+    orderBy: { updatedAt: "desc" },
+  });
+
+  const campaignDrafts: Draft[] = campaignRows
+    .map((row) => ({ row, c: row.data as any }))
+    .filter(({ c }) => c?.status === "draft")
+    .map(({ row, c }) => ({
+      // Distinct id namespace so a campaign-origin draft never collides with a Draft-table id, and
+      // the client can strip the prefix to recover the campaignId for campaign-scoped actions.
+      id: `campaign:${row.id}`,
+      workspaceId,
+      name: c.name ?? "Untitled campaign",
+      type: "campaign" as const,
+      status: "draft" as const,
+      // The Drafts UI reads campaignId/dailyBudgetCents/variants/creativeAssets/finalUrl off `data`
+      // (see draftBudget/draftAudience/draftCreativeCount) — the campaign JSON already has these, and
+      // campaignId lets the existing Edit handler deep-link into the builder.
+      data: { ...c, campaignId: row.id },
+      // Campaign has no createdAt column (it lives in `data`); updatedAt is a real column.
+      createdAt: c.createdAt ?? row.updatedAt.toISOString(),
+      updatedAt: c.updatedAt ?? row.updatedAt.toISOString(),
+      origin: "campaign" as const,
+    }));
+
+  // Newest first across both sources.
+  return [...savedDrafts, ...campaignDrafts].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
 export async function createDraft(workspaceId: string, input: Pick<Draft, "name" | "type" | "data" | "aiRecommendation" | "score" | "scheduledAt">): Promise<Draft> {
