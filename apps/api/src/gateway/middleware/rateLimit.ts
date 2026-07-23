@@ -1,12 +1,18 @@
 import rateLimit from "express-rate-limit";
-import { RedisStore } from "rate-limit-redis";
+import { RedisStore, type RedisReply } from "rate-limit-redis";
 import { redisClient } from "../../infra/redisClient.js";
 
 const IS_PROD = process.env.NODE_ENV === "production";
 
 function makeRedisStore(prefix: string) {
   if (!IS_PROD) return undefined;
-  return new RedisStore({ sendCommand: (...args: string[]) => redisClient.sendCommand(args), prefix });
+  // ioredis's `call(command, ...args)` is the raw-command entry point rate-limit-redis expects
+  // (its own `sendCommand` takes a Command object, not a string[]). `call` is typed to return
+  // Promise<unknown>, so we assert the RedisReply shape the store's SendCommandFn requires.
+  return new RedisStore({
+    sendCommand: (command: string, ...args: string[]) => redisClient.call(command, ...args) as Promise<RedisReply>,
+    prefix,
+  });
 }
 
 export const apiRateLimiter = rateLimit({

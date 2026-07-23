@@ -6,7 +6,6 @@ import { externalLogin } from "../modules/auth/crmAuthService.js";
 import {
   listLeadForms,
   listLeads,
-  seedMockLeadData,
   toCrmLeadPayload,
   type LeadPlatform,
 } from "../modules/leadgen/leadIngestionService.js";
@@ -15,7 +14,7 @@ import { backfillMetaLeads } from "../modules/leadgen/metaLeadSync.js";
 import { syncGoogleLeadForms, syncGoogleLeadSubmissions } from "../modules/leadgen/googleLeadSyncService.js";
 import { getMetaCredentials, getOrCreateIntegrations } from "../modules/integrations/integrationService.js";
 import { getGoogleAdsCredentials } from "../modules/integrations/googleOAuth.js";
-import { getRawMetrics, ingestCampaignMetrics, ESTIMATED_REVENUE_CENTS_PER_CONVERSION } from "../modules/pipeline/performancePipeline.js";
+import { getRawMetrics, ingestCampaignMetrics } from "../modules/pipeline/performancePipeline.js";
 import { logger } from "../modules/logger/logger.js";
 import { listSavedAudiences, type AudienceType } from "../modules/audience/savedAudienceService.js";
 import { estimateReachHeuristic } from "../modules/adapters/metaTargetingMapper.js";
@@ -69,10 +68,12 @@ async function hasRealCredentials(workspaceId: string, platform: LeadPlatform): 
   return Boolean(await getGoogleAdsCredentials(workspaceId));
 }
 
-/** Seeds mock leads/forms for a platform only if it has no real integration credentials yet — real, connected platforms wait for an actual sync instead of being papered over with fake data. */
-async function ensureMockDataIfDisconnected(workspaceId: string, platform: LeadPlatform): Promise<void> {
-  if (await hasRealCredentials(workspaceId, platform)) return;
-  await seedMockLeadData(workspaceId, platform);
+/** No-op: mock lead/form seeding has been removed. A disconnected platform now shows an honest
+ * empty CRM (no leads/forms) until a real integration is connected and syncs actual data, rather
+ * than being papered over with fabricated leads ("Priya Sharma", @example.com). Kept as a no-op so
+ * the GET routes' call sites stay unchanged. */
+async function ensureMockDataIfDisconnected(_workspaceId: string, _platform: LeadPlatform): Promise<void> {
+  return;
 }
 
 /* ── Lead Forms ─────────────────────────────────────────────────────────── */
@@ -238,15 +239,16 @@ adsDataRoutes.get(
       const campaignData = c.data as any;
       const name: string = campaignData?.name ?? c.id;
       const metrics = await getRawMetrics(c.id);
-      const byDate = new Map<string, { impressions: number; reach: number; clicks: number; conversions: number; spendCents: number }>();
+      const byDate = new Map<string, { impressions: number; reach: number; clicks: number; conversions: number; spendCents: number; revenueCents: number }>();
       for (const m of metrics) {
         if (network && m.network !== network) continue;
-        const acc = byDate.get(m.date) ?? { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0 };
+        const acc = byDate.get(m.date) ?? { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0 };
         acc.impressions += m.impressions;
         acc.reach += m.reach;
         acc.clicks += m.clicks;
         acc.conversions += m.conversions;
         acc.spendCents += m.spendCents;
+        acc.revenueCents += m.revenueCents ?? 0;
         byDate.set(m.date, acc);
       }
       for (const [date, acc] of byDate) {
@@ -267,7 +269,7 @@ adsDataRoutes.get(
             cost_micros: costMicros,
             cpm_micros: acc.impressions > 0 ? Math.round((costMicros / acc.impressions) * 1000) : 0,
             cpc_micros: acc.clicks > 0 ? Math.round(costMicros / acc.clicks) : 0,
-            roas: acc.spendCents > 0 && acc.conversions > 0 ? (acc.conversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / acc.spendCents : 0,
+            roas: acc.spendCents > 0 && acc.revenueCents > 0 ? acc.revenueCents / acc.spendCents : 0,
           },
         });
       }

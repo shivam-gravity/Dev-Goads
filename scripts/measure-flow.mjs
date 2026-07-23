@@ -1,0 +1,10 @@
+import { chromium } from "@playwright/test";
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 794, height: 1123 } });
+await page.goto(pathToFileURL(resolve(process.cwd(), "scripts/ad-generation-flow.html")).href, { waitUntil: "networkidle" });
+const h = await page.evaluate(() => Math.round(document.querySelector(".page").getBoundingClientRect().height));
+console.log("CONTENT_HEIGHT_PX=" + h, "A4_LIMIT=1123", h <= 1123 ? "FITS" : "OVERFLOWS by " + (h-1123));
+await page.screenshot({ path: resolve(process.cwd(), "scripts/flow-preview.png"), fullPage: true });
+await browser.close();

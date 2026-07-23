@@ -3,8 +3,8 @@ import Reveal from "../components/Reveal.js";
 import { api } from "../api/client.js";
 
 const FAQS = [
-  { q: "How does the AI optimize budgets?", a: "Polluxa uses multi-armed bandit algorithms to analyze variants with high Click-Through Rates (CTR) and low Cost Per Acquisition (CPA). It automatically shifts budget toward Meta or Google variants capturing higher Return on Ad Spend (ROAS)." },
-  { q: "Is Meta Pixel installation automatic?", a: "Pixel conversion event tracking requires connecting your Meta Ads Manager. Once connected, Polluxa syncs conversion payloads automatically via standard API conversion feeds." },
+  { q: "How does the AI optimize budgets?", a: "CRM Ads uses multi-armed bandit algorithms to analyze variants with high Click-Through Rates (CTR) and low Cost Per Acquisition (CPA). It automatically shifts budget toward Meta or Google variants capturing higher Return on Ad Spend (ROAS)." },
+  { q: "Is Meta Pixel installation automatic?", a: "Pixel conversion event tracking requires connecting your Meta Ads Manager. Once connected, CRM Ads syncs conversion payloads automatically via standard API conversion feeds." },
   { q: "Can I connect multiple ad accounts?", a: "Yes, you can connect multiple Meta/Google ad accounts and store profiles under Workspace settings. Navigate to Admin → Workspace to switch or invite owners." },
   { q: "How often does the AI check performance?", a: "The optimization engine reviews campaign metrics every hour. Budget reallocation happens within 4 hours of detecting under-performing variants, while high-performers are scaled within 2 hours." },
   { q: "What happens when a campaign underperforms?", a: "When ROAS drops below 0.8× target or cost-per-conversion exceeds threshold, the AI first reduces daily budget by 20%. If performance doesn’t recover within 24 hours, the campaign is paused and you’re notified." },

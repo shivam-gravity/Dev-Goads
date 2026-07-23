@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { test, after } from "node:test";
 import assert from "node:assert";
-import { ingestLead, listLeads, listLeadForms, seedMockLeadData, upsertLeadForm } from "../modules/leadgen/leadIngestionService.js";
+import { ingestLead, listLeads, listLeadForms, upsertLeadForm } from "../modules/leadgen/leadIngestionService.js";
 import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
 
 // leadIngestionService.js transitively imports crmWebhookService.js, which imports
@@ -66,19 +66,4 @@ test("Lead ingestion - upsertLeadForm links leads to their form", async () => {
   const { data } = await listLeads(workspaceId, { formId: form.id });
   assert.strictEqual(data.length, 1);
   assert.strictEqual(data[0].formExternalId, "form-1");
-});
-
-test("Lead ingestion - seedMockLeadData is idempotent and only seeds once per platform", async () => {
-  const workspaceId = `ws_lead_test_${Date.now()}`;
-
-  await seedMockLeadData(workspaceId, "meta");
-  const { total: formsAfterFirst } = await listLeadForms(workspaceId, { platform: "meta" });
-  assert.ok(formsAfterFirst > 0, "should seed at least one lead form");
-
-  await seedMockLeadData(workspaceId, "meta");
-  const { total: formsAfterSecond } = await listLeadForms(workspaceId, { platform: "meta" });
-  assert.strictEqual(formsAfterFirst, formsAfterSecond, "seeding twice should not duplicate forms");
-
-  const { total: leadTotal } = await listLeads(workspaceId, { platform: "meta" });
-  assert.ok(leadTotal > 0, "should seed at least one lead");
 });

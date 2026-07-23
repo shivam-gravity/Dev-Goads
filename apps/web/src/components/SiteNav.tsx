@@ -25,7 +25,7 @@ export default function SiteNav() {
         <Link to="/" className="brand brand-lockup" onClick={closeMobile}>
           <MascotIcon className="mascot mascot-sm hover-wiggle" />
           <span className="brand-text">
-            Polluxa
+            CRM Ads
             <span className="brand-tagline">AI ad automation</span>
           </span>
         </Link>

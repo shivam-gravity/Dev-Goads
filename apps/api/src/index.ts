@@ -41,7 +41,10 @@ const ALLOWED_ORIGINS = IS_PROD
   : true;
 app.use(cors(IS_PROD ? { origin: ALLOWED_ORIGINS, credentials: true } : { origin: true, credentials: true }));
 
-app.use(express.json({ verify: (req: Request & { rawBody?: Buffer }, _res, buf) => { req.rawBody = buf; } }));
+// 10mb (up from body-parser's 100kb default): the onboarding flow round-trips a full ScrapedSite
+// — crawled page text + a base64 screenshot — back to /onboarding/analyze-product, which for a
+// content-rich site (e.g. polluxa.com ≈ 2.7mb) blew past 100kb and 413'd the whole parse step.
+app.use(express.json({ limit: "10mb", verify: (req: Request & { rawBody?: Buffer }, _res, buf) => { req.rawBody = buf; } }));
 app.use(apiRateLimiter);
 
 // Real connectivity checks, not a static "ok" — a gateway that can't reach Postgres or

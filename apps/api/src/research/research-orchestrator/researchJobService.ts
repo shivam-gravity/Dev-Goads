@@ -165,7 +165,7 @@ export async function createResearchSnapshot(jobId: string, context: ResearchCon
  * the context (no DB, no LLM), so it's deterministically unit-testable. Two independent checks:
  *
  *   - company identity anchor: `context.company == null` means the company provider produced
- *     nothing (e.g. it timed out under a Groq/Ollama storm). This is a HARD invariant, not
+ *     nothing (e.g. it timed out). This is a HARD invariant, not
  *     tunable — a run with no company identity is exactly what let the market provider
  *     confabulate a wrong industry (the 07-16 `polluxa.com` "medical device" hallucination that
  *     two later cache hits re-served). `== null` catches both null and undefined.

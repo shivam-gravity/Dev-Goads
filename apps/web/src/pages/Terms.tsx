@@ -4,7 +4,7 @@ export default function Terms() {
   return (
     <div className="legal-page">
       <Link to="/" className="brand">
-        Polluxa
+        CRM Ads
       </Link>
       <h1>Terms of Service</h1>
       <p className="legal-updated">
@@ -15,7 +15,7 @@ export default function Terms() {
       <section>
         <h2>1. The service</h2>
         <p>
-          Polluxa generates advertising strategy and creative recommendations, and, with your authorization, creates and
+          CRM Ads generates advertising strategy and creative recommendations, and, with your authorization, creates and
           manages campaigns on Google Ads and Meta on your behalf, including budget reallocation between ad
           variants.
         </p>
@@ -33,7 +33,7 @@ export default function Terms() {
       <section>
         <h2>3. Fees</h2>
         <p>
-          The platform fee consists of a flat monthly base fee plus a percentage of ad spend Polluxa manages on your
+          The platform fee consists of a flat monthly base fee plus a percentage of ad spend CRM Ads manages on your
           behalf, invoiced monthly based on actual spend recorded from connected ad accounts.
         </p>
       </section>
@@ -41,7 +41,7 @@ export default function Terms() {
       <section>
         <h2>4. Automated actions</h2>
         <p>
-          By connecting an ad account, you authorize Polluxa's optimization engine to pause underperforming ad variants
+          By connecting an ad account, you authorize CRM Ads's optimization engine to pause underperforming ad variants
           and reallocate budget between variants without prior approval for each individual action. Every automated
           action is logged with a reason and visible in your dashboard.
         </p>
@@ -50,7 +50,7 @@ export default function Terms() {
       <section>
         <h2>5. Termination</h2>
         <p>
-          You may disconnect your ad accounts and stop using Polluxa at any time. We may suspend accounts that violate
+          You may disconnect your ad accounts and stop using CRM Ads at any time. We may suspend accounts that violate
           these terms or the policies of Google Ads or Meta.
         </p>
       </section>
@@ -58,7 +58,7 @@ export default function Terms() {
       <section>
         <h2>6. Disclaimer</h2>
         <p>
-          Polluxa provides ad strategy and automation tools but does not guarantee any specific advertising results.
+          CRM Ads provides ad strategy and automation tools but does not guarantee any specific advertising results.
           Performance depends on your market, budget, and creative approval decisions.
         </p>
       </section>

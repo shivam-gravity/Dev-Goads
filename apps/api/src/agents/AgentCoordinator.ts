@@ -7,11 +7,44 @@ export const MAX_AGENT_ATTEMPTS = 2;
 export const AGENT_RETRY_DELAY_MS = 500;
 
 // Reviewer agents take `{ priorResults }` and review what the producer agents proposed,
-// rather than producing a fresh synthesis of their own — CriticAgent (quality/grounding)
-// and ComplianceAgent (ad-policy risk) both fit this shape. Generalized to a set (not a
-// single hardcoded name) specifically so adding a 3rd reviewer later is a one-line change
-// here, not a rewrite of runAgentCoordinator's control flow.
-const REVIEWER_AGENT_NAMES = new Set(["critic-agent", "compliance-agent"]);
+// rather than producing a fresh synthesis of their own — CriticAgent (quality/grounding),
+// ComplianceAgent (ad-policy risk), and the composite ReviewerAgent (both at once) all fit
+// this shape. Generalized to a set (not a single hardcoded name) specifically so adding a
+// reviewer is a one-line change here, not a rewrite of runAgentCoordinator's control flow.
+const REVIEWER_AGENT_NAMES = new Set(["critic-agent", "compliance-agent", "reviewer-agent"]);
+
+/**
+ * Maps each composite super-agent's bundled result onto the legacy per-agent result keys the
+ * rest of the pipeline (strategyEngine, persistence, campaign build) reads — e.g. strategy-agent's
+ * `{campaign, audience, keyword, budget}` becomes four results keyed "campaign-agent",
+ * "audience-agent", "keyword-agent", "budget-agent". Each value is the field on the composite's
+ * `data` object that carries that sub-agent's output. See agents/agents/index.ts for why the
+ * agent layer is 3 composite calls instead of 20 individual ones.
+ */
+const COMPOSITE_RESULT_MAP: Record<string, Record<string, string>> = {
+  "strategy-agent": { "campaign-agent": "campaign", "audience-agent": "audience", "keyword-agent": "keyword", "budget-agent": "budget" },
+  "creative-offer-agent": { "creative-agent": "creative", "pricing-offer-agent": "pricingOffer", "objection-handling-agent": "objectionHandling" },
+  "reviewer-agent": { "critic-agent": "critic", "compliance-agent": "compliance" },
+};
+
+/**
+ * Explodes one settled AgentResult into the legacy-keyed results it stands in for. A composite
+ * agent's result becomes several entries (one per sub-agent, each carrying that sub-part of the
+ * composite's `data` but sharing the composite's confidence/evidence/timing envelope). Any
+ * non-composite agent (the still-supported full 20-agent roster, and every test fake) passes
+ * through unchanged as a single `[name, result]` entry — so this is a no-op for them and the
+ * coordinator's behavior is identical when composites aren't in use.
+ */
+function deriveLegacyAgentResults(result: AgentResult<unknown>): [string, AgentResult<unknown>][] {
+  const mapping = COMPOSITE_RESULT_MAP[result.agent];
+  if (!mapping) return [[result.agent, result]];
+
+  const bundle = (result.data ?? {}) as Record<string, unknown>;
+  return Object.entries(mapping).map(([legacyName, field]) => [
+    legacyName,
+    { ...result, agent: legacyName, promptId: legacyName, data: bundle[field] ?? {} },
+  ]);
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -100,10 +133,19 @@ export async function runAgentCoordinator(
     })
   );
 
+  // Explode each producer's result into the legacy per-agent keys it stands in for (a
+  // composite super-agent → several keys; a plain agent → itself). This is what lets 3
+  // composite producer calls populate the exact `results["campaign-agent"]`-style shape the
+  // rest of the pipeline reads — AND it's what the reviewer sees below, so the reviewer
+  // reviews the individual proposals (campaign, audience, …) rather than one opaque bundle.
   const results: Record<string, AgentResult<unknown>> = {};
-  for (const result of producerResults) results[result.agent] = result;
-
-  const order = producerAgents.map((a) => a.name);
+  const order: string[] = [];
+  for (const result of producerResults) {
+    for (const [name, derived] of deriveLegacyAgentResults(result)) {
+      results[name] = derived;
+      order.push(name);
+    }
+  }
 
   if (reviewerAgents.length > 0) {
     // Snapshot, not a live reference — `results` gets each reviewer's own entry added
@@ -120,9 +162,12 @@ export async function runAgentCoordinator(
         return result;
       })
     );
+    // Reviewers explode too (the composite reviewer-agent → critic-agent + compliance-agent).
     for (const result of reviewerResults) {
-      results[result.agent] = result;
-      order.push(result.agent);
+      for (const [name, derived] of deriveLegacyAgentResults(result)) {
+        results[name] = derived;
+        order.push(name);
+      }
     }
   }
 

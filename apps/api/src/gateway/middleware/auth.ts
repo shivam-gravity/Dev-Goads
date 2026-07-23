@@ -11,9 +11,7 @@ export interface AuthedRequest extends Request {
 // Seeded in apps/api/prisma/seed.ts as a real WorkspaceMember (owner) of demo-workspace
 // and demo-business's workspace — using the real seeded id (not a bare "demo" sentinel)
 // means the dev bypass passes the SAME workspace-membership checks as a real user,
-// instead of needing a special case carved out of every ownership check. Mirrors
-// apps/auth-service/src/requireUser.ts's DEMO_USER_ID exactly, since both middlewares
-// stand in for the same missing login flow.
+// instead of needing a special case carved out of every ownership check.
 const DEMO_USER_ID = "demo-user";
 
 /**

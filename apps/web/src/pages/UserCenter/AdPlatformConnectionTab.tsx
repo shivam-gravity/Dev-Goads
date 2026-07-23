@@ -237,7 +237,7 @@ export default function AdPlatformConnectionTab({ businessId: _businessId }: { b
                   {revealedTokens.googleRefreshToken ? "Hide" : "Reveal"}
                 </button>
               </div>
-              <div className="field-hint">Without this, Polluxa can't refresh the token once it expires (~1hr) — you'll need to reconnect.</div>
+              <div className="field-hint">Without this, CRM Ads can't refresh the token once it expires (~1hr) — you'll need to reconnect.</div>
             </label>
           </>
         )}

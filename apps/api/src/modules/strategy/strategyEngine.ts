@@ -7,6 +7,7 @@ import { filterPlaceholderTerms } from "../../agents/support.js";
 import type { DecisionContext } from "../../research/decision/types.js";
 import { logger } from "../logger/logger.js";
 import { truncateForPlatform, PLATFORM_COPY_LIMITS } from "./platformCopyLimits.js";
+import { ACTIVE_NETWORK_LIST } from "../../config/platforms.js";
 
 function isAdNetwork(value: string): value is AdNetwork {
   return value === "meta" || value === "google" || value === "tiktok";
@@ -19,8 +20,9 @@ function isAdNetwork(value: string): value is AdNetwork {
 // this product actually launches campaigns on today (TikTok shows as "Coming soon" in the
 // builder — see generateCampaignSuggestions's own comment), so buildCampaignFromStrategy
 // should always have both to build variants for, not whichever single one a strategy
-// happened to name. Applied once here rather than duplicated at each call site.
-const CORE_NETWORKS: AdNetwork[] = ["meta", "google"];
+// happened to name. Applied once here rather than duplicated at each call site. Sourced from
+// the central platform catalog (config/platforms.ts) so it stays in sync with the launchable set.
+const CORE_NETWORKS: AdNetwork[] = ACTIVE_NETWORK_LIST;
 
 function ensureCoreNetworks(networks: AdNetwork[]): AdNetwork[] {
   const withCore = new Set(networks);
@@ -293,6 +295,8 @@ function complianceWarningFrom(businessId: string, compliance: ComplianceAgentOu
 // panel), with headline/body staying the first entry for back-compat. Cap matches that field's
 // documented "up to 5 variants".
 const MAX_COPY_VARIANTS = 5;
+// Google RSA allows at most 4 description assets (see GOOGLE_RSA_LIMITS.maxDescriptions).
+const MAX_RSA_DESCRIPTIONS = 4;
 
 function dedupeCapped(values: string[], cap: number): string[] {
   const seen = new Set<string>();
@@ -318,6 +322,11 @@ function withCreativeVariants(creative: AdCreative, creativeAgent: CreativeAgent
     ...creative,
     headlines: dedupeCapped([creative.headline, ...creativeAgent.headlines].map((h) => truncateHeadline(h)), MAX_COPY_VARIANTS),
     primaryTexts: dedupeCapped([creative.body, ...creativeAgent.primaryTexts], MAX_COPY_VARIANTS),
+    // Google RSA descriptions (≤90 chars) — a separate pool from primaryTexts (Meta 125-char body).
+    // Per-asset truncation to the RSA limit happens in applyGoogleRsaLimits at build/launch; here we
+    // just carry the agent's distinct pool, capped at Google's 4-description max, with the creative's
+    // own body as the first entry for a sensible default when the agent produced none.
+    descriptions: dedupeCapped([creative.body, ...(creativeAgent.descriptions ?? [])], MAX_RSA_DESCRIPTIONS),
   };
 }
 

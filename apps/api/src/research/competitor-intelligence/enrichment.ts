@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
 import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
 import { normalizeUrl } from "../../modules/onboarding/scraper.js";
-import { hostnameOf } from "../providers/support.js";
+import { FACT_GROUNDED_FLOOR, hostnameOf } from "../providers/support.js";
 import type { Citation } from "../../types/index.js";
 import type { CompetitorProfile, DiscoveredCompetitor } from "./types.js";
 
@@ -151,7 +151,7 @@ function computeProfileConfidence(usedFallback: boolean, citations: Citation[], 
   // fact-based market read. A real relevant citation can still edge higher; the 0.1 fallback still
   // covers the truly-empty "Unknown" case above; a search that returned only OFF-topic citations
   // (relevantCount 0 but citations present) still lands at 0.35 — that's a weak, not grounded, read.
-  const groundingScore = citations.length === 0 ? 0.8 : relevantCount === 0 ? 0.35 : Math.min(0.6 + relevantCount * 0.08, 0.9);
+  const groundingScore = citations.length === 0 ? FACT_GROUNDED_FLOOR : relevantCount === 0 ? 0.35 : Math.min(0.6 + relevantCount * 0.08, 0.9);
   const corroborationBonus = Math.min((mentionedBySourceCount - 1) * 0.05, 0.1);
 
   return Math.round(Math.min(groundingScore + corroborationBonus, 1) * 100) / 100;

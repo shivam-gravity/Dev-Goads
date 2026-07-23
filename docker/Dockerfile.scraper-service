@@ -16,8 +16,6 @@ FROM base AS deps
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
-COPY apps/auth-service/package.json apps/auth-service/package.json
-COPY apps/campaign-service/package.json apps/campaign-service/package.json
 COPY apps/scraper-service/package.json apps/scraper-service/package.json
 RUN npm ci --ignore-scripts
 

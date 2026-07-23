@@ -11,21 +11,12 @@ function fakeContext(overrides: Partial<ResearchContext> = {}): ResearchContext 
   };
 }
 
-// "Zero network calls" requires neutralizing EVERY provider the LLM router can reach, not just
-// OpenAI: the router falls back through Mistral/OpenRouter/Google/Groq and then the KEYLESS legs
-// — Bedrock (if AWS_BEARER_TOKEN_BEDROCK is set) and local Ollama (always attempts localhost) —
-// so deleting only OPENAI_API_KEY still lets a fallback leg fire a real fetch and trip the
-// fetchCalled assertion. Delete all provider keys and disable the keyless fallback legs so the
-// router genuinely has nothing to call. These env reads are captured at each client's module load,
-// so they must be set before the cache-busted dynamic import below.
+// "Zero network calls" requires the single LLM backend to be unconfigured: the router now only
+// reaches Claude via Bedrock, gated on AWS_BEARER_TOKEN_BEDROCK. Deleting it before the
+// cache-busted dynamic import below (that env read is captured at bedrockClient's module load)
+// leaves the router with nothing to call, so runDecisionEngine degrades without a fetch.
 delete process.env.OPENAI_API_KEY;
-delete process.env.GROQ_API_KEY;
-delete process.env.OPENROUTER_API_KEY;
-delete process.env.MISTRAL_API_KEY;
-delete process.env.GEMINI_API_KEY;
 delete process.env.AWS_BEARER_TOKEN_BEDROCK;
-process.env.LLM_OLLAMA_FALLBACK = "false";
-process.env.LLM_BEDROCK_FALLBACK = "false";
 // Firecrawl's /search now backs runWebSearch (via decision-engine.ts -> enrichment-engine.ts)
 // — deleted too, or the "zero network calls" test below would attempt a real Firecrawl call
 // instead of degrading immediately (firecrawlClient.ts reads this key fresh on every call,

@@ -1,5 +1,5 @@
-# Wraps the whole platform — api, web, auth-service, campaign-service, scraper-service, and
-# all 7 background workers — alongside Postgres/Redis, so `docker compose up -d --build` is
+# Wraps the whole platform — api, web, scraper-service, and all 7 background workers —
+# alongside Postgres/Redis, so `docker compose up -d --build` is
 # the one command that starts everything with restart-on-crash. Before first run: copy
 # .env.example to .env and fill in JWT_SECRET / INTERNAL_SERVICE_KEY / TOKEN_ENCRYPTION_KEY
 # (compose refuses to start without them — see .env.example for how to generate them).
@@ -17,13 +17,12 @@ x-app-env: &app-env
   CRM_JWT_SHARED_SECRET: ${CRM_JWT_SHARED_SECRET:-dev-crm-shared-secret}
   PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
   CRM_ORIGIN: ${CRM_ORIGIN:-}
-  AUTH_SERVICE_URL: http://auth-service:4001
-  CAMPAIGN_SERVICE_URL: http://campaign-service:4002
   SCRAPER_SERVICE_URL: http://scraper-service:4003
   SENTRY_DSN: ${SENTRY_DSN:-}
-  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-  OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-oss-20b:free}
-  MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+  AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  BEDROCK_MODEL: ${BEDROCK_MODEL:-us.anthropic.claude-sonnet-4-5-20250929-v1:0}
+  BEDROCK_EMBEDDING_MODEL: ${BEDROCK_EMBEDDING_MODEL:-amazon.titan-embed-text-v2:0}
   SEARXNG_BASE_URL: http://searxng:8080
   CRAWL4AI_BASE_URL: http://crawl4ai:11235
   CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:-}
@@ -202,46 +201,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  auth-service:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.node-service
-      args:
-        WORKSPACE: apps/auth-service
-        DIST_ENTRY: dist/auth-service/src/index.js
-    image: polluxa-auth-service:local
-    restart: unless-stopped
-    environment: *app-env
-    ports:
-      - "4001:4001"
-    depends_on: *depends-on-datastores
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-
-  campaign-service:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.node-service
-      args:
-        WORKSPACE: apps/campaign-service
-        DIST_ENTRY: dist/campaign-service/src/index.js
-    image: polluxa-campaign-service:local
-    restart: unless-stopped
-    environment: *app-env
-    ports:
-      - "4002:4002"
-    depends_on: *depends-on-datastores
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:4002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
 
   scraper-service:
     build:

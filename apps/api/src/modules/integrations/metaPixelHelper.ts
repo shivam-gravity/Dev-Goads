@@ -148,6 +148,54 @@ export async function listPixelEvents(workspaceId: string, pixelId: string): Pro
   }));
 }
 
+export interface PixelLiveConfirmation {
+  pixelId: string;
+  live: boolean;
+  lastFiredTime?: string;
+  eventsLast24h: number;
+  reason: string;
+}
+
+// A pixel is "live" only if Meta reports it isn't disabled AND it has actually fired within
+// this window — a configured-but-silent pixel means the site tag isn't installed/working, and
+// launching against it would spend budget with no conversion signal coming back.
+const PIXEL_LIVE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Confirms a Meta Pixel is genuinely LIVE — not just that the id exists, but that Graph API
+ * reports it available and firing recent events. This backs the campaign-builder "confirm pixel
+ * live" gate: generation is only allowed to proceed once this returns `live: true`, so a campaign
+ * can never launch pointing at a dead/uninstalled pixel. Uses the same live Graph API as
+ * getPixelStatus/listPixelEvents (with their mock fallback when the workspace has no creds), so a
+ * dev workspace still resolves to a confirmable state rather than hard-failing.
+ */
+export async function confirmPixelLive(workspaceId: string, pixelId: string): Promise<PixelLiveConfirmation> {
+  const [status, events] = await Promise.all([
+    getPixelStatus(workspaceId, pixelId),
+    listPixelEvents(workspaceId, pixelId),
+  ]);
+
+  const eventsLast24h = events.reduce((sum, e) => sum + (e.count ?? 0), 0);
+  const firedAt = status.lastFiredTime ? Date.parse(status.lastFiredTime) : NaN;
+  const firedRecently = Number.isFinite(firedAt) && Date.now() - firedAt <= PIXEL_LIVE_MAX_AGE_MS;
+
+  if (status.isUnavailable) {
+    return { pixelId, live: false, lastFiredTime: status.lastFiredTime, eventsLast24h, reason: "Meta reports this pixel as unavailable/disabled." };
+  }
+  if (!firedRecently) {
+    return {
+      pixelId,
+      live: false,
+      lastFiredTime: status.lastFiredTime,
+      eventsLast24h,
+      reason: status.lastFiredTime
+        ? `Pixel last fired at ${status.lastFiredTime}, outside the ${PIXEL_LIVE_MAX_AGE_MS / 3_600_000}h live window — verify the tag is installed and firing.`
+        : "Pixel has never fired an event — install the base code and confirm it fires a PageView.",
+    };
+  }
+  return { pixelId, live: true, lastFiredTime: status.lastFiredTime, eventsLast24h, reason: `Pixel is firing (${eventsLast24h} events in the last 24h).` };
+}
+
 /**
  * Returns a structured installation guide with step-by-step instructions
  * for installing the Meta Pixel on various platforms.

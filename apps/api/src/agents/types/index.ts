@@ -102,6 +102,9 @@ export interface KeywordAgentOutput {
 export interface CreativeAgentOutput {
   headlines: string[];
   primaryTexts: string[];
+  /** Google RSA description assets (≤90 chars each) — distinct from primaryTexts (Meta 125-char
+   * body copy). Exactly 4 when the model complies; the fallback and mapping tolerate fewer. */
+  descriptions: string[];
   callToAction: string;
   creativeAngles: string[];
 }
@@ -220,6 +223,39 @@ export interface ForecastingKPIAgentOutput {
   expectedRoasRange: string;
   primaryKpi: string;
   benchmarkReasoning: string[];
+}
+
+/* ───────────────────  Composite (bundled) agent output shapes  ─────────────────────
+ * Each composite agent does several of the individual agents' jobs in ONE LLM call, to cut
+ * the agent-layer call count (20 producers/reviewers -> 3 super-agents). A composite emits a
+ * bundle of the EXISTING per-agent output types (composition, not new shapes), and
+ * AgentCoordinator.deriveLegacyAgentResults() explodes each bundle back into the legacy
+ * `results["campaign-agent"]`-style keys — so the entire downstream pipeline (strategyEngine,
+ * persistence, campaign build) consumes exactly what it did before and stays untouched. */
+
+/** strategy-agent — the primary producer super-agent. Absorbs campaign + audience(+personas)
+ * + keyword + budget in a single structured call. */
+export interface StrategyAgentOutput {
+  campaign: CampaignAgentOutput;
+  audience: AudienceAgentOutput;
+  keyword: KeywordAgentOutput;
+  budget: BudgetAgentOutput;
+}
+
+/** creative-offer-agent — the creative/offer producer super-agent. Absorbs creative +
+ * pricing-offer + objection-handling in a single structured call. */
+export interface CreativeOfferAgentOutput {
+  creative: CreativeAgentOutput;
+  pricingOffer: PricingOfferAgentOutput;
+  objectionHandling: ObjectionHandlingAgentOutput;
+}
+
+/** reviewer-agent — the reviewer super-agent. Absorbs BOTH reviewers (critic + compliance)
+ * in one call. Runs LAST (like the individual reviewers did) so it reviews the exploded
+ * producer proposals via input.priorResults. */
+export interface ReviewerAgentOutput {
+  critic: CriticAgentOutput;
+  compliance: ComplianceAgentOutput;
 }
 
 /* ─────────────────────────  reviewer agent #2: Compliance  ───────────────────────── */

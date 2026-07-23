@@ -105,7 +105,24 @@ export class SEOProvider implements ResearchProvider<SEOData> {
         dataSource: DATA_SOURCE,
       };
 
-      return { status: data.primaryKeywords.length > 0 ? "success" : "partial", data };
+      // Confidence by EXTRACTION COMPLETENESS, not the default citation scorer. This provider
+      // reads the real page directly (no LLM, no web citations), so the default scorer pinned it
+      // at a flat 0.6 no matter how complete the extraction was — undervaluing genuine first-party
+      // on-page grounding. Score the four on-page signals we actually captured (title, description,
+      // headings, a full keyword list): a page that yielded all four is strong SEO grounding and
+      // earns up to 0.9; a near-empty page honestly scores low. Deterministic and first-party.
+      const pagesAnalyzed = bodyTexts.length;
+      const signals =
+        (metaTitle ? 0.2 : 0) +
+        (metaDescription ? 0.2 : 0) +
+        (headings.length >= 3 ? 0.2 : headings.length > 0 ? 0.1 : 0) +
+        (data.primaryKeywords.length >= MAX_KEYWORDS ? 0.2 : data.primaryKeywords.length > 0 ? 0.1 : 0) +
+        (pagesAnalyzed > 1 ? 0.1 : 0); // multi-page keyword base is less boilerplate-biased
+      const confidence = data.primaryKeywords.length === 0
+        ? 0.3 // essentially nothing extracted — honest low score
+        : Math.round(Math.min(0.5 + signals, 0.9) * 100) / 100;
+
+      return { status: data.primaryKeywords.length > 0 ? "success" : "partial", data, confidence };
     });
   }
 }

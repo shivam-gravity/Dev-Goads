@@ -1,6 +1,6 @@
 import { llm, runStructured } from "../../infra/llmClient.js";
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
-import { normalizePerformance, getRawMetrics, ESTIMATED_REVENUE_CENTS_PER_CONVERSION } from "../pipeline/performancePipeline.js";
+import { normalizePerformance, getRawMetrics } from "../pipeline/performancePipeline.js";
 import { getBusiness } from "../business/businessService.js";
 import type { AnalyticsSummary, TrendPoint, AudienceSuggestion, AdNetwork } from "../../types/index.js";
 
@@ -12,6 +12,7 @@ export async function getAnalyticsSummary(businessId: string, period: "all" | "m
   let totalImpressions = 0;
   let totalClicks = 0;
   let totalConversions = 0;
+  let totalRevenueCents = 0;
 
   // Date filter
   const now = new Date();
@@ -28,6 +29,7 @@ export async function getAnalyticsSummary(businessId: string, period: "all" | "m
         totalImpressions += m.impressions;
         totalClicks += m.clicks;
         totalConversions += m.conversions;
+        totalRevenueCents += m.revenueCents ?? 0;
       }
     } else {
       const perf = await normalizePerformance(campaign.id);
@@ -36,30 +38,19 @@ export async function getAnalyticsSummary(businessId: string, period: "all" | "m
         totalImpressions += p.impressions;
         totalClicks += p.clicks;
         totalConversions += p.conversions;
+        totalRevenueCents += p.revenueCents;
       }
     }
   }
 
-  if (totalImpressions === 0 && campaigns.length > 0) {
-    for (const campaign of campaigns) {
-      const budgetCents = campaign.dailyBudgetCents ?? 0;
-      const variantCount = campaign.variants?.length ?? 0;
-      if (budgetCents > 0 && variantCount > 0) {
-        const avgCpm = 1500;
-        const imp = Math.round((budgetCents / avgCpm) * 1000);
-        const cl = Math.round(imp * 0.025);
-        const conv = Math.max(1, Math.round(cl * 0.03));
-        totalSpendCents += budgetCents;
-        totalImpressions += imp;
-        totalClicks += cl;
-        totalConversions += conv;
-      }
-    }
-  }
+  // No budget-guess fabrication: if there are no real reported metrics, the totals stay 0 and the
+  // UI shows an honest "no performance data yet" state. Previously this synthesized impressions/
+  // clicks/conversions from daily budget × assumed CPM/CTR/CVR and showed them as real analytics.
 
   const avgCtr = totalImpressions > 0 ? totalClicks / totalImpressions : 0;
   const avgCpc = totalClicks > 0 ? totalSpendCents / totalClicks : null;
-  const roas = totalSpendCents > 0 && totalConversions > 0 ? (totalConversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / totalSpendCents : null;
+  // True ROAS: real reported revenue / spend.
+  const roas = totalSpendCents > 0 && totalRevenueCents > 0 ? totalRevenueCents / totalSpendCents : null;
 
   return {
     businessId,
@@ -96,22 +87,10 @@ export async function getCampaignTrend(campaignId: string): Promise<TrendPoint[]
     return points.sort((a, b) => a.date.localeCompare(b.date));
   }
 
-  const { getCampaign } = await import("../orchestrator/campaignOrchestrator.js");
-  const campaign = await getCampaign(campaignId);
-  if (!campaign || !campaign.dailyBudgetCents) return [];
-
-  const points: TrendPoint[] = [];
-  const now = new Date();
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-    const date = d.toISOString().slice(0, 10);
-    const dayBudget = campaign.dailyBudgetCents;
-    const impressions = Math.round((dayBudget / 1500) * 1000 * (0.8 + (6 - i) * 0.05));
-    const clicks = Math.round(impressions * 0.025 * (0.9 + (6 - i) * 0.03));
-    const conversions = Math.max(0, Math.round(clicks * 0.028));
-    points.push({ date, impressions, clicks, conversions, spendCents: dayBudget, ctr: impressions > 0 ? clicks / impressions : 0 });
-  }
-  return points;
+  // No real daily metrics → return an empty trend (the chart shows its "no data yet" state). This
+  // replaces a fabricated 7-day trend synthesized from daily budget × assumed CPM/CTR/CVR, which
+  // rendered as a real performance chart.
+  return [];
 }
 
 const AUDIENCE_SUGGESTION_TOOL = {
@@ -144,66 +123,14 @@ const AUDIENCE_SUGGESTION_TOOL = {
   },
 };
 
-function fallbackAudienceSuggestions(businessName: string, industry: string): AudienceSuggestion[] {
-  return [
-    {
-      name: "Core Decision Makers",
-      description: `Primary buyers in the ${industry} space who actively evaluate solutions like ${businessName}.`,
-      estimatedReach: "1M–3M on Meta",
-      platforms: ["meta", "google"] as AdNetwork[],
-      interests: [industry, "business software", "productivity"],
-      demographics: "Ages 28–45, managers and above",
-      painPoints: ["Time wasted on manual processes", "Difficulty scaling", "High operational costs"],
-      buyingIntent: "high",
-    },
-    {
-      name: "In-Market Searchers",
-      description: `People actively searching Google for ${industry} solutions or alternatives.`,
-      estimatedReach: "500K–2M on Google",
-      platforms: ["google"] as AdNetwork[],
-      interests: ["solution comparison", "reviews", "pricing"],
-      demographics: "All ages, purchase-intent behavior",
-      painPoints: ["Unsatisfied with current solution", "Need specific feature"],
-      buyingIntent: "high",
-    },
-    {
-      name: "Social Media Professionals",
-      description: "Career-driven professionals active on LinkedIn-equivalent networks who discover tools via social.",
-      estimatedReach: "2M–8M on Meta",
-      platforms: ["meta"] as AdNetwork[],
-      interests: ["professional development", "networking", "industry news"],
-      demographics: "Ages 25–40, college-educated",
-      painPoints: ["Staying competitive", "Learning new skills"],
-      buyingIntent: "medium",
-    },
-    {
-      name: "Lookalike — Current Customers",
-      description: "Audiences similar to your existing customers based on behavioral and demographic signals.",
-      estimatedReach: "3M–10M on Meta",
-      platforms: ["meta"] as AdNetwork[],
-      interests: ["similar to your best customers"],
-      demographics: "Mirrors your current customer base",
-      painPoints: ["Same pain points as your customers"],
-      buyingIntent: "medium",
-    },
-    {
-      name: "Retargeting — Site Visitors (30d)",
-      description: "Warm audience: people who already visited your website in the last 30 days.",
-      estimatedReach: "Depends on traffic volume",
-      platforms: ["meta", "google"] as AdNetwork[],
-      interests: ["already aware of your brand"],
-      demographics: "All visitors",
-      painPoints: ["Still evaluating options", "Need a nudge to convert"],
-      buyingIntent: "high",
-    },
-  ];
-}
-
 export async function getAudienceSuggestions(businessId: string): Promise<AudienceSuggestion[]> {
   const business = await getBusiness(businessId);
   if (!business) throw new Error("Business not found");
 
-  if (!llm) return fallbackAudienceSuggestions(business.name, business.industry);
+  // No live model → NO hardcoded segments. Return empty so the UI shows a "run research / connect a
+  // model to get audience suggestions" state rather than fabricated segments with invented reach
+  // numbers ("1M–3M on Meta") that look like real, business-specific recommendations.
+  if (!llm) return [];
 
   const result = await runStructured<{ suggestions: AudienceSuggestion[] }>({
     maxTokens: 2048,
@@ -221,6 +148,5 @@ Include a mix of cold, warm, and retargeting audiences. Make estimatedReach real
       },
     ],
   });
-  if (!result) return fallbackAudienceSuggestions(business.name, business.industry);
-  return result.suggestions;
+  return result?.suggestions ?? [];
 }

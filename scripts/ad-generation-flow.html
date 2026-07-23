@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  /* Brand-neutral, print-first palette. Single accent + ink/muted neutrals. */
+  :root {
+    --ink: #14161a;
+    --muted: #5b6472;
+    --line: #d5dae2;
+    --bg: #ffffff;
+    --panel: #f6f8fb;
+    --accent: #4c6ef5;      /* primary step */
+    --accent-soft: #eaf0ff;
+    --meta: #2563eb;        /* Meta = blue */
+    --meta-soft: #e5efff;
+    --warn: #b26a00;        /* fixes / caveats */
+    --warn-soft: #fdf3e2;
+    --ok: #1f7a4d;          /* success */
+    --ok-soft: #e6f4ec;
+    --fail: #b23b3b;        /* failed */
+    --fail-soft: #fbeaea;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .page { width: 794px; min-height: 1123px; padding: 30px 46px 24px; }  /* A4 @ 96dpi */
+
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 10px; margin-bottom: 12px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { font-size: 12.5px; color: var(--muted); margin: 0; }
+  .meta-row { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  .meta-row b { color: var(--ink); font-weight: 600; }
+
+  .flow { display: flex; flex-direction: column; align-items: stretch; gap: 0; }
+
+  .step {
+    display: flex; gap: 14px; align-items: flex-start;
+    border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    border-radius: 10px; padding: 10px 16px; background: var(--bg);
+  }
+  .step .idx {
+    flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%;
+    background: var(--accent); color: #fff; font-weight: 700; font-size: 13px;
+    display: flex; align-items: center; justify-content: center; margin-top: 1px;
+  }
+  .step .body { flex: 1; }
+  .step .title { font-size: 14px; font-weight: 650; margin: 0 0 3px; }
+  .step .desc { font-size: 12px; color: var(--muted); margin: 0; line-height: 1.38; }
+  .step .tag {
+    display: inline-block; font-size: 10px; font-weight: 650; letter-spacing: .02em;
+    padding: 2px 8px; border-radius: 999px; margin-top: 6px; margin-right: 5px;
+    border: 1px solid var(--line); color: var(--muted); background: var(--panel);
+  }
+  .tag.ep { color: var(--accent); background: var(--accent-soft); border-color: transparent; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+  .tag.meta { color: var(--meta); background: var(--meta-soft); border-color: transparent; }
+  .tag.ok { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+  .tag.fail { color: var(--fail); background: var(--fail-soft); border-color: transparent; }
+  .tag.fix { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+
+  .step.metaStep { border-left-color: var(--meta); }
+  .step.metaStep .idx { background: var(--meta); }
+
+  .arrow { align-self: center; color: var(--line); font-size: 14px; line-height: 1; margin: 2px 0; }
+
+  .legend { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px;
+    display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 10.5px; color: var(--muted); }
+  .legend .k { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+  footer { margin-top: 12px; font-size: 10px; color: var(--muted);
+    border-top: 1px solid var(--line); padding-top: 9px; line-height: 1.45; }
+  footer b { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>AI Ad Generation — End-to-End Process</h1>
+    <p class="sub">URL-to-Campaign flow, CRM &rarr; Dev-Goads, published to Meta. As executed for <b>polluxa.com</b>.</p>
+    <p class="meta-row">Platform: <b>Polluxa CRM Ads</b> (Dev-Goads) &nbsp;·&nbsp; Ad account: <b>act_773958358563901</b> &nbsp;·&nbsp; Target channel: <b>Meta</b></p>
+  </header>
+
+  <div class="flow">
+
+    <div class="step">
+      <div class="idx">1</div>
+      <div class="body">
+        <p class="title">Entry via CRM &rarr; Automated Ads</p>
+        <p class="desc">In Polluxa CRM, Marketing &rarr; <b>Automated Ads</b> triggers a signed SSO handoff into the Dev-Goads ads app, carrying the workspace identity and live Meta / Google ad credentials in the token.</p>
+        <span class="tag ep">GET /agency/automated-ads</span>
+        <span class="tag ep">POST /api/auth/crm-login</span>
+      </div>
+    </div>
+    <div class="arrow">&#9660;</div>
+
+    <div class="step">
+      <div class="idx">2</div>
+      <div class="body">
+        <p class="title">Configure goals &amp; channels</p>
+        <p class="desc">On the Campaign Generator: set placement channel to <b>Meta</b>, daily budget, objective and target regions. Coming-soon channels (TikTok, LinkedIn) are disabled.</p>
+        <span class="tag meta">Channel: Meta</span>
+        <span class="tag">Budget: $/day</span>
+      </div>
+    </div>
+    <div class="arrow">&#9660;</div>
+
+    <div class="step">
+      <div class="idx">3</div>
+      <div class="body">
+        <p class="title">Add product — crawl &amp; AI analysis</p>
+        <p class="desc">Paste the product URL (polluxa.com). The backend crawls the site, then an LLM extracts a grounded product profile (name, category, value proposition, features).</p>
+        <span class="tag ep">POST /api/onboarding/scrape</span>
+        <span class="tag ep">POST /api/onboarding/analyze-product</span>
+        <span class="tag fix">Fix: body limit 100kb &rarr; 10mb</span>
+      </div>
+    </div>
+    <div class="arrow">&#9660;</div>
+
+    <div class="step">
+      <div class="idx">4</div>
+      <div class="body">
+        <p class="title">Generate strategy &amp; creatives (AI agents)</p>
+        <p class="desc">A background worker runs the research + agent pipeline: strategy, audience, creative, offer and objection-handling agents produce a full campaign with multiple grounded ad variants (headlines, primary text, CTAs).</p>
+        <span class="tag ep">POST /api/campaigns/generate</span>
+        <span class="tag ok">16 variants generated</span>
+      </div>
+    </div>
+    <div class="arrow">&#9660;</div>
+
+    <div class="step">
+      <div class="idx">5</div>
+      <div class="body">
+        <p class="title">Review the draft campaign</p>
+        <p class="desc">The app routes to the campaign view — status <b>draft</b>, per-variant copy shown, spend/impressions at zero. Nothing has touched the ad network yet.</p>
+        <span class="tag ep">GET /api/campaigns/:id</span>
+        <span class="tag">Status: draft</span>
+      </div>
+    </div>
+    <div class="arrow">&#9660;</div>
+
+    <div class="step metaStep">
+      <div class="idx">6</div>
+      <div class="body">
+        <p class="title">Launch to Meta (published PAUSED)</p>
+        <p class="desc">Launch builds the real Meta object graph via the Graph API — <b>ad set &rarr; ad creative &rarr; ad</b> per variant on account act_773958358563901. Every object is created <b>PAUSED</b> by design: real objects, zero spend until explicitly activated.</p>
+        <span class="tag ep">POST /api/campaigns/:id/launch</span>
+        <span class="tag meta">graph.facebook.com/v22.0</span>
+        <span class="tag ok">7 Meta variants &rarr; PAUSED</span>
+        <span class="tag fail">Google &rarr; failed (invalid customer id / 401)</span>
+      </div>
+    </div>
+    <div class="arrow">&#9660;</div>
+
+    <div class="step metaStep">
+      <div class="idx">7</div>
+      <div class="body">
+        <p class="title">Activate &amp; optimize (optional, spends)</p>
+        <p class="desc">A paused variant can be flipped live with <b>Activate</b> (this begins real delivery and spend). Once live, metrics ingest on a schedule and the optimization engine reallocates budget toward winners.</p>
+        <span class="tag ep">POST /api/campaigns/:id/variants/:vid/activate</span>
+        <span class="tag">Metrics &rarr; optimize loop</span>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="legend">
+    <span class="k"><span class="swatch" style="background:var(--accent)"></span> Pipeline step</span>
+    <span class="k"><span class="swatch" style="background:var(--meta)"></span> Live Meta / ad-network call</span>
+    <span class="k"><span class="swatch" style="background:var(--ok)"></span> Succeeded</span>
+    <span class="k"><span class="swatch" style="background:var(--fail)"></span> Failed in this run</span>
+    <span class="k"><span class="swatch" style="background:var(--warn)"></span> Bug fixed during run</span>
+  </div>
+
+  <footer>
+    <b>Run notes.</b> Meta was the target channel and published successfully (7/8 variants PAUSED; 2 Meta variants failed Meta-side validation on near-empty copy). The strategy engine also generated Google variants (CORE_NETWORKS rule), all of which failed on invalid Google credentials from the CRM token. The URL-parse step required raising the API JSON body limit to 10&nbsp;MB. All objects were created PAUSED — no ad spend occurred.
+  </footer>
+</div>
+</body>
+</html>

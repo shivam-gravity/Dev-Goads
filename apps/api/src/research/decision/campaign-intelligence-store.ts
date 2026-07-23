@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../db/prisma.js";
-import { normalizePerformance, ESTIMATED_REVENUE_CENTS_PER_CONVERSION } from "../../modules/pipeline/performancePipeline.js";
+import { normalizePerformance } from "../../modules/pipeline/performancePipeline.js";
 import { getCampaign } from "../../modules/orchestrator/campaignOrchestrator.js";
 import { getBusiness } from "../../modules/business/businessService.js";
 import { getStrategy } from "../../modules/strategy/strategyEngine.js";
@@ -36,7 +36,7 @@ function aggregateByNetwork(stats: NormalizedPerformance[]): NetworkBreakdownEnt
     const clicks = group.reduce((sum, g) => sum + g.clicks, 0);
     const conversions = group.reduce((sum, g) => sum + g.conversions, 0);
     const spendCents = group.reduce((sum, g) => sum + g.spendCents, 0);
-    const revenueCents = conversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION;
+    const revenueCents = group.reduce((sum, g) => sum + g.revenueCents, 0);
     return {
       network,
       impressions,
@@ -73,7 +73,7 @@ export async function recordPerformanceSnapshot(campaignId: string): Promise<voi
     const clicks = stats.reduce((sum, s) => sum + s.clicks, 0);
     const conversions = stats.reduce((sum, s) => sum + s.conversions, 0);
     const spendCents = stats.reduce((sum, s) => sum + s.spendCents, 0);
-    const revenueCents = conversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION;
+    const revenueCents = stats.reduce((sum, s) => sum + s.revenueCents, 0);
     const distinctNetworks = [...new Set(stats.map((s) => s.network))];
 
     await prisma.campaignPerformanceSnapshot.create({

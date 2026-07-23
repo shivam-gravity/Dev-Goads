@@ -5,6 +5,8 @@ import { createAsset } from "../assets/assetService.js";
 import { createCreative } from "../orchestrator/creativesService.js";
 import { scrapeUrl } from "../onboarding/scraper.js";
 import { getImageProvider } from "./imageProvider.js";
+import { generateVectorAdImage, isVectorImageGenerationEnabled, type VectorAdContext } from "./vectorAdImageService.js";
+import { getBusiness } from "../business/businessService.js";
 import { getVideoProvider } from "./videoProvider.js";
 import {
   createGenerationJob,
@@ -83,6 +85,56 @@ async function uploadGenerated(workspaceId: string, buffer: Buffer, mimeType: st
   return url;
 }
 
+/** MIME → file extension for the generated image (svg for the Bedrock vector path, else png/jpeg). */
+function extForMime(mimeType: string): string {
+  if (mimeType.includes("svg")) return "svg";
+  if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return "jpg";
+  return "png";
+}
+
+/**
+ * Produce the ad image. PRIMARY path: Claude/Bedrock VECTOR generation — a grounded, self-contained
+ * SVG (headline + CTA as crisp <text>, brand-appropriate palette), the "Bedrock-only, SVG format"
+ * design. Falls back to the raster image chain (imageProvider.ts) only if Bedrock vector generation
+ * is unconfigured or fails to return a valid SVG, so a creative is never blank.
+ */
+async function generateCreativeImage(
+  brief: CreativeBrief,
+  businessId: string,
+  context: string,
+  aspectRatio: "square" | "portrait" | "landscape",
+  quality?: "standard" | "high",
+): Promise<{ buffer: Buffer; mimeType: string; ext: string }> {
+  if (isVectorImageGenerationEnabled()) {
+    try {
+      const business = await getBusiness(businessId).catch(() => null);
+      const vectorContext: VectorAdContext = {
+        brand: business?.brandName || business?.name || "the brand",
+        positioning: business?.industry || context.slice(0, 200),
+        audience: business?.targetAudience,
+        headline: brief.headline,
+        callToAction: brief.callToAction,
+      };
+      const { image } = await generateVectorAdImage(vectorContext, { aspectRatio, quality });
+      return { buffer: image.buffer, mimeType: image.mimeType, ext: extForMime(image.mimeType) };
+    } catch (err) {
+      logger.warn("Bedrock vector (SVG) generation failed — falling back to the raster image chain", err);
+    }
+  }
+  return generateRasterImage(brief, aspectRatio, quality);
+}
+
+/** Raster (PNG/JPEG) image via the multi-provider chain (imageProvider.ts). Used for the video
+ * flow (Runway animates a raster frame) and as the vector-generation fallback. */
+async function generateRasterImage(
+  brief: CreativeBrief,
+  aspectRatio: "square" | "portrait" | "landscape",
+  quality?: "standard" | "high",
+): Promise<{ buffer: Buffer; mimeType: string; ext: string }> {
+  const image = await getImageProvider().generate(brief.imagePrompt, { aspectRatio, quality });
+  return { buffer: image.buffer, mimeType: image.mimeType, ext: extForMime(image.mimeType) };
+}
+
 /** Runs one queued GenerationJob end to end: copy + image, optionally animated into video. Called from the worker. */
 export async function runGenerationJob(jobId: string): Promise<void> {
   const job = await getGenerationJob(jobId);
@@ -95,14 +147,21 @@ export async function runGenerationJob(jobId: string): Promise<void> {
     const brief = await generateCreativeBrief(context, job.input.language);
 
     const aspectRatio = job.input.aspectRatio ?? "square";
-    const image = await getImageProvider().generate(brief.imagePrompt, { aspectRatio, quality: job.input.quality });
-    const imageUrl = await uploadGenerated(job.workspaceId, image.buffer, image.mimeType, "png");
+    // Prefer Claude/Bedrock VECTOR (SVG) generation: the headline + CTA render as crisp <text>
+    // and the visual is grounded in the same brand/campaign facts as the copy. Falls back to the
+    // raster image chain (imageProvider.ts) only if Bedrock is unconfigured or returns no valid SVG.
+    // EXCEPTION: a video request must animate a RASTER frame (Runway's image_to_video can't take an
+    // SVG), so when wantVideo is set we force the raster path for a compatible source image.
+    const { buffer: imageBuffer, mimeType: imageMime, ext: imageExt } = job.input.wantVideo
+      ? await generateRasterImage(brief, aspectRatio, job.input.quality)
+      : await generateCreativeImage(brief, job.businessId, context, aspectRatio, job.input.quality);
+    const imageUrl = await uploadGenerated(job.workspaceId, imageBuffer, imageMime, imageExt);
     const imageAsset = await createAsset(job.workspaceId, {
       name: brief.headline,
       type: "image",
       url: imageUrl,
-      size: image.buffer.length,
-      mimeType: image.mimeType,
+      size: imageBuffer.length,
+      mimeType: imageMime,
       tags: ["ai-generated", `aspect:${aspectRatio}`, `lang:${job.input.language ?? "English"}`],
     });
 

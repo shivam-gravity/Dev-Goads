@@ -30,11 +30,12 @@ test("TikTok OAuth - handleTikTokOAuthCallback rejects a tampered/expired state"
   await assert.rejects(() => handleTikTokOAuthCallback("some-auth-code", "not-a-valid-jwt"));
 });
 
-test("TikTok OAuth - listAdvertisers returns a labeled mock list when the workspace has no real connection", async () => {
+test("TikTok OAuth - listAdvertisers returns an empty list when the workspace has no real connection (no mock accounts)", async () => {
   delete process.env.TIKTOK_APP_ID;
   delete process.env.TIKTOK_APP_SECRET;
   const { listAdvertisers } = await import(`../modules/integrations/tiktokOAuth.js?t=${Date.now()}`);
   const advertisers = await listAdvertisers(`workspace-no-connection-${Date.now()}`);
-  assert.ok(advertisers.length > 0);
-  assert.ok(advertisers[0].name.includes("(mock)"), "unconnected workspaces should see a clearly-labeled mock advertiser, not something indistinguishable from real");
+  // No fabricated "(mock)" advertisers — an unconnected workspace sees nothing to select and is
+  // prompted to connect a real TikTok account instead.
+  assert.strictEqual(advertisers.length, 0);
 });

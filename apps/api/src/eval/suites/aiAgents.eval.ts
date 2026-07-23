@@ -1,19 +1,14 @@
-import { BudgetAgent } from "../../agents/agents/BudgetAgent.js";
-import { CampaignAgent } from "../../agents/agents/CampaignAgent.js";
-import { CompetitorAgent } from "../../agents/agents/CompetitorAgent.js";
-import { ProductAgent } from "../../agents/agents/ProductAgent.js";
-import type { AgentResult, BudgetAgentOutput, CampaignAgentOutput, CompetitorAgentOutput, ProductAgentOutput } from "../../agents/types/index.js";
-import type { ResearchContext } from "../../research/types/index.js";
+import { StrategyAgent } from "../../agents/agents/StrategyAgent.js";
+import { CreativeOfferAgent } from "../../agents/agents/CreativeOfferAgent.js";
+import { ReviewerAgent } from "../../agents/agents/ReviewerAgent.js";
+import type { AgentResult, CreativeOfferAgentOutput, ResearchContext, ReviewerAgentOutput, StrategyAgentOutput } from "../../agents/types/index.js";
 import { combineChecks, inRange, minConfidence, nonEmptyArray, nonEmptyString } from "../checks.js";
 import type { EvalCase } from "../types.js";
 
 /** A rich, fully-populated ResearchContext fixture — same shape as the one
- * src/test/aiAgents.test.ts already uses, deliberately kept in sync with it (see that
- * file if this one needs updating) since both exist to answer "does an agent behave
- * correctly given good input", just via different mechanisms (unit assertion vs. graded
- * eval score). A rich fixture is the right choice here specifically because this suite's
- * job is to catch prompt-quality regressions on the happy path — a separate concern from
- * the research-providers suite's fallback-path coverage. */
+ * src/test/aiAgents.test.ts uses. A rich fixture is the right choice here because this suite's
+ * job is to catch prompt-quality regressions on the happy path: "given good input, does this
+ * composite agent's prompt still produce a sane, complete structured bundle?" */
 function richFixtureContext(): ResearchContext {
   return {
     jobId: "eval",
@@ -43,6 +38,7 @@ function richFixtureContext(): ResearchContext {
     },
     company: { name: "Acme Widgets", summary: "20-year-old precision widget manufacturer serving aerospace and automotive.", dataSource: "Live web search" },
     news: { articles: [], summary: "No recent news coverage found.", dataSource: "No recent news coverage found" },
+    reviews: { topPraise: ["reliable lead times"], topComplaints: ["premium pricing"], reviewSources: ["G2"], dataSource: "Live web search" },
     metadata: {
       jobId: "eval", generatedAt: new Date().toISOString(), totalDurationMs: 0,
       providersSucceeded: ["website", "market", "technology", "competitor", "seo", "audience", "company"], providersPartial: ["news"], providersFailed: [],
@@ -52,64 +48,68 @@ function richFixtureContext(): ResearchContext {
 }
 
 /**
- * Deliberately small (4 cases, one per agent) and happy-path-only — this suite asserts
- * "given rich, real-shaped research, does this agent's prompt still produce a sane,
- * complete structured output", which is exactly what a prompt-wording change risks
+ * One case per composite super-agent — happy-path-only. This suite asserts "given rich,
+ * real-shaped research, does this composite's prompt still produce a sane, complete structured
+ * BUNDLE with every sub-part populated", which is exactly what a prompt-wording change risks
  * breaking silently. Every case makes a REAL model call (same cost/time caveat as the
  * research-providers suite) — run via `npm run eval:agents`, not on every commit.
  */
 export const aiAgentEvalCases: EvalCase<AgentResult<unknown>>[] = [
   {
-    name: "product-agent / rich context produces a complete, non-generic product summary",
-    run: () => new ProductAgent().execute(richFixtureContext()),
+    name: "strategy-agent / rich context produces a coherent campaign+audience+keyword+budget bundle",
+    run: () => new StrategyAgent().execute(richFixtureContext()),
     check: (result) => {
-      const data = result.data as ProductAgentOutput;
-      return combineChecks(
-        nonEmptyString(data.productName, "productName"),
-        nonEmptyString(data.valueProposition, "valueProposition"),
-        nonEmptyArray(data.keyFeatures, "keyFeatures", 1),
-        minConfidence(result.confidence, 0.5)
-      );
-    },
-    confidence: (r) => r.confidence,
-  },
-  {
-    name: "competitor-agent / rich context produces named competitors and a positioning call",
-    run: () => new CompetitorAgent().execute(richFixtureContext()),
-    check: (result) => {
-      const data = result.data as CompetitorAgentOutput;
-      return combineChecks(
-        nonEmptyArray(data.competitors, "competitors", 1),
-        nonEmptyString(data.positioningRecommendation, "positioningRecommendation"),
-        minConfidence(result.confidence, 0.5)
-      );
-    },
-    confidence: (r) => r.confidence,
-  },
-  {
-    name: "budget-agent / rich context produces a positive budget with explainable reasoning",
-    run: () => new BudgetAgent().execute(richFixtureContext()),
-    check: (result) => {
-      const data = result.data as BudgetAgentOutput;
-      return combineChecks(
-        inRange(data.recommendedDailyBudgetCents, 100, 100_000_00, "recommendedDailyBudgetCents"),
-        nonEmptyArray(data.reasoning, "reasoning", 1),
-        minConfidence(result.confidence, 0.5)
-      );
-    },
-    confidence: (r) => r.confidence,
-  },
-  {
-    name: "campaign-agent / rich context produces a coherent strategy with a budget split that sums to ~1",
-    run: () => new CampaignAgent().execute(richFixtureContext()),
-    check: (result) => {
-      const data = result.data as CampaignAgentOutput;
-      const splitSum = Object.values(data.budgetSplit ?? {}).reduce((sum, v) => sum + v, 0);
+      const data = result.data as StrategyAgentOutput;
+      const splitSum = Object.values(data.campaign?.budgetSplit ?? {}).reduce((sum, v) => sum + v, 0);
       const splitSumsToOne = Math.abs(splitSum - 1) < 0.05;
       return combineChecks(
-        nonEmptyArray(data.recommendedNetworks, "recommendedNetworks", 1),
-        nonEmptyArray(data.creatives, "creatives", 1),
-        { pass: splitSumsToOne, score: splitSumsToOne ? 1 : 0, notes: `budgetSplit sums to ${splitSum}` },
+        nonEmptyArray(data.campaign?.recommendedNetworks, "campaign.recommendedNetworks", 1),
+        nonEmptyArray(data.campaign?.creatives, "campaign.creatives", 1),
+        { pass: splitSumsToOne, score: splitSumsToOne ? 1 : 0, notes: `campaign.budgetSplit sums to ${splitSum}` },
+        nonEmptyArray(data.audience?.personas, "audience.personas", 1),
+        nonEmptyArray(data.keyword?.primaryKeywords, "keyword.primaryKeywords", 1),
+        inRange(data.budget?.recommendedDailyBudgetCents, 100, 100_000_00, "budget.recommendedDailyBudgetCents"),
+        minConfidence(result.confidence, 0.5)
+      );
+    },
+    confidence: (r) => r.confidence,
+  },
+  {
+    name: "creative-offer-agent / rich context produces creative+offer+objection bundle",
+    run: () => new CreativeOfferAgent().execute(richFixtureContext()),
+    check: (result) => {
+      const data = result.data as CreativeOfferAgentOutput;
+      return combineChecks(
+        nonEmptyArray(data.creative?.headlines, "creative.headlines", 1),
+        nonEmptyString(data.pricingOffer?.recommendedOfferType, "pricingOffer.recommendedOfferType"),
+        nonEmptyArray(data.objectionHandling?.topObjections, "objectionHandling.topObjections", 1),
+        minConfidence(result.confidence, 0.5)
+      );
+    },
+    confidence: (r) => r.confidence,
+  },
+  {
+    name: "reviewer-agent / rich context + proposals produces critic+compliance verdicts",
+    run: () => {
+      // The reviewer needs producer proposals to review — give it a minimal but real one.
+      const priorResults = {
+        "campaign-agent": {
+          agent: "campaign-agent", promptId: "campaign-agent", promptVersion: 1,
+          data: { summary: "Meta-led lead-gen for aerospace procurement buyers", recommendedNetworks: ["meta"], budgetSplit: { meta: 1 }, audiences: ["Aerospace procurement"], creatives: [{ headline: "Certified precision widgets", body: "20-year track record", callToAction: "Get a quote" }] },
+          confidence: 0.8, evidence: [], usedFallback: false, generatedAt: "now", durationMs: 1,
+        },
+      };
+      return new ReviewerAgent().execute(richFixtureContext(), { priorResults });
+    },
+    check: (result) => {
+      const data = result.data as ReviewerAgentOutput;
+      const scoreOk = typeof data.critic?.overallScore === "number" && data.critic.overallScore >= 0 && data.critic.overallScore <= 100;
+      const riskOk = ["low", "medium", "high"].includes(data.compliance?.overallRisk);
+      return combineChecks(
+        { pass: scoreOk, score: scoreOk ? 1 : 0, notes: `critic.overallScore = ${data.critic?.overallScore}` },
+        { pass: riskOk, score: riskOk ? 1 : 0, notes: `compliance.overallRisk = ${data.compliance?.overallRisk}` },
+        nonEmptyString(data.critic?.recommendation, "critic.recommendation"),
+        nonEmptyString(data.compliance?.recommendation, "compliance.recommendation"),
         minConfidence(result.confidence, 0.5)
       );
     },

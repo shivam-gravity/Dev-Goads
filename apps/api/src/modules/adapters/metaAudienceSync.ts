@@ -298,9 +298,10 @@ export async function getAudienceSize(
   const creds = resolveCredentials(credentials);
 
   if (!creds) {
-    const mockCount = Math.floor(5000 + Math.random() * 50000);
-    logger.info(`No credentials available. Returning mock audience size for ${audienceExternalId}: ${mockCount}`);
-    return { approximateCount: mockCount, deliveryStatus: "ready" };
+    // No connected Meta account → audience size is genuinely unknown. Return 0 / "not_connected"
+    // rather than a Math.random() fabricated reach the UI would show as a real estimate.
+    logger.info(`No credentials available. Audience size unknown for ${audienceExternalId} (not connected).`);
+    return { approximateCount: 0, deliveryStatus: "not_connected" };
   }
 
   logger.info(`Fetching audience size for ${audienceExternalId}`);

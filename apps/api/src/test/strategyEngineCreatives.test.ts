@@ -197,12 +197,14 @@ test("createStrategyFromAgentResults - ComplianceAgent's finding is attached whe
   assert.strictEqual(strategyLow.complianceWarning, undefined, "a low-risk finding shouldn't surface a warning at all");
 });
 
-test("createStrategyFromAgentResults - CreativeAgent's copy pool populates AdCreative.headlines[]/primaryTexts[], deduped, capped at 5, with the creative's own headline/body first", async () => {
+test("createStrategyFromAgentResults - CreativeAgent's copy pool populates AdCreative.headlines[]/primaryTexts[]/descriptions[], deduped, capped, with the creative's own headline/body first", async () => {
   const creative: CreativeAgentOutput = {
     // Includes the creative's own headline ("Creative 1") and a duplicate ("Alt A") to prove dedupe,
     // plus enough distinct entries to overflow the cap of 5.
     headlines: ["Creative 1", "Alt A", "Alt A", "Alt B", "Alt C", "Alt D", "Alt E"],
     primaryTexts: ["Body for creative 1", "Alt body 1", "Alt body 2", "Alt body 1"],
+    // Google RSA descriptions: a duplicate ("Desc A") to prove dedupe, plus enough to overflow cap 4.
+    descriptions: ["Desc A", "Desc A", "Desc B", "Desc C", "Desc D", "Desc E"],
     callToAction: "Sign Up",
     creativeAngles: ["urgency"],
   };
@@ -216,6 +218,11 @@ test("createStrategyFromAgentResults - CreativeAgent's copy pool populates AdCre
   assert.strictEqual(new Set(first.headlines).size, first.headlines?.length, "headline variants must be de-duped (own headline + duplicate 'Alt A' collapse)");
   assert.strictEqual(first.primaryTexts?.length, 3, "3 distinct primary texts survive after 'Alt body 1' is de-duped");
   assert.strictEqual(new Set(first.primaryTexts).size, first.primaryTexts?.length, "primary-text variants must be de-duped");
+
+  // RSA descriptions: creative's own body first, agent's distinct descriptions appended, deduped, capped at 4.
+  assert.strictEqual(first.descriptions?.[0], "Body for creative 1", "the creative's own body must be the first RSA description (sensible default)");
+  assert.strictEqual(first.descriptions?.length, 4, "RSA descriptions must be capped at Google's max of 4");
+  assert.strictEqual(new Set(first.descriptions).size, first.descriptions?.length, "RSA descriptions must be de-duped");
 });
 
 test("createStrategyFromAgentResults - without the creative extra, creatives carry no headlines[]/primaryTexts[] (byte-identical to today)", async () => {

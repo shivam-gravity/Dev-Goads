@@ -11,9 +11,12 @@ import type { DecisionContext } from "../../research/decision/types.js";
 import { runIntelligenceEnrichment } from "../../research/intelligenceEnrichment.js";
 import { generateAndPersistCampaignRecommendations } from "../../research/campaign-recommendation/CampaignRecommendationEngine.js";
 import * as brain from "../../brain/PlatformBrain.js";
-import { createStrategyFromAgentResults } from "../strategy/strategyEngine.js";
+import { createStrategyFromAgentResults, getStrategy } from "../strategy/strategyEngine.js";
 import { buildCampaignFromStrategy } from "./campaignOrchestrator.js";
 import { getBusiness } from "../business/businessService.js";
+import { vectorAdGenerationQueue, VECTOR_AD_GENERATION_QUEUE } from "../../infra/queue.js";
+import { vectorAdJobDataFrom, type VectorAdGenerationJobData } from "../generation/vectorAdGenerationJob.js";
+import { isVectorImageGenerationEnabled } from "../generation/vectorAdImageService.js";
 import { recordRecommendationDecisions } from "../../research/decision/campaign-intelligence-store.js";
 import { withQueuedLock } from "../../infra/distributedLock.js";
 import { withSpan } from "../../infra/telemetry.js";
@@ -48,6 +51,13 @@ export interface CampaignGenerationDeps {
   createStrategyFromAgentResults: typeof createStrategyFromAgentResults;
   buildCampaignFromStrategy: typeof buildCampaignFromStrategy;
   getBusiness: typeof getBusiness;
+  getStrategy: typeof getStrategy;
+  vectorAdJobDataFrom: typeof vectorAdJobDataFrom;
+  /** Whether to enqueue vector ad generation at all — injectable so tests don't depend on a live
+   * Bedrock token (defaults to the real isVectorImageGenerationEnabled bearer-token check). */
+  isVectorImageGenerationEnabled: typeof isVectorImageGenerationEnabled;
+  /** Enqueue the vector-ad-generation job; overridable so tests assert enqueue without a live queue. */
+  enqueueVectorAdGeneration: (data: VectorAdGenerationJobData) => Promise<unknown>;
   withLock: typeof withQueuedLock;
 }
 
@@ -69,6 +79,10 @@ export const defaultCampaignGenerationDeps: CampaignGenerationDeps = {
   createStrategyFromAgentResults,
   buildCampaignFromStrategy,
   getBusiness,
+  getStrategy,
+  vectorAdJobDataFrom,
+  isVectorImageGenerationEnabled,
+  enqueueVectorAdGeneration: (data) => vectorAdGenerationQueue.add(VECTOR_AD_GENERATION_QUEUE, data),
   withLock: withQueuedLock,
 };
 
@@ -89,7 +103,7 @@ const CAMPAIGN_GENERATION_LOCK_TTL_MS = 10 * 60 * 1000;
 // so we never serve research the UI would already badge as stale. A non-finite/negative env
 // value falls back to the 6-hour default rather than poisoning the lookup with an Invalid Date.
 const parsedResearchCacheTtl = Number(process.env.CAMPAIGN_RESEARCH_CACHE_TTL_MS);
-const CAMPAIGN_RESEARCH_CACHE_TTL_MS =
+export const CAMPAIGN_RESEARCH_CACHE_TTL_MS =
   Number.isFinite(parsedResearchCacheTtl) && parsedResearchCacheTtl >= 0
     ? parsedResearchCacheTtl
     : 6 * 60 * 60 * 1000;
@@ -363,6 +377,26 @@ export async function runCampaignGenerationPipeline(
     completedUnits = TOTAL_PIPELINE_UNITS;
     await reportOverall("campaign-built");
     await deps.markCompleted(jobId, campaign.id);
+
+    // Vector ad images — enqueued best-effort onto its OWN queue so the campaign returns now and the
+    // grounded SVG creative set is generated asynchronously (via Claude/Bedrock) and attached to the
+    // campaign's creativeAssets. Never blocks or fails campaign generation: enqueue errors are logged
+    // and swallowed, and the whole step is skipped when Bedrock isn't configured (no bearer token).
+    if (deps.isVectorImageGenerationEnabled()) {
+      const strategyForImages = await deps.getStrategy(strategyId).catch(() => null);
+      await deps
+        .enqueueVectorAdGeneration(
+          deps.vectorAdJobDataFrom({
+            workspaceId: job.workspaceId,
+            businessId: job.businessId,
+            campaignId: campaign.id,
+            strategyId,
+            research: context,
+            strategy: { summary: strategyForImages?.summary, creatives: strategyForImages?.creatives ?? campaignAgentResult.data.creatives },
+          })
+        )
+        .catch((err) => logger.warn(`Failed to enqueue vector ad generation for campaign ${campaign.id} — campaign is unaffected`, err));
+    }
 
     // Campaign Intelligence: records which of the Decision Engine's ranked recommendations
     // actually fed this campaign vs. which were ranked but not used — best-effort, same

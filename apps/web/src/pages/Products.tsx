@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import PolluxaHeader from "../components/PolluxaHeader.js";
 import { useAuth } from "../context/AuthContext.js";
 import { api, CatalogSourceResult, ProductAnalysis, ProductCatalogItem, ProductCatalogSource } from "../api/client.js";
+import { isCatalogSourceActive, CATALOG_COMING_SOON_LABEL } from "../constants/platforms.js";
 import {
   SearchIcon,
   PlusIcon,
@@ -242,16 +243,34 @@ export default function Products() {
 
             {step === "choose" && (
               <div className="product-method-list">
-                {SYNC_METHODS.map((m) => (
-                  <button type="button" key={m.step} className="product-method-row" onClick={() => setStep(m.step)}>
-                    <span className="product-method-icon">{m.icon}</span>
-                    <span className="product-method-text">
-                      <strong>{m.title}</strong>
-                      <span>{m.description}</span>
-                    </span>
-                    <ChevronRightIcon className="product-method-chevron" />
-                  </button>
-                ))}
+                {SYNC_METHODS.map((m) => {
+                  // Store/catalog sync (Shopify, Meta feeds, Google GMC) is deferred to a future
+                  // version — render non-clickable with reduced opacity and a "Coming Soon" badge.
+                  // URL import + manual entry below stay fully active.
+                  const comingSoon = !isCatalogSourceActive(m.source);
+                  return (
+                    <button
+                      type="button"
+                      key={m.step}
+                      className={`product-method-row ${comingSoon ? "disabled" : ""}`}
+                      onClick={comingSoon ? undefined : () => setStep(m.step)}
+                      disabled={comingSoon}
+                      aria-disabled={comingSoon || undefined}
+                      style={comingSoon ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
+                    >
+                      <span className="product-method-icon">{m.icon}</span>
+                      <span className="product-method-text">
+                        <strong>{m.title}{comingSoon ? ` — ${CATALOG_COMING_SOON_LABEL}` : ""}</strong>
+                        <span>{m.description}</span>
+                      </span>
+                      {comingSoon ? (
+                        <span className="coming-soon-badge">{CATALOG_COMING_SOON_LABEL}</span>
+                      ) : (
+                        <ChevronRightIcon className="product-method-chevron" />
+                      )}
+                    </button>
+                  );
+                })}
                 <button type="button" className="product-method-row" onClick={() => setStep("url")}>
                   <span className="product-method-icon">
                     <LinkIcon />

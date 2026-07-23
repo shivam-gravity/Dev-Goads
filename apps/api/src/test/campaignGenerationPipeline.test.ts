@@ -1,6 +1,7 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert";
-import { runCampaignGenerationPipeline, type CampaignGenerationDeps } from "../modules/orchestrator/campaignGenerationPipeline.js";
+import { runCampaignGenerationPipeline, CAMPAIGN_RESEARCH_CACHE_TTL_MS, type CampaignGenerationDeps } from "../modules/orchestrator/campaignGenerationPipeline.js";
+import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
 import { LockWaitTimeoutError } from "../infra/distributedLock.js";
 import { logger } from "../modules/logger/logger.js";
 import type { CampaignGenerationJobRecord, CampaignGenerationStatus } from "../modules/orchestrator/campaignGenerationService.js";
@@ -10,6 +11,11 @@ import type { AgentPipelineResult } from "../agents/AgentCoordinator.js";
 import type { AgentResult, BudgetAgentOutput, CampaignAgentOutput } from "../agents/types/index.js";
 import type { AdStrategy, BusinessProfile, Campaign } from "../types/index.js";
 import type { DecisionContext } from "../research/decision/types.js";
+
+// The pipeline now transitively imports infra/queue.js (its default deps reference the
+// vector-ad-generation queue), which eagerly opens Redis connections at module load — so this
+// file must close them or `node --test` hangs after the last test. See disconnectInfra.ts.
+after(disconnectTestInfra);
 
 function fakeGenerationJob(overrides: Partial<CampaignGenerationJobRecord> = {}): CampaignGenerationJobRecord {
   const now = new Date().toISOString();
@@ -62,6 +68,7 @@ interface FakeDeps extends CampaignGenerationDeps {
   statusHistory: CampaignGenerationStatus[];
   persistedAgentResults: Record<string, AgentResult<unknown>> | null;
   persistedDecisionContext: DecisionContext | null;
+  enqueuedVectorAdJobs: unknown[];
 }
 
 /** Builds a fully injectable CampaignGenerationDeps so the pipeline's sequencing logic
@@ -73,6 +80,7 @@ function fakeDeps(opts: {
   business?: BusinessProfile | null;
 }): FakeDeps {
   const statusHistory: CampaignGenerationStatus[] = [];
+  const enqueuedVectorAdJobs: unknown[] = [];
   let persistedAgentResults: Record<string, AgentResult<unknown>> | null = null;
   let persistedDecisionContext: DecisionContext | null = null;
   const agentResults = opts.agentResults ?? { "campaign-agent": fakeCampaignAgentResult(), "budget-agent": fakeBudgetAgentResult(5000) };
@@ -95,6 +103,7 @@ function fakeDeps(opts: {
 
   return {
     statusHistory,
+    enqueuedVectorAdJobs,
     get persistedAgentResults() { return persistedAgentResults; },
     get persistedDecisionContext() { return persistedDecisionContext; },
     async loadJob() { return opts.job; },
@@ -120,6 +129,12 @@ function fakeDeps(opts: {
     async createStrategyFromAgentResults() { return strategy; },
     async buildCampaignFromStrategy() { return campaign; },
     async getBusiness() { return opts.business ?? null; },
+    async getStrategy() { return strategy; },
+    vectorAdJobDataFrom(input) {
+      return { workspaceId: input.workspaceId, businessId: input.businessId, campaignId: input.campaignId, strategyId: input.strategyId, context: { brand: "Test" } };
+    },
+    isVectorImageGenerationEnabled() { return true; },
+    async enqueueVectorAdGeneration(data) { enqueuedVectorAdJobs.push(data); return undefined; },
     async withLock(_key, _ttlMs, _maxWaitMs, fn) { return fn(); },
   } as FakeDeps;
 }
@@ -136,6 +151,26 @@ test("campaignGenerationPipeline - runs research -> agents -> strategy -> campai
   assert.ok(deps.persistedAgentResults && "campaign-agent" in deps.persistedAgentResults, "agent results must be persisted before the campaign is built");
   // 27 research units + 20 agent units + 1 build unit = 48 total; final call must reach it.
   assert.deepStrictEqual(progressCalls[progressCalls.length - 1], [48, 48]);
+});
+
+test("campaignGenerationPipeline - enqueues vector ad generation for the built campaign when enabled", async () => {
+  const job = fakeGenerationJob();
+  const deps = fakeDeps({ job });
+
+  await runCampaignGenerationPipeline(job.id, { deps });
+
+  assert.strictEqual(deps.enqueuedVectorAdJobs.length, 1, "one vector ad generation job must be enqueued");
+  assert.strictEqual((deps.enqueuedVectorAdJobs[0] as { campaignId: string }).campaignId, "campaign-1");
+});
+
+test("campaignGenerationPipeline - does NOT enqueue vector ad generation when disabled (no Bedrock token)", async () => {
+  const job = fakeGenerationJob();
+  const deps = fakeDeps({ job });
+  deps.isVectorImageGenerationEnabled = () => false;
+
+  await runCampaignGenerationPipeline(job.id, { deps });
+
+  assert.strictEqual(deps.enqueuedVectorAdJobs.length, 0, "no job when vector generation is disabled");
 });
 
 test("campaignGenerationPipeline - passes pricing-offer/objection-handling/compliance/creative/critic agent results through to createStrategyFromAgentResults as extras", async () => {
@@ -478,7 +513,7 @@ test("campaignGenerationPipeline - (c) a cached context whose businessId OR url 
   }
 });
 
-test("campaignGenerationPipeline - (d) an expired/absent cache (lookup returns null) is a miss that runs fresh, and the 7-day TTL is forwarded to the lookup", async () => {
+test("campaignGenerationPipeline - (d) an expired/absent cache (lookup returns null) is a miss that runs fresh, and the configured cache TTL is forwarded to the lookup", async () => {
   const job = fakeGenerationJob();
   const deps = fakeDeps({ job });
   let forwardedTtl: number | undefined;
@@ -490,9 +525,10 @@ test("campaignGenerationPipeline - (d) an expired/absent cache (lookup returns n
 
   assert.strictEqual(orchestratorCalled, true, "an expired/absent cache entry must run fresh research");
   assert.strictEqual(result.researchJobId, "research-1");
-  // 6-hour URL deep-research cache TTL (env CAMPAIGN_RESEARCH_CACHE_TTL_MS=21600000, matching the
-  // code default) — a cached run older than this is a cache miss and gets re-researched fresh.
-  assert.strictEqual(forwardedTtl, 6 * 60 * 60 * 1000, "the 6-hour cache TTL must be passed to the cache lookup");
+  // Assert the pipeline forwards its own configured TTL constant (env CAMPAIGN_RESEARCH_CACHE_TTL_MS,
+  // falling back to the 6-hour code default) rather than a hardcoded literal — otherwise this test
+  // flakes whenever a local/CI .env overrides the TTL. A cached run older than this is a cache miss.
+  assert.strictEqual(forwardedTtl, CAMPAIGN_RESEARCH_CACHE_TTL_MS, "the configured cache TTL must be passed to the cache lookup");
 });
 
 test("campaignGenerationPipeline - (e) another business's cached research is NEVER served to the agents", async () => {

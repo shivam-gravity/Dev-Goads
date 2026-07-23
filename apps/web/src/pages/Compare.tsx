@@ -18,7 +18,7 @@ export default function Compare() {
       <SiteNav />
       <section className="hero hero-compact">
         <span className="eyebrow">Compare</span>
-        <h1>Polluxa vs. doing it yourself vs. hiring an agency</h1>
+        <h1>CRM Ads vs. doing it yourself vs. hiring an agency</h1>
         <p className="lead">
           A general comparison of approaches to running paid ads — not a comparison against any specific competing
           product.
@@ -34,7 +34,7 @@ export default function Compare() {
                   <th></th>
                   <th>Manual (you)</th>
                   <th>Agency</th>
-                  <th>Polluxa</th>
+                  <th>CRM Ads</th>
                 </tr>
               </thead>
               <tbody>
@@ -55,7 +55,7 @@ export default function Compare() {
       <section className="cta-banner">
         <Reveal>
           <div className="cta-banner-inner">
-            <h2>Try the Polluxa column yourself</h2>
+            <h2>Try the CRM Ads column yourself</h2>
             <p>Free to run the full flow — no credit card required.</p>
             <Link to="/get-started" className="btn btn-primary btn-lg">
               Get started free

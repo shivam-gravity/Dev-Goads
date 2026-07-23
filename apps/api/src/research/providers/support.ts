@@ -315,6 +315,51 @@ export interface VerifiedFactInput {
   confidence: number;
 }
 
+// Fact-grounded confidence: the shared floor a fact-first result earns, plus a bonus that
+// scales with the QUALITY of the fact base backing it. This is the one place the fact-first
+// providers (company + the market/audience/competitor engines) agree on how much verified
+// facts are worth, so raising grounding quality moves the score the same way everywhere.
+export const FACT_GROUNDED_FLOOR = 0.8;
+export const FACT_GROUNDED_CAP = 0.92;
+
+/**
+ * Scores how strongly a fact-first result is grounded, in [FACT_GROUNDED_FLOOR, FACT_GROUNDED_CAP].
+ *
+ * Before this existed, fact-grounded providers were PINNED at the flat 0.8 floor: their score
+ * added `citationCount * 0.03`, but the fact-first path deliberately skips web search, so
+ * citationCount was always 0 — the fact base itself (however rich) never moved the number. That
+ * was the real ceiling keeping overall confidence at ~0.78. This replaces that inert term with a
+ * genuine measure of the grounding actually present, so a business whose own site yields many
+ * high-confidence, independently-sourced facts scores higher than one that yielded two thin ones
+ * — which is honest (more verified first-party evidence = more confidence), not inflation.
+ *
+ * Three quality signals, each a real proxy for grounding strength:
+ *   - VOLUME: more distinct verified facts = more of the business actually pinned down. Ramps to
+ *     full credit around 12 facts (a well-covered site), diminishing so a fact dump can't run away.
+ *   - CONFIDENCE: the mean per-fact extraction confidence — facts the extractor was sure of.
+ *   - SOURCE SPREAD: facts drawn from several distinct pages corroborate each other better than
+ *     many facts off one page, so distinct sourceUrls are rewarded.
+ * A result with no facts returns the bare floor (it's still fact-"grounded" only nominally).
+ */
+export function factGroundingScore(facts: VerifiedFactInput[]): number {
+  if (!facts || facts.length === 0) return FACT_GROUNDED_FLOOR;
+
+  // VOLUME — diminishing ramp to ~1.0 at 12 facts (sqrt keeps early facts worth more).
+  const volume = Math.min(1, Math.sqrt(facts.length / 12));
+
+  // CONFIDENCE — mean of the (clamped) per-fact extraction confidences.
+  const meanConfidence = facts.reduce((s, f) => s + Math.max(0, Math.min(1, f.confidence)), 0) / facts.length;
+
+  // SOURCE SPREAD — distinct source pages / a target of 4; more corroborating pages = stronger.
+  const distinctSources = new Set(facts.map((f) => f.sourceUrl).filter(Boolean)).size;
+  const spread = Math.min(1, distinctSources / 4);
+
+  // Weighted blend of the three signals → the headroom above the floor, up to the cap.
+  const quality = 0.5 * volume + 0.3 * meanConfidence + 0.2 * spread;
+  const score = FACT_GROUNDED_FLOOR + (FACT_GROUNDED_CAP - FACT_GROUNDED_FLOOR) * quality;
+  return Math.round(Math.min(FACT_GROUNDED_CAP, score) * 100) / 100;
+}
+
 /**
  * Renders the up-front-extracted fact table into a compact, source-attributed block for a
  * reasoning prompt. Highest-confidence first, capped so the prompt stays bounded.
@@ -348,7 +393,7 @@ export async function structureFromFacts<T extends { dataSource?: string }>(opts
    * sourceUrls, the result had zero citations and the scorer wrongly treated genuinely
    * fact-grounded output as ungrounded (docking it to ~0.25 despite correct content). */
   targetUrl?: string;
-}): Promise<{ status: ResearchProviderStatus; data: T; citations: Citation[] } | null> {
+}): Promise<{ status: ResearchProviderStatus; data: T; citations: Citation[]; confidence: number } | null> {
   if (!llm || opts.facts.length === 0) return null;
 
   const taskName = currentProviderName.getStore() ?? "unknown-provider";
@@ -380,8 +425,11 @@ export async function structureFromFacts<T extends { dataSource?: string }>(opts
     citations.push({ url: opts.targetUrl, title: `Verified from ${opts.targetUrl}` });
   }
 
-  const dataSource = `Grounded in ${opts.facts.length} verified facts from the site${source === "openrouter" ? "" : ` (structured via ${source}:${assignment.model})`}`;
-  return { status: "success", data: { ...result, dataSource }, citations };
+  const dataSource = `Grounded in ${opts.facts.length} verified facts from the site${source === "bedrock" ? "" : ` (structured via ${source}:${assignment.model})`}`;
+  // Score by the QUALITY of the fact base, not by citation count — a fact-first result deliberately
+  // has no web citations, so the default citation scorer stalled it at ~0.6-0.76 (the CompanyProvider
+  // bug). factGroundingScore gives the shared 0.8 floor + a quality bonus, same as the sibling engines.
+  return { status: "success", data: { ...result, dataSource }, citations, confidence: factGroundingScore(opts.facts) };
 }
 
 /**
@@ -411,14 +459,12 @@ export async function webSearchThenStructure<T extends { dataSource?: string }>(
    * own text isn't the relevant ground truth. */
   websiteExcerpt?: string;
 }): Promise<{ status: ResearchProviderStatus; data: T; citations: Citation[] }> {
-  // runWebSearch itself has no non-OpenAI equivalent (it's OpenAI's hosted server-side
-  // search, not a model capability) and stays OpenAI-only regardless of task assignment —
-  // only the structuring step below is routed per-task. Without OPENAI_API_KEY (or on any
-  // transient search failure) this degrades to an empty narrative/no citations rather than
-  // skipping structuring altogether — the routed structuring call still runs on Ollama/
-  // Gemini and reasons from general category knowledge, same as the "no live web research
-  // available" prompt fallback below already anticipated, just previously unreachable
-  // whenever OpenAI wasn't configured.
+  // runWebSearch is backed by SearXNG + crawl4ai (see infra/llmClient.ts), gated by the same
+  // `llm` (Bedrock-configured) check as the structuring step. On no key (or any transient
+  // search failure) this degrades to an empty narrative/no citations rather than skipping
+  // structuring altogether — the structuring call still runs on Bedrock and reasons from
+  // general category knowledge, same as the "no live web research available" prompt fallback
+  // below already anticipated.
   const research = llm
     ? await runWebSearch(opts.searchPrompt).catch(() => ({ narrative: "", citations: [] as Citation[], searchesUsed: 0 }))
     : { narrative: "", citations: [] as Citation[], searchesUsed: 0 };
@@ -456,8 +502,8 @@ export async function webSearchThenStructure<T extends { dataSource?: string }>(
 
   const citationLabel = research.citations.length > 0 ? research.citations.map((c) => c.title).join(" + ") : NO_CITATIONS_DATA_SOURCE;
   // Only annotate the label when a non-default provider actually served the structuring
-  // step — keeps the default (openrouter) path's dataSource string identical to the bare
+  // step — keeps the default (bedrock) path's dataSource string identical to the bare
   // citation label, so nothing that asserts on it needs to change unless a task is reassigned.
-  const dataSource = source === "openrouter" ? citationLabel : `${citationLabel} (structured via ${source}:${assignment.model})`;
+  const dataSource = source === "bedrock" ? citationLabel : `${citationLabel} (structured via ${source}:${assignment.model})`;
   return { status: "success", data: { ...verifiedResult, dataSource }, citations: research.citations };
 }

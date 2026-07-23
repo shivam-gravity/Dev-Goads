@@ -29,11 +29,14 @@ test("Meta Ads Adapter - pauseVariant and setBudget resolve without live credent
   await assert.doesNotReject(() => metaAdapter.setBudget({ externalId: "meta_ad_test", dailyBudgetCents: 5000 }));
 });
 
-test("Meta Ads Adapter - fetchInsights mock metrics ranges", async () => {
+test("Meta Ads Adapter - fetchInsights returns honest zeros when no account is connected (no fabricated data)", async () => {
   const stats = await metaAdapter.fetchInsights("meta_ad_test", new Date().toISOString().slice(0, 10));
 
-  assert.ok(stats.impressions >= 2000, "Impressions should be within mock bounds");
-  assert.ok(stats.clicks <= stats.impressions, "Clicks cannot exceed impressions");
-  assert.ok(stats.conversions <= stats.clicks, "Conversions cannot exceed clicks");
-  assert.ok(stats.spendCents > 0, "Spend must be greater than zero");
+  // With no credentials the adapter must NOT invent metrics — it returns real zeros so the UI
+  // shows a "no data yet" state instead of Math.random() performance presented as real.
+  assert.strictEqual(stats.impressions, 0);
+  assert.strictEqual(stats.reach, 0);
+  assert.strictEqual(stats.clicks, 0);
+  assert.strictEqual(stats.conversions, 0);
+  assert.strictEqual(stats.spendCents, 0);
 });

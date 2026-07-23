@@ -121,14 +121,11 @@ export async function handleTikTokOAuthCallback(authCode: string, state: string)
   return { workspaceId };
 }
 
-// Mock list returned when there's no real TikTok OAuth connection — same "(mock)" naming
-// convention as mockConnectTikTok above, so the campaign builder always has something to
-// show in local/demo mode.
-const MOCK_ADVERTISERS = [{ id: "7000000000000000001", name: "Polluxa TikTok Ads (mock)" }];
-
+// No mock advertiser list: without a real TikTok OAuth connection this is empty, so the connect
+// UI prompts a real connection rather than offering a fabricated "(mock)" advertiser to select.
 export async function listAdvertisers(workspaceId: string): Promise<{ id: string; name: string }[]> {
   const credentials = await getTikTokCredentials(workspaceId);
-  if (!credentials) return MOCK_ADVERTISERS;
+  if (!credentials) return [];
   const params = new URLSearchParams({ app_id: TIKTOK_APP_ID ?? "", secret: TIKTOK_APP_SECRET ?? "" });
   const res = await fetch(`${TIKTOK_BASE}/oauth2/advertiser/get/?${params.toString()}`, {
     headers: { "Access-Token": credentials.accessToken },

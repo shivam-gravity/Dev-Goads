@@ -8,7 +8,34 @@ delete process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
 delete process.env.GOOGLE_ADS_CUSTOMER_ID;
 delete process.env.GOOGLE_ADS_ACCESS_TOKEN;
 
-const { googleAdapter } = await import("../modules/adapters/googleAdapter.js");
+const { googleAdapter, buildResponsiveSearchAdAssets } = await import("../modules/adapters/googleAdapter.js");
+
+test("Google RSA assets - maps a full creative pool (5 headlines / 4 descriptions) to per-asset {text}, truncated ≤30/≤90", () => {
+  const assets = buildResponsiveSearchAdAssets({
+    headline: "H1",
+    body: "B1",
+    callToAction: "Buy Now",
+    headlines: ["A headline that clearly exceeds thirty characters in length", "H2", "H3", "H4", "H5"],
+    descriptions: [
+      "A description written to comfortably exceed Google's ninety-character per-asset RSA description limit for testing.",
+      "D2",
+      "D3",
+      "D4",
+    ],
+  });
+
+  assert.strictEqual(assets.headlines.length, 5, "all 5 distinct headlines are published");
+  assert.strictEqual(assets.descriptions.length, 4, "all 4 distinct descriptions are published");
+  for (const h of assets.headlines) assert.ok(h.text.length <= 30, `headline "${h.text}" must be ≤30`);
+  for (const d of assets.descriptions) assert.ok(d.text.length <= 90, `description "${d.text}" must be ≤90`);
+});
+
+test("Google RSA assets - synthesizes up to Google's 3-headline / 2-description minimum for a thin single-pair creative", () => {
+  const assets = buildResponsiveSearchAdAssets({ headline: "Only headline", body: "Only body.", callToAction: "Learn More" });
+  assert.ok(assets.headlines.length >= 3, "must reach Google's 3-headline minimum or the API rejects the ad");
+  assert.ok(assets.descriptions.length >= 2, "must reach Google's 2-description minimum");
+  assert.strictEqual(new Set(assets.headlines.map((h) => h.text)).size, assets.headlines.length, "synthesized headlines must be distinct");
+});
 
 test("Google Ads Adapter - launchVariant fallback placement validation", async () => {
   const result = await googleAdapter.launchVariant({
@@ -23,13 +50,14 @@ test("Google Ads Adapter - launchVariant fallback placement validation", async (
   assert.ok(result.externalId.startsWith("gads_ad_"), "Ad ID should follow google prefix pattern");
 });
 
-test("Google Ads Adapter - fetchInsights mock metrics ranges", async () => {
+test("Google Ads Adapter - fetchInsights returns honest zeros when no account is connected (no fabricated data)", async () => {
   const stats = await googleAdapter.fetchInsights("gads_ad_test", new Date().toISOString().slice(0, 10));
 
-  assert.ok(stats.impressions >= 1500, "Impressions should be within mock bounds");
-  assert.ok(stats.clicks <= stats.impressions, "Clicks cannot exceed impressions");
-  assert.ok(stats.conversions <= stats.clicks, "Conversions cannot exceed clicks");
-  assert.ok(stats.spendCents > 0, "Spend must be greater than zero");
+  assert.strictEqual(stats.impressions, 0);
+  assert.strictEqual(stats.reach, 0);
+  assert.strictEqual(stats.clicks, 0);
+  assert.strictEqual(stats.conversions, 0);
+  assert.strictEqual(stats.spendCents, 0);
 });
 
 // ── createAdSetContainer ad-group-criteria emission (negative keywords) ──

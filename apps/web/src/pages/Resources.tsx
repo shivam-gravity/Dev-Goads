@@ -23,7 +23,7 @@ export default function Resources() {
       <SiteNav />
       <section className="hero hero-compact">
         <span className="eyebrow">Resources</span>
-        <h1>How Polluxa actually works</h1>
+        <h1>How CRM Ads actually works</h1>
         <p className="lead">
           This project doesn't have real customers yet, so instead of fabricated case studies, here are honest
           walkthroughs of what the built system does, plus the{" "}

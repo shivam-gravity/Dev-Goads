@@ -1,0 +1,8 @@
+# Build output
+dist/
+
+# Playwright E2E artifacts (generated per run — never commit)
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

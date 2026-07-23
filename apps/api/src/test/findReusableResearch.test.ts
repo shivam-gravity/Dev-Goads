@@ -172,7 +172,7 @@ test("findReusableResearch - a new higher-confidence run supersedes a previously
   }
 });
 
-// ── Quality-gate predicate (isReusableContext) — pure logic, no DB, no Groq ──
+// ── Quality-gate predicate (isReusableContext) — pure logic, no DB, no LLM ──
 
 test("isReusableContext - rejects a null company identity anchor even at high confidence", () => {
   // The hard invariant: no company identity → reject regardless of how high overallConfidence is

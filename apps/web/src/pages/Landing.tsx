@@ -4,7 +4,7 @@ export default function Landing() {
   return (
     <div className="min-h-screen bg-[var(--bg-primary)]">
       <nav className="flex items-center justify-between px-8 py-4 border-b border-[var(--border-primary)]">
-        <div className="text-xl font-bold text-[var(--text-primary)]">Polluxa</div>
+        <div className="text-xl font-bold text-[var(--text-primary)]">CRM Ads</div>
         <div className="flex items-center gap-4">
           <Link to="/features" className="text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]">Features</Link>
           <Link to="/pricing" className="text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]">Pricing</Link>

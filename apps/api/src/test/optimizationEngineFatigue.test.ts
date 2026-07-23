@@ -65,6 +65,7 @@ async function seedHighFrequencyMetrics(campaignId: string, variantId: string): 
     clicks: 40,
     conversions: 1,
     spendCents: 4000,
+    revenueCents: 5000,
   });
 }
 
@@ -115,6 +116,7 @@ test("runOptimizationPass - a healthy (low-frequency, stable) variant never trig
     clicks: 20,
     conversions: 2,
     spendCents: 3000,
+    revenueCents: 9000,
   });
 
   const decisions = await runOptimizationPass(campaignId);

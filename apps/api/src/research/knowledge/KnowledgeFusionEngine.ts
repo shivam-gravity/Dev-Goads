@@ -98,7 +98,7 @@ function verticalTokens(text: string): Set<string> {
 // Deliberately near-zero: a legitimate market summary about the same business almost always echoes
 // SOME of its product/category nouns, so only a pathological ~disjoint result trips this. A false
 // positive here would wrongly flag good market data, so the bar errs hard toward under-flagging —
-// the deferred Groq semantic layer is what would catch same-vertical-different-words cases this misses.
+// a deferred LLM semantic layer is what would catch same-vertical-different-words cases this misses.
 const VERTICAL_OVERLAP_MISMATCH_THRESHOLD = 0.05;
 // Both token sets must clear this before the ratio is even computed — a sparse/degraded website
 // (crawl outage → empty title/excerpt) or a stub market must never trigger a mismatch. No

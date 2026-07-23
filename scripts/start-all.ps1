@@ -7,10 +7,13 @@
   the BullMQ workers are SEPARATE processes the gateway does not start. "Start frontend
   and backend" is therefore not enough - the campaign-generate flow hangs at "pending"
   forever unless the campaign-generation worker is also running. This script starts every
-  piece on its fixed port, each in its own titled window so logs are visible and killable.
+  piece in ONE window: their logs are streamed together via `concurrently`, each line
+  prefixed and color-coded by service name so a dozen processes don't mean a dozen windows.
 
   It first frees the fixed ports (killing any stale/orphaned dev server still holding them),
   which is exactly the situation that used to make Vite silently drift to 5174/5175.
+  Ctrl+C in the aggregated window stops the whole stack (concurrently -k); `npm run stop:all`
+  still works too.
 
 .PARAMETER AllWorkers
   Start every background worker (creative, research, metrics, lead, crm-webhook,
@@ -27,11 +30,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$api  = Join-Path $root "apps\api"
 
 # Fixed ports every process binds. Keep in sync with vite.config.ts (5173, strictPort)
-# and the gateway/service defaults (AUTH_SERVICE_URL=4001, CAMPAIGN=4002, SCRAPER=4003).
-$ports = @(4000, 4001, 4002, 4003, 5173)
+# and the gateway/service defaults (api gateway 4000, SCRAPER_SERVICE_URL=4003).
+$ports = @(4000, 4003, 5173)
 
 Write-Host "== Freeing fixed ports (killing stale dev servers) ==" -ForegroundColor Cyan
 foreach ($p in $ports) {
@@ -47,18 +49,9 @@ foreach ($p in $ports) {
   }
 }
 
-# Launch one service in its own titled PowerShell window (-NoExit keeps it open so logs
-# stay visible and Ctrl+C / closing the window stops just that service).
-function Start-Svc {
-  param([string]$Title, [string]$WorkDir, [string]$Command)
-  $inner = "`$host.UI.RawUI.WindowTitle = '$Title'; Set-Location '$WorkDir'; $Command"
-  Start-Process -FilePath "powershell.exe" `
-    -ArgumentList "-NoExit", "-NoProfile", "-Command", $inner `
-    -WindowStyle Normal | Out-Null
-  Write-Host "  started: $Title" -ForegroundColor Green
-}
-
 # --- Redis (6379): start only if not already answering PING ---
+# Redis is the one piece that can't share the aggregated window (it's a native exe, not an
+# npm script), so it still gets its own minimized window when we have to start it.
 Write-Host "== Redis (6379) ==" -ForegroundColor Cyan
 $redisCli    = (Get-Command redis-cli -ErrorAction SilentlyContinue).Source
 $redisServer = (Get-Command redis-server -ErrorAction SilentlyContinue).Source
@@ -74,35 +67,68 @@ if ($redisCli) {
 if ($redisUp) {
   Write-Host "  already up (PONG)" -ForegroundColor Green
 } elseif ($redisServer) {
-  Start-Svc -Title "redis" -WorkDir $root -Command "& '$redisServer' --port 6379"
+  $inner = "`$host.UI.RawUI.WindowTitle = 'redis'; & '$redisServer' --port 6379"
+  Start-Process -FilePath "powershell.exe" `
+    -ArgumentList "-NoExit", "-NoProfile", "-Command", $inner `
+    -WindowStyle Minimized | Out-Null
+  Write-Host "  started redis (minimized window)" -ForegroundColor Green
 } else {
   Write-Host "  redis-server not found - install it or start Redis manually (queues won't work without it)" -ForegroundColor Red
 }
 
-# --- Core services + frontend ---
-Write-Host "== Services ==" -ForegroundColor Cyan
-Start-Svc -Title "api-gateway (4000)"      -WorkDir $root -Command "npm run dev:api"
-Start-Svc -Title "auth-service (4001)"     -WorkDir $root -Command "npm run dev:auth-service"
-Start-Svc -Title "campaign-service (4002)" -WorkDir $root -Command "npm run dev:campaign-service"
-Start-Svc -Title "scraper-service (4003)"  -WorkDir $root -Command "npm run dev:scraper-service"
-Start-Svc -Title "web (5173)"              -WorkDir $root -Command "npm run dev:web"
+# --- Everything else in ONE aggregated window via `concurrently` ---
+# Each entry is a "name:command" pair; -n sets the prefixes, -c their colors, and -k makes
+# Ctrl+C tear the whole stack down together. Workers live in the apps/api package.json, so
+# they run via the npm workspace flag (`-w apps/api`) - relative and space-free, unlike an
+# absolute --prefix path which breaks on the space in "New folder" once cmd re-parses it.
+Write-Host "== Starting stack (aggregated logs) ==" -ForegroundColor Cyan
 
-# --- Workers (separate processes; gateway does NOT start these) ---
-Write-Host "== Workers ==" -ForegroundColor Cyan
-Start-Svc -Title "worker: campaign-generation" -WorkDir $api -Command "npm run dev:campaign-generation-worker"
+$names = @("api", "scraper", "web", "w:campaign", "w:vector")
+$cmds  = @(
+  "npm run dev:api",
+  "npm run dev:scraper-service",
+  "npm run dev:web",
+  "npm run dev:campaign-generation-worker -w apps/api",
+  # Part of the generate flow: the campaign pipeline enqueues vector ad-image jobs at its tail, so this
+  # worker must run for those images to be generated and attached (mirrors campaign-generation above).
+  "npm run dev:vector-ad-worker -w apps/api"
+)
+$colors = @("cyan", "magenta", "green", "yellow", "blue")
+
 if ($AllWorkers) {
-  Start-Svc -Title "worker: creative"              -WorkDir $api -Command "npm run dev:worker"
-  Start-Svc -Title "worker: research-orchestrator" -WorkDir $api -Command "npm run dev:research-orchestrator-worker"
-  Start-Svc -Title "worker: research-session"      -WorkDir $api -Command "npm run dev:research-worker"
-  Start-Svc -Title "worker: metrics"               -WorkDir $api -Command "npm run dev:metrics-worker"
-  Start-Svc -Title "worker: lead-ingestion"        -WorkDir $api -Command "npm run dev:lead-worker"
-  Start-Svc -Title "worker: crm-webhook"           -WorkDir $api -Command "npm run dev:crm-webhook-worker"
-  Start-Svc -Title "worker: competitor-ad-refresh" -WorkDir $api -Command "npm run dev:competitor-ad-refresh-worker"
+  $names  += @("w:creative", "w:research-orch", "w:research", "w:metrics", "w:lead", "w:crm-webhook", "w:competitor")
+  $cmds   += @(
+    "npm run dev:worker -w apps/api",
+    "npm run dev:research-orchestrator-worker -w apps/api",
+    "npm run dev:research-worker -w apps/api",
+    "npm run dev:metrics-worker -w apps/api",
+    "npm run dev:lead-worker -w apps/api",
+    "npm run dev:crm-webhook-worker -w apps/api",
+    "npm run dev:competitor-ad-refresh-worker -w apps/api"
+  )
+  $colors += @("gray", "red", "redBright", "greenBright", "yellowBright", "blueBright", "magentaBright")
 }
 
 Write-Host ""
 Write-Host "Stack starting. Frontend: http://localhost:5173  |  API: http://localhost:4000" -ForegroundColor Cyan
 if (-not $AllWorkers) {
-  Write-Host "(only the campaign-generation worker started - use '-AllWorkers' for the rest)" -ForegroundColor DarkGray
+  Write-Host "(only the campaign-generation + vector-ad workers started - use '-AllWorkers' for the rest)" -ForegroundColor DarkGray
 }
-Write-Host "Give services ~5-10s to bind. Stop everything with: npm run stop:all" -ForegroundColor DarkGray
+Write-Host "Logs are aggregated below; a crashed service auto-restarts (up to 5x) on its own." -ForegroundColor DarkGray
+Write-Host "Ctrl+C here stops the whole stack (or: npm run stop:all)." -ForegroundColor DarkGray
+Write-Host ""
+
+# Run concurrently in THIS window (foreground) so all logs stream here.
+# NOTE: deliberately NO -k (kill-others). A dev stack must be crash-tolerant: if one service
+# dies (e.g. the gateway hiccups), -k would SIGTERM every other process and take the whole
+# stack down. Instead we auto-restart each command a few times so a transient crash self-heals
+# without dragging its neighbours down. Ctrl+C still stops everything (SIGINT hits the group).
+$concurrently = Join-Path $root "node_modules\.bin\concurrently.cmd"
+$cliArgs = @(
+  "--restart-tries", "5",
+  "--restart-after", "1000",
+  "-n", ($names -join ","),
+  "-c", ($colors -join ",")
+) + $cmds
+Set-Location $root
+& $concurrently @cliArgs

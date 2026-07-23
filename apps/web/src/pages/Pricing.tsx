@@ -11,7 +11,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "What counts as \"managed ad spend\"?",
-    a: "Spend recorded on campaigns Polluxa has launched and is actively optimizing, pulled directly from the connected Google Ads and Meta accounts.",
+    a: "Spend recorded on campaigns CRM Ads has launched and is actively optimizing, pulled directly from the connected Google Ads and Meta accounts.",
   },
   {
     q: "Can I cancel anytime?",
@@ -26,7 +26,7 @@ export default function Pricing() {
       <section className="hero hero-compact">
         <span className="eyebrow">Pricing</span>
         <h1>One plan. No contracts.</h1>
-        <p className="lead">A flat base fee plus a percentage of the ad spend Polluxa actually manages for you.</p>
+        <p className="lead">A flat base fee plus a percentage of the ad spend CRM Ads actually manages for you.</p>
       </section>
 
       <section className="section">

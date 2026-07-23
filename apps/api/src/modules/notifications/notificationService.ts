@@ -57,20 +57,3 @@ export async function unreadCount(workspaceId: string): Promise<number> {
   const rows = await listNotifications(workspaceId);
   return rows.filter((n) => !n.read).length;
 }
-
-// Seed demo notifications for a workspace
-export async function seedDemoNotifications(workspaceId: string): Promise<void> {
-  const existing = await listNotifications(workspaceId);
-  if (existing.length > 0) return;
-
-  const demos = [
-    { type: "ai_recommendation" as const, title: "Budget reallocation opportunity", message: "Your Google campaign has 3× better ROAS than Meta. Consider shifting 20% budget.", severity: "info" as const, actionUrl: "/analytics" },
-    { type: "campaign_alert" as const, title: "CTR dropped 18%", message: "Campaign 'Summer Sale' saw a significant CTR drop in the last 24h. Review your creative.", severity: "warning" as const, actionUrl: "/campaigns" },
-    { type: "ai_recommendation" as const, title: "New audience segment detected", message: "AI identified a high-intent audience segment: 'Tech professionals 28-35' with 2.4× avg conversion rate.", severity: "success" as const, actionUrl: "/audiences" },
-    { type: "billing" as const, title: "Usage at 85%", message: "You've used 85% of your monthly AI generations. Upgrade to Pro for unlimited.", severity: "warning" as const, actionUrl: "/billing" },
-  ];
-
-  for (const d of demos) {
-    await createNotification(workspaceId, d);
-  }
-}

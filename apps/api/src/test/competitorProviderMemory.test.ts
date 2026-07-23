@@ -2,17 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert";
 
 delete process.env.OPENAI_API_KEY;
-delete process.env.GROQ_API_KEY;
-delete process.env.OPENROUTER_API_KEY;
-delete process.env.GEMINI_API_KEY;
-delete process.env.MISTRAL_API_KEY;
+delete process.env.AWS_BEARER_TOKEN_BEDROCK;
 
-// CompetitorProvider's structuring step is assigned to Ollama by default
-// (llmTaskConfig.ts), which has no "configured or not" concept the way a hosted API with a
-// key does — deleting keys alone doesn't stop a real Ollama call. Blocking `global.fetch`
-// at the module level, before the dynamic import below, makes "no live model call can
-// succeed" deterministic. The import itself must stay dynamic (cache-busted) — a static
-// import would be hoisted ahead of both the deletes and the fetch override.
+// Deleting the Bedrock key can be load-order-fragile (an earlier test file may have already
+// frozen llmClient.ts's `llm` gate). Blocking `global.fetch` at the module level, before the
+// dynamic import below, makes "no live model call can succeed" deterministic. The import itself
+// must stay dynamic (cache-busted) — a static import would be hoisted ahead of both the deletes
+// and the fetch override.
 let currentFetchImpl: typeof fetch = (async () => {
   throw new Error("network unavailable (simulated)");
 }) as typeof fetch;

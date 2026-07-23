@@ -38,10 +38,10 @@ apps/api             Gateway + core domain logic (Express + Prisma/Postgres):
   workers/             Background jobs (BullMQ/Redis): research sessions,
                        lead ingestion, CRM webhooks, metrics ingestion,
                        creative generation
-apps/auth-service     Standalone auth microservice
-apps/campaign-service Standalone campaign microservice
 apps/scraper-service  Scraping/pipeline microservice (Node) that in turn
                        calls a Python sidecar (see below) for AI scraping
+                       (the only extracted service; auth + campaigns are
+                       handled inline in apps/api)
 ```
 
 ### Python scraping sidecar (`apps/scraper-service/python`)
@@ -66,8 +66,6 @@ cp apps/api/.env.example apps/api/.env   # fill in keys you have; most are optio
 npm run db:migrate --workspace apps/api  # requires DATABASE_URL (Postgres) + Redis running
 npm run dev:api               # http://localhost:4000
 npm run dev:web               # http://localhost:5173 (or next free port)
-npm run dev:auth-service      # http://localhost:4001
-npm run dev:campaign-service  # http://localhost:4002
 npm run dev:scraper-service   # http://localhost:4003
 ```
 

@@ -1,7 +1,7 @@
 import { llm, runWebSearch } from "../../infra/llmClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { GeneralSearchData, ProviderResult, ResearchProviderInput } from "../types/index.js";
-import { citationsToEvidence, hostnameOf, runProviderStep } from "./support.js";
+import { citationsToEvidence, factGroundingScore, hostnameOf, runProviderStep } from "./support.js";
 import { TtlCache, normalizeCacheKey } from "../cache/TtlCache.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000;
@@ -59,7 +59,10 @@ export class SearchProvider implements ResearchProvider<GeneralSearchData> {
           data: { narrative, searchesUsed: result.searchesUsed, dataSource: `Grounded in ${input.verifiedFacts?.length ?? 0} verified facts from the site` },
           citations: factCitation,
           evidence: citationsToEvidence(factCitation),
-          confidence: 0.7,
+          // Score by the fact base backing this overview (shared floor + quality bonus), consistent
+          // with the other fact-first providers — replaces the old flat 0.7 that ignored how many
+          // facts actually grounded it. A pure excerpt-only fallback (no facts) still earns the floor.
+          confidence: factGroundingScore(input.verifiedFacts ?? []),
         };
       }
 

@@ -4,7 +4,7 @@ export default function Privacy() {
   return (
     <div className="legal-page">
       <Link to="/" className="brand">
-        Polluxa
+        CRM Ads
       </Link>
       <h1>Privacy Policy</h1>
       <p className="legal-updated">

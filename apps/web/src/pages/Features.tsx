@@ -27,7 +27,7 @@ const FEATURES = [
   },
   {
     title: "Usage-based billing",
-    body: "A flat monthly fee plus a percentage of ad spend Polluxa manages, invoiced automatically from real recorded spend.",
+    body: "A flat monthly fee plus a percentage of ad spend CRM Ads manages, invoiced automatically from real recorded spend.",
   },
 ];
 
@@ -37,7 +37,7 @@ export default function Features() {
       <SiteNav />
       <section className="hero hero-compact">
         <span className="eyebrow">Features</span>
-        <h1>Everything Polluxa automates, end to end</h1>
+        <h1>Everything CRM Ads automates, end to end</h1>
         <p className="lead">
           From the first strategy draft to the invoice at the end of the month — here's what's actually built and
           running under the hood.

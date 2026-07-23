@@ -17,6 +17,7 @@ function metric(overrides: Partial<PerformanceMetric>): PerformanceMetric {
     clicks: 20,
     conversions: 2,
     spendCents: 5000,
+    revenueCents: 10000,
     ...overrides,
   };
 }

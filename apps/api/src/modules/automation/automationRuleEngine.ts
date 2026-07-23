@@ -1,7 +1,6 @@
 import { listAutomationRules, type AutomationRule } from "./automationRuleService.js";
 import { listActiveCampaigns, getCampaign, pauseVariant, reallocateBudget } from "../orchestrator/campaignOrchestrator.js";
 import { getRawMetrics } from "../pipeline/performancePipeline.js";
-import { ESTIMATED_REVENUE_CENTS_PER_CONVERSION } from "../pipeline/performancePipeline.js";
 import { logger } from "../logger/logger.js";
 import { createNotification } from "../notifications/notificationService.js";
 import { emitAutomationTrigger } from "../../infra/realtimeBridge.js";
@@ -112,6 +111,7 @@ interface AggregatedMetrics {
   clicks: number;
   conversions: number;
   spendCents: number;
+  revenueCents: number;
   reach: number;
 }
 
@@ -121,6 +121,7 @@ function aggregateMetrics(metrics: PerformanceMetric[]): AggregatedMetrics {
     clicks: metrics.reduce((s, m) => s + m.clicks, 0),
     conversions: metrics.reduce((s, m) => s + m.conversions, 0),
     spendCents: metrics.reduce((s, m) => s + m.spendCents, 0),
+    revenueCents: metrics.reduce((s, m) => s + (m.revenueCents ?? 0), 0),
     reach: metrics.reduce((s, m) => s + m.reach, 0),
   };
 }
@@ -148,8 +149,8 @@ export function computeMetricValue(metric: string, aggregated: AggregatedMetrics
 
     case "roas":
       if (aggregated.spendCents === 0) return null;
-      // Revenue estimated as conversions * average order value (same constant used in performancePipeline)
-      return (aggregated.conversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / aggregated.spendCents;
+      // True ROAS: real network-reported revenue / spend (0 until real conversion value exists).
+      return aggregated.revenueCents / aggregated.spendCents;
 
     case "ctr":
       if (aggregated.impressions === 0) return null;

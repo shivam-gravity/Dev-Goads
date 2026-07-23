@@ -3,11 +3,25 @@ import { getBusiness } from "../business/businessService.js";
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
 import { getAnalyticsSummary } from "../analytics/analyticsService.js";
 import { normalizePerformance } from "../pipeline/performancePipeline.js";
-import { ESTIMATED_REVENUE_CENTS_PER_CONVERSION } from "../pipeline/performancePipeline.js";
 
 export interface CopilotChatMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+/**
+ * Strips stray non-Latin script characters that the free-tier models occasionally inject mid-word
+ * (observed: "Total하원자 Spend" — Hangul spliced into an English label). We only run copilot in
+ * English, so any CJK/Hangul/Hiragana/Katakana/Cyrillic/Arabic/Devanagari run is model noise, not
+ * real content — remove it, then collapse any doubled space it leaves behind. Latin text,
+ * punctuation, numbers, currency symbols, and emoji are untouched.
+ */
+function sanitizeReply(text: string): string {
+  return text
+    .replace(/[Ѐ-ӿ؀-ۿऀ-ॿ぀-ヿ㐀-䶿一-鿿가-힯]+/g, "")
+    .replace(/ {2,}/g, " ")
+    .replace(/ ([.,;:%×)])/g, "$1")
+    .trim();
 }
 
 async function campaignSnapshots(campaigns: Awaited<ReturnType<typeof listCampaignsForBusiness>>) {
@@ -17,9 +31,11 @@ async function campaignSnapshots(campaigns: Awaited<ReturnType<typeof listCampai
       const impressions = perf.reduce((sum, p) => sum + p.impressions, 0);
       const clicks = perf.reduce((sum, p) => sum + p.clicks, 0);
       const conversions = perf.reduce((sum, p) => sum + p.conversions, 0);
+      const revenueCents = perf.reduce((sum, p) => sum + p.revenueCents, 0);
       const spendCents = c.dailyBudgetCents; // daily rate; total spend isn't tracked per-campaign here
       const ctr = impressions > 0 ? clicks / impressions : null;
-      const roas = conversions > 0 && spendCents > 0 ? (conversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / spendCents : null;
+      // True ROAS: real reported revenue / spend (spend here is the daily budget rate — see above).
+      const roas = revenueCents > 0 && spendCents > 0 ? revenueCents / spendCents : null;
       return {
         name: c.name,
         status: c.status,
@@ -49,7 +65,7 @@ async function buildSystemPrompt(businessId: string): Promise<string> {
     campaigns: perCampaign,
   };
 
-  return `You are the CRM Ads Copilot, an AI assistant embedded across the Polluxa dashboard that helps the user understand and improve their ad account. You can: analyze spend/ROAS/CTR, flag underperforming campaigns, draft ad copy and headlines, and suggest budget or pause/scale changes.
+  return `You are the CRM Ads Copilot, an AI assistant embedded across the CRM Ads dashboard that helps the user understand and improve their ad account. You can: analyze spend/ROAS/CTR, flag underperforming campaigns, draft ad copy and headlines, and suggest budget or pause/scale changes.
 
 Ground every claim in the real account data below — never invent numbers. If a metric isn't in the data (e.g. no campaigns yet), say so plainly instead of guessing.
 
@@ -79,5 +95,5 @@ export async function chatWithCopilot(businessId: string, messages: CopilotChatM
     system: await buildSystemPrompt(businessId),
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
   });
-  return text ?? fallbackReply(business, campaigns.length);
+  return text ? sanitizeReply(text) : fallbackReply(business, campaigns.length);
 }

@@ -8,8 +8,8 @@ import { prisma } from "../db/prisma.js";
  * destructive: the `context` blob and provider_executions are preserved for forensics; only
  * eligibility changes. Idempotent: a job already "invalidated" is a reported no-op.
  *
- * Motivating case: research job 62d2fa37 (07-16 05:54 polluxa.com) was produced during a Groq/
- * Ollama provider-timeout storm — company provider timed out (context.company=null), the market
+ * Motivating case: research job 62d2fa37 (07-16 05:54 polluxa.com) was produced during a
+ * provider-timeout storm — company provider timed out (context.company=null), the market
  * provider confabulated a "medical device" industry (overallConfidence 0.34) — and was then
  * re-served by two later cache hits (07-17 10:03 and 10:59). This is the targeted stopgap; the
  * quality-gate in findReusableResearch (isReusableContext) is what prevents recurrence.

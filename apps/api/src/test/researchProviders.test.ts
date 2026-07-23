@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 
 delete process.env.OPENAI_API_KEY;
+delete process.env.AWS_BEARER_TOKEN_BEDROCK;
 // Firecrawl's /search now backs runWebSearch — deleted too, or SearchProvider's "zero
 // network calls" test below would attempt a real Firecrawl call instead of degrading
 // immediately (firecrawlClient.ts reads this key fresh on every call, not frozen).

@@ -12,18 +12,12 @@ import type { ResearchProviderInput } from "../research/types/index.js";
 delete process.env.FIRECRAWL_API_KEY;
 delete process.env.META_AD_LIBRARY_ACCESS_TOKEN;
 delete process.env.OPENAI_API_KEY;
-// Real values leak in here from another test file's dotenv/config load earlier in the
-// same `npm test` process — deleting only OPENAI_API_KEY (stale, pre-Groq/Mistral-
-// migration) left GROQ_API_KEY/MISTRAL_API_KEY/GEMINI_API_KEY intact, which used to be
-// harmless (llmClient.ts only ever called Groq directly, and this file's narrow fetch
-// mock made that call fail same as "unconfigured"). Now that llmClient.ts routes through
-// llmRouter's fallback chain, a real key here lets it actually reach Mistral/Gemini —
-// Gemini's SDK in particular may not honor this file's global.fetch mock at all, making a
-// genuine live call instead of hitting the mock's "unexpected fetch" throw.
-delete process.env.GROQ_API_KEY;
-delete process.env.OPENROUTER_API_KEY;
-delete process.env.MISTRAL_API_KEY;
-delete process.env.GEMINI_API_KEY;
+// The real AWS_BEARER_TOKEN_BEDROCK leaks in here from another test file's dotenv/config load
+// earlier in the same `npm test` process. llmClient.ts's `llm` gate reads it once at module
+// load, so a leaked real key would let the crawler-provider structuring step reach Bedrock for
+// real instead of hitting this file's narrow global.fetch mock — delete it so the call fails
+// the same as "unconfigured".
+delete process.env.AWS_BEARER_TOKEN_BEDROCK;
 // SearchRankingProvider now goes through searchRouter (tavily -> serper -> searxng)
 // instead of firecrawlSearch directly — all three need clearing for the same reason as
 // the LLM keys above, or a real key leaked in from an earlier file lets the chain actually

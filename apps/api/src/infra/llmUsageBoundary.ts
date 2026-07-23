@@ -19,22 +19,13 @@ const IS_TEST_RUN =
   process.execArgv.includes("--test");
 
 /**
- * A single hard ceiling on combined LLM token usage across ALL FOUR providers (OpenAI,
- * Ollama, Gemini, Claude) together — distinct from openaiBudget.ts (which caps only
- * OpenAI's $ cost) and tokenMeter.ts (which is opt-in, in-memory-only, single-run
- * profiling). This is always-on and persistent: a real backstop against runaway usage
- * (a bug causing a retry storm, an unexpectedly large batch) regardless of which provider
- * a task happens to be routed to, since Ollama and Gemini's free tier have no $ signal of
- * their own to cap against the way OpenAI does.
+ * A single hard ceiling on LLM token usage against the one backend (Claude via Bedrock) —
+ * distinct from tokenMeter.ts (which is opt-in, in-memory-only, single-run profiling). This is
+ * always-on and persistent: a real backstop against runaway usage (a bug causing a retry storm,
+ * an unexpectedly large batch).
  *
- * Enforcement is deliberately a hard stop with NO fallback: llmRouter.ts checks this
- * BEFORE dispatching to any provider (including before its own OpenAI-direct path and
- * before the fallback-to-OpenAI safety net), so once tripped, nothing attempts a call —
- * unlike openaiBudget.ts's cap, which degrades one provider into "not configured" and lets
- * the existing fallback chain keep going. That distinction is intentional: a per-provider
- * cap protects one provider's own budget from over-attribution, but a GLOBAL cap that still
- * let calls fall through to whichever provider is left would defeat the point of a combined
- * ceiling — the whole reason to have both is that they answer different questions.
+ * Enforcement is deliberately a hard stop: llmRouter.ts checks this BEFORE dispatching the
+ * Bedrock call, so once tripped, nothing attempts a call for the rest of the UTC month.
  */
 
 const DEFAULT_LEDGER_PATH = IS_TEST_RUN
@@ -42,10 +33,8 @@ const DEFAULT_LEDGER_PATH = IS_TEST_RUN
   : path.resolve(__dirname, "../../data", "llm-usage.json");
 const LEDGER_PATH = process.env.LLM_USAGE_LEDGER_PATH ?? DEFAULT_LEDGER_PATH;
 
-// Deliberately generous relative to any single provider's own cap — this exists to catch
-// runaway usage (a retry storm, an unexpectedly large batch), not to be the primary lever
-// for day-to-day cost control (that's openaiBudget.ts's job for OpenAI, and routing most
-// tasks to free Ollama/Gemini for everything else).
+// Deliberately generous — this exists to catch runaway usage (a retry storm, an unexpectedly
+// large batch), not to be the primary lever for day-to-day cost control.
 const DEFAULT_MONTHLY_TOKEN_BUDGET = IS_TEST_RUN ? Number.MAX_SAFE_INTEGER : 5_000_000;
 const MONTHLY_TOKEN_BUDGET = Number(process.env.LLM_MONTHLY_TOKEN_BUDGET ?? DEFAULT_MONTHLY_TOKEN_BUDGET);
 

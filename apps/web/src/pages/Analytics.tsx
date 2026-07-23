@@ -11,11 +11,12 @@ import { MetaInfinityIcon, GoogleIcon, TikTokIcon, BingIcon } from "../component
 const AUDIENCE_COLORS = ["#7033f5", "#0e9f6e", "#f59e0b", "#ef4444", "#9ca3af"];
 const PAGE_COLORS = ["#3b82f6", "#22d3ee", "#a5b4fc", "#c7d2fe"];
 
-const PLATFORM_TABS: { id: AdInsightNetwork; label: string; icon: JSX.Element }[] = [
+// Only Meta + Google are live; TikTok and Bing are shown as disabled "Coming soon" tabs.
+const PLATFORM_TABS: { id: AdInsightNetwork; label: string; icon: JSX.Element; comingSoon?: boolean }[] = [
   { id: "meta", label: "Meta", icon: <MetaInfinityIcon /> },
   { id: "google", label: "Google", icon: <GoogleIcon /> },
-  { id: "tiktok", label: "TikTok", icon: <TikTokIcon /> },
-  { id: "bing", label: "Bing", icon: <BingIcon /> },
+  { id: "tiktok", label: "TikTok", icon: <TikTokIcon />, comingSoon: true },
+  { id: "bing", label: "Bing", icon: <BingIcon />, comingSoon: true },
 ];
 
 function fmtMoney(cents: number) {
@@ -110,11 +111,14 @@ export default function Analytics({ businessId }: { businessId: string }) {
         {PLATFORM_TABS.map((tab) => (
           <button
             key={tab.id}
-            className={`platform-tab ${network === tab.id ? "active" : ""}`}
-            onClick={() => setNetwork(tab.id)}
+            className={`platform-tab ${network === tab.id ? "active" : ""} ${tab.comingSoon ? "disabled" : ""}`}
+            onClick={() => { if (!tab.comingSoon) setNetwork(tab.id); }}
+            disabled={tab.comingSoon}
+            title={tab.comingSoon ? "Coming soon" : undefined}
+            style={tab.comingSoon ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
           >
             {tab.icon}
-            {tab.label}
+            {tab.label}{tab.comingSoon ? " — Coming soon" : ""}
           </button>
         ))}
       </div>

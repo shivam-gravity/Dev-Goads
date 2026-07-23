@@ -3,8 +3,8 @@ import { logger } from "../modules/logger/logger.js";
 
 const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY;
 
-// Generous relative to the auth/campaign services' typical DB-backed request handling —
-// long enough that a legitimately slow (not hung) upstream call still succeeds.
+// Generous relative to scraper-service's typical request handling — long enough that a
+// legitimately slow (not hung) upstream call still succeeds.
 const PROXY_TIMEOUT_MS = 10_000;
 
 // Only GET/HEAD are safe to retry automatically: they're idempotent by definition, so a
@@ -23,10 +23,10 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Forwards a request to an extracted service (auth-service, campaign-service) and
- * relays its response verbatim. Routes proxied this way are handled entirely by
- * the downstream service — the gateway just forwards method/path/body and streams
- * the response back, matching the exact route path the service itself exposes.
+ * Forwards a request to an extracted service (scraper-service) and relays its response
+ * verbatim. Routes proxied this way are handled entirely by the downstream service — the
+ * gateway just forwards method/path/body and streams the response back, matching the exact
+ * route path the service itself exposes.
  *
  * Attaches INTERNAL_SERVICE_KEY so the downstream service's internalServiceAuth
  * middleware can distinguish gateway traffic from someone hitting its port directly.

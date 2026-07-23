@@ -46,8 +46,9 @@ function withTimeout(): { signal: AbortSignal; clear: () => void } {
 }
 
 /**
- * Google Imagen via the Gemini API's :predict REST endpoint — reuses GEMINI_API_KEY (the same key
- * geminiClient.ts uses). Highest-priority provider when configured. Model overridable via IMAGEN_MODEL.
+ * Google Imagen via the Gemini API's :predict REST endpoint — image generation only, gated on its
+ * own GEMINI_API_KEY (the LLM pipeline is Bedrock-only and does not use this key). Highest-priority
+ * image provider when configured. Model overridable via IMAGEN_MODEL.
  */
 export class GoogleImagenImageProvider implements ConfigurableImageProvider {
   readonly name = "google-imagen";
