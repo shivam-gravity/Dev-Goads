@@ -1,14 +1,23 @@
--- AlterTable
-ALTER TABLE "businesses" ADD COLUMN     "externalId" TEXT,
-ADD COLUMN     "source" TEXT;
+-- NOTE (branch-merge reconciliation): this migration and 20260718100000_add_auth_crm_and_refresh_tokens
+-- came from two divergent branches that were later merged. BOTH originally did `CREATE TABLE
+-- "refresh_tokens"`, with different shapes, so on a fresh database (CI) the second one failed with
+-- 42P07 "relation already exists". The canonical schema is the one in 20260718100000 + schema.prisma
+-- (refresh_tokens with family/replacedBy; no partners table; no businesses/users external* columns —
+-- those artifacts are used nowhere in the app). This migration is therefore rewritten to be fully
+-- IDEMPOTENT and to NOT create refresh_tokens (20260718100000 owns it): every statement is guarded so
+-- it's a harmless no-op both on a fresh DB and on any environment where the original already applied.
+
+-- AlterTable (external-identity columns — kept idempotent; unused by the app today but harmless)
+ALTER TABLE "businesses" ADD COLUMN IF NOT EXISTS "externalId" TEXT;
+ALTER TABLE "businesses" ADD COLUMN IF NOT EXISTS "source" TEXT;
 
 -- AlterTable
-ALTER TABLE "users" ADD COLUMN     "externalId" TEXT,
-ADD COLUMN     "externalUser" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN     "source" TEXT NOT NULL DEFAULT 'native';
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "externalId" TEXT;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "externalUser" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "source" TEXT NOT NULL DEFAULT 'native';
 
 -- CreateTable
-CREATE TABLE "partners" (
+CREATE TABLE IF NOT EXISTS "partners" (
     "id" TEXT NOT NULL,
     "workspaceId" TEXT NOT NULL,
     "businessId" TEXT,
@@ -20,39 +29,20 @@ CREATE TABLE "partners" (
     CONSTRAINT "partners_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
-CREATE TABLE "refresh_tokens" (
-    "id" TEXT NOT NULL,
-    "userId" TEXT NOT NULL,
-    "tokenHash" TEXT NOT NULL,
-    "workspaceId" TEXT,
-    "businessId" TEXT,
-    "partnerId" TEXT,
-    "expiresAt" TIMESTAMP(3) NOT NULL,
-    "revokedAt" TIMESTAMP(3),
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "refresh_tokens_pkey" PRIMARY KEY ("id")
-);
+-- refresh_tokens is intentionally NOT created here — 20260718100000_add_auth_crm_and_refresh_tokens
+-- creates the canonical (family/replacedBy) shape. Creating it here first is exactly what broke CI.
 
 -- CreateIndex
-CREATE INDEX "partners_workspaceId_idx" ON "partners"("workspaceId");
+CREATE INDEX IF NOT EXISTS "partners_workspaceId_idx" ON "partners"("workspaceId");
 
 -- CreateIndex
-CREATE INDEX "partners_businessId_idx" ON "partners"("businessId");
+CREATE INDEX IF NOT EXISTS "partners_businessId_idx" ON "partners"("businessId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "partners_source_externalId_key" ON "partners"("source", "externalId");
+CREATE UNIQUE INDEX IF NOT EXISTS "partners_source_externalId_key" ON "partners"("source", "externalId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "refresh_tokens_tokenHash_key" ON "refresh_tokens"("tokenHash");
+CREATE INDEX IF NOT EXISTS "businesses_externalId_idx" ON "businesses"("externalId");
 
 -- CreateIndex
-CREATE INDEX "refresh_tokens_userId_idx" ON "refresh_tokens"("userId");
-
--- CreateIndex
-CREATE INDEX "businesses_externalId_idx" ON "businesses"("externalId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "users_source_externalId_key" ON "users"("source", "externalId");
-
+CREATE UNIQUE INDEX IF NOT EXISTS "users_source_externalId_key" ON "users"("source", "externalId");
