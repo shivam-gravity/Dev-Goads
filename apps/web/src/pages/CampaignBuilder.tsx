@@ -77,6 +77,7 @@ export default function CampaignBuilder() {
   const [instagramAccountId, setInstagramAccountId] = useState("");
   const [pixelId, setPixelId] = useState("");
   const [customers, setCustomers] = useState<GoogleCustomer[]>([]);
+  const [googleAccountsLoaded, setGoogleAccountsLoaded] = useState(false);
   const [conversionActions, setConversionActions] = useState<GoogleConversionAction[]>([]);
   const [customerId, setCustomerId] = useState("");
   const [conversionActionId, setConversionActionId] = useState("");
@@ -178,7 +179,11 @@ export default function CampaignBuilder() {
     api.listMetaAdAccounts(wsId).then(setAdAccounts).catch(() => {});
     api.listMetaPages(wsId).then(setPages).catch(() => {});
     api.listMetaPixels(wsId).then(setPixels).catch(() => {});
-    api.listGoogleCustomers(wsId).then(setCustomers).catch(() => {});
+    // Track when the Google-customers fetch has settled so the "not connected" banner only shows
+    // once we KNOW the list is empty — not during the in-flight window (which would flash it for
+    // every connected user on load).
+    setGoogleAccountsLoaded(false);
+    api.listGoogleCustomers(wsId).then(setCustomers).catch(() => {}).finally(() => setGoogleAccountsLoaded(true));
     api.listGoogleConversionActions(wsId).then(setConversionActions).catch(() => {});
   }, [wsId]);
 
@@ -218,17 +223,31 @@ export default function CampaignBuilder() {
     tiktok: variants.filter((v) => v.network === "tiktok").length,
   };
   const selectedPage = pages.find((p) => p.id === pageId);
-  const networksInUse = new Set(variants.filter((v) => includedVariantIds.has(v.id)).map((v) => v.network));
+  const includedVariants = variants.filter((v) => includedVariantIds.has(v.id));
+  const networksInUse = new Set(includedVariants.map((v) => v.network));
   const networkReady = (n: CampaignVariant["network"]) => (n === "google" ? Boolean(customerId) : n === "tiktok" ? true : Boolean(adAccountId && pageId));
+  const networkLabel = (n: CampaignVariant["network"]) => (n === "meta" ? "Meta" : n === "google" ? "Google" : "TikTok");
+  const includedCountFor = (n: CampaignVariant["network"]) => includedVariants.filter((v) => v.network === n).length;
+
+  // A network with included ads but no config isn't a hard blocker: instead of forcing the user
+  // to hunt down and uncheck those ads on another tab, we auto-skip that network at publish time
+  // and launch only the networks that ARE configured. `publishableVariants` is what actually gets
+  // sent — the backend launches only the networks present in the variant list (campaignOrchestrator
+  // .launchCampaign), so dropping unconfigured-network ads here means Publish targets Meta-only when
+  // Google isn't set up, and vice-versa.
+  const publishableVariants = includedVariants.filter((v) => networkReady(v.network));
+  const publishableNetworks = [...networksInUse].filter((n) => networkReady(n));
+  const skippedNetworks = [...networksInUse].filter((n) => !networkReady(n));
 
   // Named so the Publish button can show exactly what's missing instead of a single
-  // disabled state with no visible explanation (previously only a hover tooltip).
+  // disabled state with no visible explanation (previously only a hover tooltip). These are HARD
+  // blockers — things no partial-publish can proceed without. Per-network config gaps are NOT here;
+  // they surface as the non-blocking `skippedNetworks` notice below.
   const publishBlockers: string[] = [];
   if (networksInUse.size === 0) publishBlockers.push("Include at least one ad using the checkboxes on the left");
+  else if (publishableVariants.length === 0) publishBlockers.push(`Configure at least one network above to publish (${skippedNetworks.map(networkLabel).join(", ")} not set up yet)`);
   if (!activeCreative.headline.trim()) publishBlockers.push("Add a headline for the active ad in Ad Copy");
   if (creativeAssets.length === 0) publishBlockers.push("Add at least one ad creative (AI-generate or upload)");
-  if (networksInUse.has("meta") && !networkReady("meta")) publishBlockers.push("Select a Meta ad account and Page above");
-  if (networksInUse.has("google") && !networkReady("google")) publishBlockers.push("Select a Google Ads Customer ID above");
   const canPublish = publishBlockers.length === 0;
 
   function updateActiveVariant(patch: Partial<AdCreative>) {
@@ -407,8 +426,12 @@ export default function CampaignBuilder() {
     setCreativeAssets((prev) => prev.filter((a) => a.id !== id));
   }
 
-  function buildPatch() {
+  // `forPublish` drops ads on networks that aren't configured yet (see publishableVariants) so a
+  // Meta-only publish doesn't drag along un-launchable Google ads. Save-draft keeps every included
+  // ad so nothing the user checked is silently lost between sessions.
+  function buildPatch(forPublish = false) {
     const included = variants.filter((v) => includedVariantIds.has(v.id));
+    const selected = forPublish ? included.filter((v) => networkReady(v.network)) : included;
     return {
       dailyBudgetCents: Math.max(1, Math.round((parseFloat(dailyBudget) || 0) * 100)),
       conversionEvent,
@@ -422,7 +445,7 @@ export default function CampaignBuilder() {
       pixelId: pixelId || undefined,
       googleCustomerId: customerId || undefined,
       googleConversionActionId: conversionActionId || undefined,
-      variants: included.length ? included : variants,
+      variants: selected.length ? selected : variants,
       creativeAssets,
     };
   }
@@ -481,7 +504,7 @@ export default function CampaignBuilder() {
     setPublishing(true);
     setActionError(null);
     try {
-      await api.updateCampaign(campaign.id, buildPatch());
+      await api.updateCampaign(campaign.id, buildPatch(true));
       const launched = await api.launchCampaign(campaign.id, wsId);
       setCampaign(launched);
       navigate(`/campaigns/${campaign.id}`);
@@ -510,11 +533,21 @@ export default function CampaignBuilder() {
         </p>
       )}
 
+      {/* Google customers came back empty AFTER the fetch settled → no Google Ads connection for this
+          workspace (common for CRM-SSO users whose Google Ads wasn't connected in the CRM). Say so
+          plainly instead of leaving the user staring at an empty "Select customer" dropdown. */}
+      {activeVariant?.network === "google" && googleAccountsLoaded && customers.length === 0 && (
+        <p className="demo-data-banner">
+          No Google Ads account is connected for this workspace, so there are no customers to select — these Google ads will be skipped at publish.
+          Connect Google Ads in Settings → Advertising Accounts (or, if you came from the CRM, connect Google Ads there and sign in again) to launch them.
+        </p>
+      )}
+
       <div className="campaign-builder-topbar">
         {activeVariant?.network === "google" ? (
           <>
-            <DropdownField label="Google Ads Customer ID" options={customers.map((c) => ({ value: c.id, label: c.name }))} selected={customerId ? [customerId] : []} onChange={([v]) => setCustomerId(v)} placeholder="Select customer" />
-            <DropdownField label="Conversion Action" options={conversionActions.map((a) => ({ value: a.id, label: a.name }))} selected={conversionActionId ? [conversionActionId] : []} onChange={([v]) => setConversionActionId(v)} placeholder="Select conversion action" />
+            <DropdownField label="Google Ads Customer ID" options={customers.map((c) => ({ value: c.id, label: c.name }))} selected={customerId ? [customerId] : []} onChange={([v]) => setCustomerId(v)} placeholder="Select customer" emptyHint="Connect a Google Ads account in Settings to load customers." />
+            <DropdownField label="Conversion Action" options={conversionActions.map((a) => ({ value: a.id, label: a.name }))} selected={conversionActionId ? [conversionActionId] : []} onChange={([v]) => setConversionActionId(v)} placeholder="Select conversion action" emptyHint="Connect a Google Ads account in Settings to load conversion actions." />
           </>
         ) : activeVariant?.network === "tiktok" ? (
           <p className="muted-text">TikTok Ads — launches through a server-configured access token, no per-workspace account selection needed here.</p>
@@ -831,6 +864,17 @@ export default function CampaignBuilder() {
           <ul>
             {publishBlockers.map((b) => <li key={b}>{b}</li>)}
           </ul>
+        </div>
+      )}
+
+      {/* Non-blocking: at least one network is publishable, but some included ads are on a network
+          that isn't set up. Tell the user those will be skipped rather than silently dropping them. */}
+      {canPublish && skippedNetworks.length > 0 && (
+        <div className="publish-notice mt-3">
+          Publishing to {publishableNetworks.map(networkLabel).join(", ")} only.{" "}
+          {skippedNetworks.map(networkLabel).join(", ")} {skippedNetworks.length === 1 ? "isn’t" : "aren’t"} connected yet, so{" "}
+          {skippedNetworks.map((n) => `${includedCountFor(n)} ${networkLabel(n)} ad${includedCountFor(n) === 1 ? "" : "s"}`).join(" and ")}{" "}
+          will be skipped. Connect {skippedNetworks.length === 1 ? "it" : "them"} above to include {skippedNetworks.length === 1 ? "it" : "them"}.
         </div>
       )}
 

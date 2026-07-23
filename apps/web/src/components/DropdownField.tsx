@@ -22,6 +22,7 @@ export function DropdownField({
   placeholder = "Select...",
   testId,
   recommendedValue,
+  emptyHint,
 }: {
   label: string;
   icon?: React.ReactNode;
@@ -36,6 +37,9 @@ export function DropdownField({
   /** When set, the option with this value shows a "Recommended" badge (closed control + menu row),
    * matching the AdsGo reference form's suggested defaults (e.g. Sales goal, Meta platform). */
   recommendedValue?: string;
+  /** One-line copy shown under "Nothing to select yet" when options is empty. Defaults to the
+   * Meta-connect hint; pass a per-field message (e.g. Google) so the prompt matches the platform. */
+  emptyHint?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -90,7 +94,7 @@ export function DropdownField({
             <div className="gen-field-option gen-field-option-empty">
               <span className="gen-field-option-text">
                 <span>Nothing to select yet</span>
-                <span className="gen-field-option-description">Connect a Meta account in Settings to load options.</span>
+                <span className="gen-field-option-description">{emptyHint ?? "Connect a Meta account in Settings to load options."}</span>
               </span>
             </div>
           )}
