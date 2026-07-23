@@ -182,7 +182,12 @@ function crawlerConfig(formats: ScrapeFormat[], extra?: Record<string, unknown>)
     // that may never come. Override via CRAWL4AI_WAIT_UNTIL if a specific site needs it.
     wait_until: process.env.CRAWL4AI_WAIT_UNTIL ?? "domcontentloaded",
     delay_before_return_html: Number(process.env.CRAWL4AI_SETTLE_DELAY_S ?? 2),
-    page_timeout: 25000, // must stay UNDER REQUEST_TIMEOUT_MS (40s) so crawl4ai returns before the HTTP request aborts
+    // 15s (was 25s): with wait_until=domcontentloaded a real page renders in ~5s, so a page still
+    // not ready at 15s is almost always bot-blocked (Cloudflare JS challenge) or dead. Failing fast
+    // frees the (concurrency-capped) crawl slot ~10s sooner for the next hit — a big deal because
+    // the research fan-out fires many crawls that queue behind this cap. Must stay UNDER
+    // REQUEST_TIMEOUT_MS (40s). Env-tunable for a site that legitimately needs longer.
+    page_timeout: Number(process.env.CRAWL4AI_PAGE_TIMEOUT_MS ?? 15000),
     ...(wantScreenshot ? { screenshot: true } : {}),
     ...(jsonFormat ? { extraction_strategy: { type: "json_css", schema: jsonFormat.schema } } : {}),
     ...extra,
