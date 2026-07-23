@@ -997,16 +997,54 @@ router.patch("/campaigns/:id", asyncHandler(async (req, res) => {
   const updated = await prisma.campaign.update({ where: { id: req.params.id }, data: { data: { ...(existing.data as object), ...req.body } } });
   res.json({ id: updated.id, ...updated.data as object });
 }));
-router.post("/campaigns/:id/launch", asyncHandler(async (req, res) => {
-  const workspaceId = req.body.workspaceId ?? "demo-workspace";
+// The mutating campaign routes below (launch/activate/pause/budget) can spend real money, so each
+// takes TWO ownership checks: requireCampaignAccess (can this user touch this campaign?) as route
+// middleware, plus this inline guard that the body-supplied workspaceId — which selects WHOSE Meta/
+// Google credentials get charged — is one the caller actually belongs to. Without the second check,
+// an authenticated user could pass another tenant's workspaceId and launch against their ad account.
+async function resolveSpendWorkspace(
+  req: AuthedRequest,
+  campaign: { workspaceId: string | null; businessId: string }
+): Promise<{ ok: true; workspaceId: string } | { ok: false; status: number; error: string }> {
+  // Default to the campaign's own workspace (set at a prior launch) or its business's workspace,
+  // rather than a hardcoded "demo-workspace" that would resolve some unrelated tenant's credentials.
+  let fallbackWorkspace = campaign.workspaceId;
+  if (!fallbackWorkspace) {
+    const business = await prisma.business.findUnique({ where: { id: campaign.businessId }, select: { workspaceId: true } });
+    fallbackWorkspace = business?.workspaceId ?? null;
+  }
+  const requested = typeof req.body?.workspaceId === "string" && req.body.workspaceId.length > 0 ? req.body.workspaceId : undefined;
+  const workspaceId = requested ?? fallbackWorkspace;
+  if (!workspaceId) {
+    return { ok: false, status: 400, error: "This campaign is not assigned to a workspace; pass an explicit workspaceId you belong to." };
+  }
+  // requireCampaignAccess already proved membership of the campaign's own workspace; only a
+  // DIFFERENT, caller-supplied workspaceId needs its own membership check here.
+  if (workspaceId !== campaign.workspaceId && req.userId && !(await getMembership(workspaceId, req.userId))) {
+    return { ok: false, status: 403, error: "You do not have access to the requested workspace" };
+  }
+  return { ok: true, workspaceId };
+}
+
+router.post("/campaigns/:id/launch", requireCampaignAccess, asyncHandler(async (req: AuthedRequest, res) => {
   const campaign = await prisma.campaign.findUnique({ where: { id: req.params.id } });
   if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+  const resolved = await resolveSpendWorkspace(req, campaign);
+  if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+  const workspaceId = resolved.workspaceId;
   const data = campaign.data as any;
   const hasMetaVariants = (data.variants ?? []).some((v: any) => v.network === "meta");
   if (hasMetaVariants) {
     const metaCreds = await getMetaCredentials(workspaceId);
     if (!metaCreds) {
       return res.status(422).json({ error: "No Meta ad account connected. Connect your Meta Business account in Settings before launching.", code: "META_NOT_CONNECTED" });
+    }
+    // A Meta ad requires a Page (object_story_spec.page_id) — without one, createHierarchyAd fails
+    // deep in the per-variant loop after the campaign container + ad set already exist. Catch it at
+    // the pre-flight gate so the user gets an actionable message instead of a half-built graph.
+    const effectivePageId = data.pageId ?? metaCreds.pageId;
+    if (!effectivePageId) {
+      return res.status(422).json({ error: "No Facebook Page connected. A Page is required to publish Meta ads — reconnect your Meta account and grant Page access.", code: "META_PAGE_MISSING" });
     }
   }
   // Symmetric pre-flight for Google — without this, a Google variant with no connection would
@@ -1024,10 +1062,11 @@ router.post("/campaigns/:id/launch", asyncHandler(async (req, res) => {
     res.json(launched);
   } catch (err: any) {
     if (err.message?.includes("not found")) return res.status(404).json({ error: err.message });
+    if (err.message?.includes("already launching")) return res.status(409).json({ error: err.message, code: "LAUNCH_IN_PROGRESS" });
     res.status(500).json({ error: err.message ?? "Campaign launch failed" });
   }
 }));
-router.post("/campaigns/:id/variants/:variantId/pause", asyncHandler(async (req, res) => {
+router.post("/campaigns/:id/variants/:variantId/pause", requireCampaignAccess, asyncHandler(async (req, res) => {
   try {
     const result = await pauseVariant(req.params.id, req.params.variantId);
     res.json(result);
@@ -1036,7 +1075,7 @@ router.post("/campaigns/:id/variants/:variantId/pause", asyncHandler(async (req,
     res.status(status).json({ error: err.message });
   }
 }));
-router.post("/campaigns/:id/variants/:variantId/activate", asyncHandler(async (req, res) => {
+router.post("/campaigns/:id/variants/:variantId/activate", requireCampaignAccess, asyncHandler(async (req, res) => {
   try {
     const result = await activateVariant(req.params.id, req.params.variantId);
     res.json(result);
@@ -1045,7 +1084,7 @@ router.post("/campaigns/:id/variants/:variantId/activate", asyncHandler(async (r
     res.status(status).json({ error: err.message });
   }
 }));
-router.post("/campaigns/:id/apply-creative-media", asyncHandler(async (req, res) => {
+router.post("/campaigns/:id/apply-creative-media", requireCampaignAccess, asyncHandler(async (req, res) => {
   try {
     const result = await applyCreativeMedia(req.params.id, req.body);
     res.json(result);
@@ -1054,7 +1093,7 @@ router.post("/campaigns/:id/apply-creative-media", asyncHandler(async (req, res)
     res.status(500).json({ error: err.message });
   }
 }));
-router.post("/campaigns/:id/variants/:variantId/budget", asyncHandler(async (req, res) => {
+router.post("/campaigns/:id/variants/:variantId/budget", requireCampaignAccess, asyncHandler(async (req, res) => {
   const dailyBudgetCents = Number(req.body.dailyBudgetCents);
   if (!dailyBudgetCents || dailyBudgetCents <= 0 || dailyBudgetCents > MAX_BUDGET_CENTS) {
     return res.status(400).json({ error: "Invalid budget amount" });

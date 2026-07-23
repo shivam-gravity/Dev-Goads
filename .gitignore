@@ -19,3 +19,6 @@ apps/api/_enq.mts
 __pycache__/
 *.pyc
 .DS_Store
+
+# Playwright screenshot artifacts saved to repo root by browser tooling
+*-launch-*.png

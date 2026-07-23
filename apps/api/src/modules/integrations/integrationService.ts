@@ -179,6 +179,24 @@ export async function getMetaCredentials(workspaceId: string): Promise<MetaCrede
   };
 }
 
+/**
+ * Flags a Meta connection as errored (status: "error" + errorMessage) so the UI surfaces a
+ * "reconnect your Meta account" prompt instead of silently failing every publish. Called when a
+ * live Graph call fails with an unrecoverable auth error AND a token refresh couldn't fix it
+ * (see launchMetaHierarchy) — i.e. the stored token is truly dead (de-authorized app, password
+ * change, revoked permission), not merely expired-but-refreshable. Best-effort: a failure to
+ * write this status must never mask the original launch error, so callers ignore its result.
+ */
+export async function markMetaConnectionError(workspaceId: string, errorMessage: string): Promise<void> {
+  const row = await prisma.integration.findFirst({ where: { workspaceId, platform: "meta" } });
+  if (!row) return;
+  const existing = row.data as unknown as Integration;
+  // Only downgrade a currently-"connected" integration — never resurrect a disconnected one into "error".
+  if (existing.status !== "connected") return;
+  const updated: Integration = { ...existing, id: row.id, status: "error", errorMessage: errorMessage.slice(0, 300), updatedAt: new Date().toISOString() };
+  await save(updated);
+}
+
 export interface MetaManualConnectionInput {
   accessToken: string;
   adAccountId: string;
