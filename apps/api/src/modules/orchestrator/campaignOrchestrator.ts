@@ -17,6 +17,7 @@ import { eventBus } from "../../infra/eventBus.js";
 import { ensureFuseGuardrails } from "../automation/campaignFuse.js";
 import { syncLaunchedHierarchy } from "../drafts/draftsService.js";
 import { logger } from "../logger/logger.js";
+import { isActiveNetwork } from "../../config/platforms.js";
 
 export interface CampaignLaunchedEvent {
   campaignId: string;
@@ -26,6 +27,13 @@ export interface CampaignLaunchedEvent {
 }
 
 const LANDING_PAGE_SLUGS = ["", "offer", "checkout", "pricing"];
+
+// How many distinct ad creatives a generated campaign should contain PER launchable network.
+// The StrategyAgent emits 8-12 creatives (for variety/selection headroom), but surfacing all of
+// them in the builder is overwhelming and confusing (the sidebar even truncated the list to 8
+// while the count said 14). Cap the creatives actually turned into variants so the user gets a
+// focused, editable set. 4 = enough distinct angles to A/B without noise. Env-tunable.
+const MAX_CREATIVES_PER_CAMPAIGN = Math.max(1, Number(process.env.MAX_CREATIVES_PER_CAMPAIGN ?? 4));
 const DEFAULT_META_OBJECTIVE = "OUTCOME_TRAFFIC";
 
 const adapters: Record<AdNetwork, AdAdapter & Partial<HierarchyCapableAdapter>> = {
@@ -68,12 +76,21 @@ export async function buildCampaignFromStrategy(strategyId: string, name: string
   const baseUrl = business?.website?.replace(/\/$/, "") ?? "https://example.com";
 
   let variantIndex = 0;
+  // Only build variants for networks we can actually launch on (config/platforms.ts). A strategy's
+  // recommendedNetworks can name a "coming soon" network (e.g. market research recommends TikTok),
+  // and buildCampaignFromStrategy feeds launchCampaign directly — so we drop inactive networks here
+  // rather than let them become dead variants the orchestrator has to skip at launch.
+  const launchableNetworks = strategy.recommendedNetworks.filter(isActiveNetwork);
   // Each creative is shared across every recommended network above — applying each
   // network's real copy limits here (rather than reusing one Meta-shaped 40-char headline
-  // verbatim on Google/TikTok too) is what actually makes the final launched ad respect
+  // verbatim on Google too) is what actually makes the final launched ad respect
   // that network's real format instead of just its generation-time upper bound.
-  const variants: CampaignVariant[] = strategy.creatives.flatMap((creative) =>
-    strategy.recommendedNetworks.map((network) => {
+  // Cap the creatives surfaced as variants (the agent produces 8-12 for headroom; the builder
+  // should show a focused set — see MAX_CREATIVES_PER_CAMPAIGN). Applied here, at the single point
+  // variants are built, so both the count badge and the list agree and no launch fan-out explodes.
+  const cappedCreatives = strategy.creatives.slice(0, MAX_CREATIVES_PER_CAMPAIGN);
+  const variants: CampaignVariant[] = cappedCreatives.flatMap((creative) =>
+    launchableNetworks.map((network) => {
       const audienceName = strategy.audiences[variantIndex % strategy.audiences.length] ?? "General Audience";
       const slug = LANDING_PAGE_SLUGS[variantIndex % LANDING_PAGE_SLUGS.length];
       variantIndex++;
@@ -100,7 +117,7 @@ export async function buildCampaignFromStrategy(strategyId: string, name: string
     strategyId,
     name,
     status: "draft",
-    networks: strategy.recommendedNetworks,
+    networks: launchableNetworks,
     dailyBudgetCents,
     variants,
     ...(objective ? { objective } : {}),
@@ -127,7 +144,11 @@ export async function buildCampaignFromSuggestions(strategyId: string, suggestio
   const business = await getBusiness(strategy.businessId);
   const baseUrl = business?.website?.replace(/\/$/, "") ?? "https://example.com";
 
-  const variants: CampaignVariant[] = suggestions.map((suggestion, i) => {
+  // Drop suggestions for networks we can't launch on (config/platforms.ts). A suggestion's
+  // platform comes from research (which can still recommend TikTok), and this builder feeds
+  // launchCampaign directly — so an inactive network would otherwise become a dead variant.
+  const launchableSuggestions = suggestions.filter((s) => isActiveNetwork(s.platform));
+  const variants: CampaignVariant[] = launchableSuggestions.map((suggestion, i) => {
     const audienceName = strategy.audiences[i % strategy.audiences.length] ?? "General Audience";
     const slug = LANDING_PAGE_SLUGS[i % LANDING_PAGE_SLUGS.length];
     return {
@@ -386,10 +407,13 @@ export async function launchCampaign(campaignId: string, workspaceId = "demo"): 
   const googleVariants = campaign.variants.filter((v) => v.network === "google");
   const otherVariants = campaign.variants.filter((v) => v.network !== "meta" && v.network !== "google");
 
-  // Only Meta + Google are live. TikTok (and any other network) is "coming soon": we do NOT call
-  // its adapter to launch, so it never gets an externalId and never spends. Marked "skipped" so
-  // it's visibly not-launched rather than silently failing. Flip this back on (restore the
-  // adapter.launchVariant loop) when the network graduates from coming-soon.
+  // Defense-in-depth: the campaign builders (buildCampaignFromStrategy / buildCampaignFromSuggestions)
+  // already drop non-active networks, and the /campaigns/generate Zod boundary rejects them — so in
+  // normal flow there are NO otherVariants here. This loop stays as a last-resort guard because
+  // launchCampaign is also reachable via POST /campaigns/:id/launch on an arbitrary persisted
+  // campaign (e.g. an older draft built before a network was gated). For any non-active network we
+  // do NOT call its adapter, so it never gets an externalId and never spends; marked "skipped" so it
+  // reads as visibly not-launched rather than silently failing or dragging the campaign to "failed".
   for (const variant of otherVariants) {
     variant.status = "skipped";
   }
@@ -407,7 +431,10 @@ export async function launchCampaign(campaignId: string, workspaceId = "demo"): 
   // from actual variant outcomes so it never contradicts externalIds or the real launch
   // result, which matters for anything reading this field downstream (the CRM sync in
   // particular — see adsDataRoutes.ts's /ads-data/campaigns).
-  campaign.networks = [...new Set(campaign.variants.filter((v) => v.status !== "failed").map((v) => v.network))];
+  // Excludes both "failed" and "skipped" variants: a skipped (coming-soon) network was never
+  // launched and has no externalId, so reporting it here would reintroduce exactly the drift this
+  // recompute exists to prevent (a network in the list that nothing downstream can act on).
+  campaign.networks = [...new Set(campaign.variants.filter((v) => v.status !== "failed" && v.status !== "skipped").map((v) => v.network))];
 
   campaign.status = campaign.variants.some((v) => v.status === "active")
     ? "active"

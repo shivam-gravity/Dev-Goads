@@ -28,9 +28,9 @@ const STRATEGY_AGENT_TOOL = {
           audiences: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 5 },
           creatives: {
             type: "array",
-            description: "At least 8 distinct ad concepts — vary the angle (feature, offer, social proof, urgency, pain point, comparison) so every one reads as a genuinely different ad.",
-            minItems: 8,
-            maxItems: 12,
+            description: "4-6 distinct ad concepts — vary the angle (feature, offer, social proof, urgency, pain point, comparison) so every one reads as a genuinely different ad. Quality over quantity: the campaign surfaces only the top few, so make each one strong.",
+            minItems: 4,
+            maxItems: 6,
             items: { type: "object", properties: { headline: { type: "string" }, body: { type: "string" }, callToAction: { type: "string" } }, required: ["headline", "body", "callToAction"] },
           },
         },
