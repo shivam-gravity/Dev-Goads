@@ -50,13 +50,12 @@ const FACT_EXTRACTION_TOOL = {
  * Returns the number of facts persisted. 0 (never a throw upward from missing data) when
  * the crawl has no pages or no model is configured — real facts or none, no fallback facts.
  */
-// Tool use is already FORCED (bedrockClient toolChoice), yet the model intermittently calls
-// emit_crawl_facts with an EMPTY facts array on content that a moment earlier yielded 30+ facts —
-// confirmed live: the identical refined polluxa.com homepage returned 31 facts then 0,0,0 across
-// back-to-back calls. That non-determinism (not the crawl, not CSS, not load) was the real cause
-// of the run-to-run confidence swings. Since a fresh call succeeds intermittently, retry a couple
-// times when the model returns zero facts on non-trivial content before giving up.
-const FACT_EXTRACTION_EMPTY_RETRIES = Math.max(0, Number(process.env.FACT_EXTRACTION_EMPTY_RETRIES ?? 2));
+// The PRIMARY cause of empty extractions was the 2048-token truncation (now 4096), which the
+// bimodal 30-or-0 behavior masked. With that fixed, one retry is enough to ride out the rare
+// residual transient-empty without paying for multiple serial ~15s LLM calls on every run (the
+// old default of 2 retries added up to ~45s of dead latency when the model was genuinely empty).
+// Bump FACT_EXTRACTION_EMPTY_RETRIES via env if a specific site still needs more.
+const FACT_EXTRACTION_EMPTY_RETRIES = Math.max(0, Number(process.env.FACT_EXTRACTION_EMPTY_RETRIES ?? 1));
 
 /** One fact-extraction pass (with retry-on-empty) over pre-packed content. Returns [] (never
  * throws) only when every attempt comes back empty, so callers can still retry with narrower input.
