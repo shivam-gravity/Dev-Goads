@@ -70,6 +70,44 @@ export async function getCampaign(id: string): Promise<Campaign | null> {
   return row ? (row.data as unknown as Campaign) : null;
 }
 
+export class CampaignLaunchedDeleteError extends Error {
+  constructor() {
+    super("This campaign has been launched — pause its ads before deleting so live/paused Meta or Google objects aren't abandoned.");
+    this.name = "CampaignLaunchedDeleteError";
+  }
+}
+
+/**
+ * Deletes a campaign and its mirrored Ads-Manager rows (AdSet/Ad) and Metrics. Refuses to delete a
+ * campaign that was ever launched — i.e. has a platform externalId or a non-draft status — because
+ * the real Meta/Google campaign/ad-set/ad objects would be orphaned (and a paused one can be
+ * resumed to spend). Only genuine drafts are deletable; callers get CampaignLaunchedDeleteError
+ * otherwise so the route can return a clear 409. Ad rows link to a campaign only via their AdSet,
+ * so they're removed by walking campaign -> ad sets -> ads.
+ */
+export async function deleteCampaign(id: string): Promise<boolean> {
+  const row = await prisma.campaign.findUnique({ where: { id } });
+  if (!row) return false;
+  const campaign = row.data as unknown as Campaign;
+
+  const wasLaunched =
+    campaign.status !== "draft" ||
+    Boolean(campaign.externalIds?.meta || campaign.externalIds?.google) ||
+    (campaign.variants ?? []).some((v) => v.externalId);
+  if (wasLaunched) throw new CampaignLaunchedDeleteError();
+
+  // Best-effort cleanup of the mirrored Ads-Manager hierarchy (only present if a prior launch
+  // synced it; a pure draft has none). Ads are keyed by adSetId, so collect this campaign's ad sets
+  // first, then delete their ads, then the ad sets, metrics, and finally the campaign row.
+  const adSets = await prisma.adSet.findMany({ where: { campaignId: id }, select: { id: true } });
+  const adSetIds = adSets.map((a) => a.id);
+  if (adSetIds.length) await prisma.ad.deleteMany({ where: { adSetId: { in: adSetIds } } });
+  await prisma.adSet.deleteMany({ where: { campaignId: id } });
+  await prisma.metric.deleteMany({ where: { campaignId: id } });
+  await prisma.campaign.delete({ where: { id } });
+  return true;
+}
+
 export async function listCampaignsForBusiness(businessId: string): Promise<Campaign[]> {
   const rows = await prisma.campaign.findMany({ where: { businessId }, orderBy: { updatedAt: "desc" } });
   return rows.map((r) => r.data as unknown as Campaign);

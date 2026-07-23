@@ -568,6 +568,7 @@ export const api = {
   getCampaign: (id: string) => request<Campaign>(`/campaigns/${id}`),
   updateCampaign: (id: string, patch: CampaignBuilderPatch) =>
     request<Campaign>(`/campaigns/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteCampaign: (id: string) => request<{ ok: true }>(`/campaigns/${id}`, { method: "DELETE" }),
   launchCampaign: (id: string, workspaceId: string = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace") =>
     request<Campaign>(`/campaigns/${id}/launch`, { method: "POST", body: JSON.stringify({ workspaceId }) }),
   pauseVariant: (campaignId: string, variantId: string) =>
