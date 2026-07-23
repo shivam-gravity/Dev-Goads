@@ -174,7 +174,10 @@ export async function generateRecommendations(context: ResearchContext): Promise
 
   const structured = await callDecisionModel<{ recommendations: RecommendationCandidate[] }>({
     taskName: "recommendation-generation",
-    maxTokens: 2048,
+    // 4096: returns several full recommendation candidates (title + reason + expected outcome +
+    // category + scoring), which feed the Top-Recommendations panel AND the trade-off/strategy
+    // stages downstream. 2048 risked truncating the list; headroom keeps all of them.
+    maxTokens: 4096,
     tool: RECOMMENDATION_TOOL,
     messages: [
       {

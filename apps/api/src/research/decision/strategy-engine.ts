@@ -176,7 +176,11 @@ export async function generateStrategies(context: ResearchContext, recommendatio
 
   const structured = await callDecisionModel<{ strategies: StrategyFields[] }>({
     taskName: "strategy-synthesis",
-    maxTokens: 2048,
+    // 4096: returns 3 FULL strategies (A/B/C) — each with target audience, platforms, objective,
+    // budget, KPI, creative direction, messaging — and falls back ENTIRELY unless exactly 3 come
+    // back. At 2048 a rich 3-strategy bundle risks truncating past the "=== 3" guard → generic
+    // fallback strategies. These are the demo's centerpiece cards, so give headroom.
+    maxTokens: 4096,
     tool: STRATEGY_TOOL,
     messages: [
       {
