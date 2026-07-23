@@ -13171,6 +13171,17 @@ td {
   margin-top: 2px;
 }
 
+/* Non-blocking counterpart to .publish-blockers: publish CAN proceed, but some networks will be
+   skipped. Blue/info styling, not the amber "you must fix this" of the blockers box. */
+.publish-notice {
+  background: #eff6ff;
+  border: 1.5px solid #93c5fd;
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: #1e3a8a;
+}
+
 .save-confirmed {
   color: var(--success, #0e9f6e);
   font-size: 13px;
@@ -14437,6 +14448,78 @@ td {
 
 .verified-facts-toggle:hover {
   background: var(--surface-tint);
+}
+
+/* ─── Research Findings (grouped, AdsGo-style fact cards) ─── */
+.research-findings {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+@media (max-width: 640px) {
+  .research-findings {
+    grid-template-columns: 1fr;
+  }
+}
+
+.research-findings-group {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--surface);
+}
+
+.research-findings-group-title {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+}
+
+.research-findings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+}
+
+.research-findings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.research-findings-row dt {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted-2);
+  margin: 0;
+}
+
+.research-findings-row dd {
+  font-size: 13.5px;
+  line-height: 1.5;
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.research-findings-source {
+  margin-left: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  text-transform: capitalize;
+  vertical-align: middle;
+  opacity: 0.85;
+}
+
+.research-findings-source:hover {
+  text-decoration: underline;
 }
 
 /* ─── Competitor ads card (AdLibraryProvider) ─── */

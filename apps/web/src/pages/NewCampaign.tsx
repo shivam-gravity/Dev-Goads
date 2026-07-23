@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.js";
 import { useRealtimeContext } from "../providers/RealtimeProvider.js";
-import { TargetIcon, UserIcon, LightningIcon, GlobeIcon, SparkleIcon } from "../components/icons.js";
+import { TargetIcon, UserIcon, LightningIcon, GlobeIcon, SparkleIcon, SearchIcon } from "../components/icons.js";
 import type {
   AudiencePersonaCard,
   BudgetSimulation,
@@ -701,9 +701,37 @@ function ResearchOutputPreview({ researchJobId, streaming }: { researchJobId: st
   );
 }
 
-/** The verified-facts trust panel: every concrete claim the AI agents used (prices, named
- * customers, guarantees) shown with the exact page it was read from, so the campaign is
- * auditable. Renders nothing while facts are loading or when the run produced none. */
+// Maps a fact's dot-path `field` (e.g. "pricing.starterPlan.price", "metrics.customerCount",
+// "product.name") to a human-readable category + display label for the grouped Research Findings
+// view. Keeps the AdsGo-style "labeled sections with bold values" layout without needing the
+// backend to change the fact shape. Order here is the display order of the category cards.
+const FACT_CATEGORIES: { key: string; label: string; match: RegExp }[] = [
+  { key: "brand", label: "Brand & Positioning", match: /^(brand|company|positioning|mission|tagline|about|usp|differentiat|value)/i },
+  { key: "product", label: "Product & Offering", match: /^(product|offering|feature|service|platform|software|solution|capabilit|integration)/i },
+  { key: "pricing", label: "Pricing & Plans", match: /^(pricing|price|plan|tier|cost|subscription|billing|free)/i },
+  { key: "proof", label: "Proof & Traction", match: /^(metric|proof|customer|client|traction|retention|uptime|growth|revenue|guarantee|award|certification|notable|casestudy|case_study)/i },
+  { key: "audience", label: "Audience & Use Cases", match: /^(audience|segment|usecase|use_case|persona|industry|vertical|market)/i },
+];
+function categorizeFact(field: string): { key: string; label: string } {
+  const hit = FACT_CATEGORIES.find((c) => c.match.test(field));
+  return hit ? { key: hit.key, label: hit.label } : { key: "other", label: "Other Findings" };
+}
+// Turn a dot-path field into a readable label: "pricing.starterPlan.price" → "Starter Plan Price".
+function humanizeField(field: string): string {
+  const tail = field.split(".").slice(-2).join(" ");
+  return tail
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
+/** The verified-facts trust panel, presented AdsGo-style: concrete claims the AI extracted from
+ * the site (prices, named customers, guarantees, metrics) grouped into labeled categories with the
+ * key in muted text and the value bold, each linked to its source page. First-party pages only
+ * (homepage/about/product/pricing/features) — case-study/blog ("other") pages are excluded so one
+ * business's page can't surface another company's details as if they were this one's. Renders
+ * nothing while loading or when no first-party facts were found. */
 function VerifiedFactsSection({ jobId, streaming }: { jobId: string; streaming?: boolean }) {
   const [data, setData] = useState<CampaignGenerationFacts | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -721,28 +749,53 @@ function VerifiedFactsSection({ jobId, streaming }: { jobId: string; streaming?:
   }, [jobId, streaming]);
 
   if (!data || data.facts.length === 0) return null;
-  const shown = expanded ? data.facts : data.facts.slice(0, FACTS_PREVIEW_COUNT);
+
+  // First-party only: keep homepage/about/product/pricing/features; drop "other" (case studies,
+  // blog posts) whose facts are often ABOUT a different company mentioned on the page.
+  const firstParty = data.facts.filter((f) => f.sourcePageType == null || f.sourcePageType !== "other");
+  const usable = firstParty.length > 0 ? firstParty : data.facts;
+  // Highest-confidence first within each group; cap per group so no single category floods the view.
+  const sorted = [...usable].sort((a, b) => b.confidence - a.confidence);
+
+  const groups = new Map<string, { label: string; facts: typeof sorted }>();
+  for (const f of sorted) {
+    const { key, label } = categorizeFact(f.field);
+    if (!groups.has(key)) groups.set(key, { label, facts: [] });
+    groups.get(key)!.facts.push(f);
+  }
+  // Display in FACT_CATEGORIES order, "other" last.
+  const orderedKeys = [...FACT_CATEGORIES.map((c) => c.key), "other"].filter((k) => groups.has(k));
+  const PER_GROUP_PREVIEW = 4;
 
   return (
-    <div className="verified-facts-section">
-      <ul className="verified-facts-list">
-        {shown.map((f, i) => (
-          <li key={`${f.field}-${i}`} className="verified-fact-row">
-            <span className="verified-fact-value">{f.value}</span>
-            <span className="verified-fact-meta">
-              {f.sourceUrl && (
-                <a href={f.sourceUrl} target="_blank" rel="noreferrer" className="verified-fact-source">
-                  {f.sourcePageType && f.sourcePageType !== "other" ? f.sourcePageType : (safeParseUrl(f.sourceUrl)?.pathname ?? f.sourceUrl)}
-                </a>
-              )}
-              <span className="verified-fact-confidence">{Math.round(f.confidence * 100)}%</span>
-            </span>
-          </li>
-        ))}
-      </ul>
-      {data.facts.length > FACTS_PREVIEW_COUNT && (
+    <div className="research-findings">
+      {orderedKeys.map((key) => {
+        const group = groups.get(key)!;
+        const shown = expanded ? group.facts : group.facts.slice(0, PER_GROUP_PREVIEW);
+        return (
+          <div key={key} className="research-findings-group">
+            <p className="research-findings-group-title">{group.label}</p>
+            <dl className="research-findings-list">
+              {shown.map((f, i) => (
+                <div key={`${f.field}-${i}`} className="research-findings-row">
+                  <dt>{humanizeField(f.field)}</dt>
+                  <dd>
+                    {f.value}
+                    {f.sourceUrl && (
+                      <a href={f.sourceUrl} target="_blank" rel="noreferrer" className="research-findings-source" title={f.sourceUrl}>
+                        {f.sourcePageType && f.sourcePageType !== "other" ? f.sourcePageType : "source"}
+                      </a>
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        );
+      })}
+      {usable.some((_, i) => i >= PER_GROUP_PREVIEW) && (
         <button type="button" className="verified-facts-toggle" onClick={() => setExpanded((e) => !e)}>
-          {expanded ? "Show fewer" : `Show all ${data.facts.length} facts`}
+          {expanded ? "Show fewer" : `Show all ${usable.length} findings`}
         </button>
       )}
     </div>
@@ -1270,11 +1323,15 @@ export default function NewCampaign() {
             />
           )}
 
-          {/* Verified-facts trust panel hidden: on multi-product/case-study sites it surfaced
-              case-study page content (other companies' details — e.g. named customers, unrelated
-              industries) as if they were THIS business's own facts, which read as low-quality.
-              Kept in code (VerifiedFactsSection) for when fact extraction is scoped to first-party
-              pages only; not rendered until then. */}
+          {/* Research Findings — the concrete facts extracted from the site, grouped into labeled
+              categories (Brand, Product, Pricing, Proof, Audience) with bold values. Scoped to
+              first-party pages inside the component, which resolves the earlier case-study-leak
+              concern that had this hidden. Shows once the run is done and the decision view is up. */}
+          {isDone && job.decisionContext && (
+            <CollapsibleSection title="Research Findings" icon={<SearchIcon />} defaultOpen>
+              <VerifiedFactsSection jobId={job.id} streaming={isActive} />
+            </CollapsibleSection>
+          )}
 
           {factsVisible && <CompetitorAdsSection jobId={job.id} />}
 
