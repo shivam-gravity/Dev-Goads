@@ -1,32 +1,63 @@
 :root {
-  --bg: #fafafa;
+  /* Palette mirrors the Polluxa CRM (MUI theme in sales_tech_frontend/src/app/layout.js +
+     globals.css) so the SSO hand-off from the CRM reads as one product:
+       primary main #1c9ce0 / light #38ade9 / dark #1787c2, body bg #f6f6f6, radius 12px. */
+  --bg: #f6f6f6;
   --surface: #ffffff;
-  --surface-tint: #eef7fc;
-  --border: #e5e7eb;
-  --ink: #0d1b2a;
-  --text: #141414;
-  --muted: #595959;
-  --muted-2: #8c8c8c;
-  /* Polluxa CRM brand accent (#1C9CE0) so the SSO handoff from the CRM into this app
-     feels like one product — was purple (#1c9ce0). */
+  --surface-tint: #eff6ff;
+  --border: #e2e8f0;
+  --ink: #0f172a;
+  --text: #0f172a;
+  --muted: #677489;
+  --muted-2: #94a3b8;
   --accent: #1c9ce0;
-  --accent-light: #4db4ea;
-  --accent-dark: #1580bd;
+  --accent-light: #38ade9;
+  --accent-dark: #1787c2;
   --accent-mid: #2ba5e5;
   --accent-2: #0e9f6e;
   --highlight: #dafa28;
   --highlight-alt: #c2ee00;
   --danger: #dc2626;
+  --radius: 12px;
   --hard-shadow: 4px 4px 0 var(--ink);
   --hard-shadow-sm: 3px 3px 0 var(--ink);
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --ease-out: cubic-bezier(0, 0, 0.2, 1);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Poppins to match the CRM (loaded in index.html); system stack is the graceful fallback. */
+  font-family: "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Top route-progress bar — mirrors the Polluxa CRM's react-top-loading-bar (5px, #1b9cde). */
+.route-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  z-index: 9999;
+  pointer-events: none;
+}
+.route-progress-bar {
+  height: 100%;
+  background: #1b9cde;
+  box-shadow: 0 0 8px rgba(27, 156, 222, 0.6);
+  border-radius: 0 3px 3px 0;
+  transition: width 0.2s ease, opacity 0.25s ease;
+}
+
+/* Full-viewport loader — centered CRM loader.gif (matches sales_tech_frontend Loading.jsx). */
+.full-page-loader {
+  width: 100%;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
 }
 
 html {

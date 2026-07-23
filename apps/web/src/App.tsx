@@ -52,6 +52,8 @@ import { CopilotProvider, useCopilot } from "./providers/CopilotProvider.js";
 import CopilotDrawer from "./components/Copilot/Drawer.js";
 import ErrorBoundary from "./components/ErrorBoundary.js";
 import HelpWidget from "./components/HelpWidget.js";
+import RouteProgressBar from "./components/RouteProgressBar.js";
+import FullPageLoader from "./components/FullPageLoader.js";
 
 const MARKETING_ROUTES: Record<string, JSX.Element> = {
   "/features": <Features />,
@@ -113,6 +115,7 @@ function AuthenticatedApp() {
 
   return (
     <div className="app-shell-sidebar">
+      <RouteProgressBar />
       {/* Sidebar */}
       <aside className={`sidebar polluxa-sidebar ${sidebarOpen ? "sidebar-open" : ""} ${brandMenuOpen ? "sidebar-pinned" : ""}`}>
         <div className="sidebar-brand polluxa-brand">
@@ -367,7 +370,7 @@ function CopilotFab() {
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { isLoading, isAuthenticated, businessId } = useAuth();
-  if (isLoading) return null;
+  if (isLoading) return <FullPageLoader />;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!businessId) return <Navigate to="/get-started" replace />;
   return children;
@@ -375,14 +378,14 @@ function RequireAuth({ children }: { children: JSX.Element }) {
 
 function RedirectIfAuthenticated({ children }: { children: JSX.Element }) {
   const { isLoading, isAuthenticated } = useAuth();
-  if (isLoading) return null;
+  if (isLoading) return <FullPageLoader />;
   if (isAuthenticated) return <Navigate to="/dashboard" replace />;
   return children;
 }
 
 function OnboardingWrapper() {
   const { isLoading, businessId, setBusinessId } = useAuth();
-  if (isLoading) return null;
+  if (isLoading) return <FullPageLoader />;
   if (businessId) return <Navigate to="/dashboard" replace />;
   return <Onboarding onOnboarded={setBusinessId} />;
 }
