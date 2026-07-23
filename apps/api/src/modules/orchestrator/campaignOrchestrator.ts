@@ -7,8 +7,11 @@ import type { AdAdapter, HierarchyCapableAdapter } from "../adapters/AdAdapter.j
 import { resolveAudienceTargetingForWorkspace, withAgentInterests } from "../adapters/metaTargetingMapper.js";
 import { isValidObjective } from "../adapters/metaObjectives.js";
 import { resolveGoogleTargetingForWorkspace, buildGoogleCampaignTargetingFromLocations, withAgentKeywords } from "../adapters/googleTargetingMapper.js";
-import { getMetaCredentials } from "../integrations/integrationService.js";
+import { getMetaCredentials, markMetaConnectionError } from "../integrations/integrationService.js";
+import { refreshMetaToken } from "../integrations/metaTokenRefresh.js";
+import { MetaGraphError } from "../adapters/metaAdapter.js";
 import { getGoogleAdsCredentials, type GoogleAdsCredentials } from "../integrations/googleOAuth.js";
+import { withLock, LockAlreadyHeldError } from "../../infra/distributedLock.js";
 import type { AdNetwork, Campaign, CampaignSuggestion, CampaignVariant, CreativeAssetRef } from "../../types/index.js";
 import { getStrategy } from "../strategy/strategyEngine.js";
 import { applyCopyLimitsForNetwork } from "../strategy/platformCopyLimits.js";
@@ -41,6 +44,18 @@ const adapters: Record<AdNetwork, AdAdapter & Partial<HierarchyCapableAdapter>> 
   google: googleAdapter,
   tiktok: tiktokAdapter,
 };
+
+/**
+ * Best user-facing reason for a launch failure. Prefers Meta's end-user-safe error_user_msg
+ * (carried on MetaGraphError.userMessage) over the raw exception text, and truncates so a giant
+ * Graph payload doesn't bloat the persisted campaign JSON. Used to fill CampaignVariant.failureReason
+ * so the UI can show WHY a variant failed instead of a bare "Failed".
+ */
+function launchFailureReason(err: unknown): string {
+  if (err instanceof MetaGraphError && err.userMessage) return err.userMessage.slice(0, 300);
+  const message = err instanceof Error ? err.message : String(err);
+  return message.slice(0, 300);
+}
 
 export async function saveCampaign(campaign: Campaign): Promise<void> {
   await prisma.campaign.upsert({
@@ -195,32 +210,71 @@ async function launchMetaHierarchy(
   // The builder lets a user pick a specific ad account/Page per campaign (dropdowns backed by
   // metaOAuth.listAdAccounts/listPages) instead of always using the workspace's default
   // Integration connection — override here when the campaign carries a selection.
-  const credentials = workspaceCredentials
+  let credentials = workspaceCredentials
     ? {
         ...workspaceCredentials,
         adAccountId: campaign.metaAdAccountId ?? workspaceCredentials.adAccountId,
         pageId: campaign.pageId ?? workspaceCredentials.pageId,
       }
     : undefined;
-  const accessToken = credentials?.accessToken ?? null;
+  let accessToken = credentials?.accessToken ?? null;
+
+  // A stored Meta long-lived token can be dead while its recorded expiry still reads "in the
+  // future" (the token was invalidated server-side — password change, de-authorized app, or the
+  // CRM manual-connect path storing an optimistic 60-day expiry). The scheduled refresh sweep only
+  // fires on the expiry clock, so the first live publish 401s. Wrap the first Graph call: on an
+  // auth error, force a token exchange and retry ONCE, mirroring launchGoogleHierarchy. This runs
+  // BEFORE any ad set/ad is created, so a clean top-of-hierarchy retry has no partial-state risk.
+  const refreshMetaCredentialsOnAuthError = async (): Promise<boolean> => {
+    logger.warn(`launchMetaHierarchy: auth error on Graph call for ${workspaceId} — refreshing Meta token and retrying once`);
+    const result = await refreshMetaToken(workspaceId);
+    if (!result.success) {
+      logger.error(`launchMetaHierarchy: Meta token refresh failed for ${workspaceId}: ${result.error}`);
+      // Token is dead and not refreshable — flag the connection so the UI prompts a reconnect
+      // instead of failing every future launch identically. Best-effort; never mask the launch error.
+      await markMetaConnectionError(workspaceId, "Meta access token is invalid or expired — reconnect your Meta account.").catch(() => {});
+      return false;
+    }
+    const refreshed = (await getMetaCredentials(workspaceId)) ?? undefined;
+    if (!refreshed) return false;
+    credentials = { ...refreshed, adAccountId: campaign.metaAdAccountId ?? refreshed.adAccountId, pageId: campaign.pageId ?? refreshed.pageId };
+    accessToken = credentials.accessToken;
+    return true;
+  };
+  const isMetaAuthError = (err: unknown): boolean => err instanceof MetaGraphError && err.isAuthError;
 
   // Use the campaign's chosen objective (threaded from the generation flow) when it's a valid
   // post-ODAX Meta objective; otherwise fall back to the historical default. Guards against a
   // stale/free-text value reaching the Graph API.
   const metaObjective = campaign.objective && isValidObjective(campaign.objective) ? campaign.objective : DEFAULT_META_OBJECTIVE;
 
-  let campaignExternalId: string;
-  try {
-    const container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: metaObjective }, credentials);
-    campaignExternalId = container.externalId;
-    campaign.externalIds = { ...campaign.externalIds, meta: campaignExternalId };
-  } catch (err) {
-    // Campaign container is the top of the Meta hierarchy — if it fails, EVERY variant is marked
-    // failed (no ad set/ad can exist without it). Log the real Graph API error; otherwise the whole
-    // campaign shows a silent "Failed" with no way to tell budget/objective/token issues apart.
-    logger.error(`launchMetaHierarchy: campaign container failed for ${campaign.id} (objective=${metaObjective}) — marking all ${variants.length} variants failed`, err);
-    variants.forEach((v) => { v.status = "failed"; });
-    return;
+  // ── Idempotency: never create a second campaign container for a campaign that already has one.
+  // launchCampaign is synchronous and blocks 30s–2min, so a retry or double-clicked "Launch" would
+  // otherwise build a DUPLICATE Meta campaign/ad-set/ad graph and spend twice. If we already minted
+  // a Meta campaign id on a prior (partial) launch, reuse it and only fill in the missing ads below.
+  let campaignExternalId: string | undefined = campaign.externalIds?.meta;
+  if (campaignExternalId) {
+    logger.info(`launchMetaHierarchy: reusing existing Meta campaign container ${campaignExternalId} for ${campaign.id} (idempotent re-launch)`);
+  } else {
+    try {
+      let container;
+      try {
+        container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: metaObjective }, credentials);
+      } catch (err) {
+        if (!isMetaAuthError(err) || !(await refreshMetaCredentialsOnAuthError())) throw err;
+        container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: metaObjective }, credentials);
+      }
+      campaignExternalId = container.externalId;
+      campaign.externalIds = { ...campaign.externalIds, meta: campaignExternalId };
+    } catch (err) {
+      // Campaign container is the top of the Meta hierarchy — if it fails, EVERY variant is marked
+      // failed (no ad set/ad can exist without it). Log the real Graph API error; otherwise the whole
+      // campaign shows a silent "Failed" with no way to tell budget/objective/token issues apart.
+      logger.error(`launchMetaHierarchy: campaign container failed for ${campaign.id} (objective=${metaObjective}) — marking all ${variants.length} variants failed`, err);
+      const reason = launchFailureReason(err);
+      variants.forEach((v) => { v.status = "failed"; v.failureReason = reason; });
+      return;
+    }
   }
 
   const groups = new Map<string, CampaignVariant[]>();
@@ -250,6 +304,12 @@ async function launchMetaHierarchy(
       );
 
       for (const variant of groupVariants) {
+        // Idempotency: a variant that already has a live externalId from a prior (partial) launch
+        // is skipped — re-creating its ad would publish (and eventually spend on) a duplicate.
+        if (variant.externalId && variant.status !== "failed") {
+          logger.info(`launchMetaHierarchy: variant ${variant.id} already published as ${variant.externalId} — skipping (idempotent)`);
+          continue;
+        }
         try {
           const upload = await metaAdapter.uploadCreativeAsset!(
             { imageUrl: variant.creative.imageUrl, videoUrl: variant.creative.videoUrl },
@@ -270,11 +330,13 @@ async function launchMetaHierarchy(
           variant.externalId = result.externalId;
           variant.status = result.status;
           variant.adSetExternalId = adSet.externalId;
+          variant.failureReason = undefined; // clear any stale reason from a prior failed attempt
         } catch (err) {
           // Per-variant failure (creative upload or ad create) — the ad set survived, so only THIS
           // variant is lost. Log which one and why so a partial failure is diagnosable.
           logger.error(`launchMetaHierarchy: ad create failed for variant ${variant.id} in "${audienceName}" (campaign ${campaign.id})`, err);
           variant.status = "failed";
+          variant.failureReason = launchFailureReason(err);
         }
       }
     } catch (err) {
@@ -282,7 +344,8 @@ async function launchMetaHierarchy(
       // On an INR/non-USD account this is where a below-minimum daily budget gets rejected — log the
       // Graph API message so the currency-minimum cause is visible instead of a silent group "Failed".
       logger.error(`launchMetaHierarchy: ad set failed for audience "${audienceName}" (campaign ${campaign.id}, budget ${perVariantBudgetCents * groupVariants.length} cents) — marking ${groupVariants.length} variants failed`, err);
-      groupVariants.forEach((v) => { v.status = "failed"; });
+      const reason = launchFailureReason(err);
+      groupVariants.forEach((v) => { v.status = "failed"; v.failureReason = reason; });
     }
   }
 }
@@ -415,6 +478,22 @@ async function launchGoogleHierarchy(
  * per-variant launchVariant call until it gets the same depth in a follow-up.
  */
 export async function launchCampaign(campaignId: string, workspaceId = "demo"): Promise<Campaign> {
+  // Serialize launches of the same campaign across processes/requests. The idempotency guards in
+  // launchMetaHierarchy/launchGoogleHierarchy prevent duplicate spend on a SEQUENTIAL re-launch,
+  // but two launches racing concurrently could both read externalIds=∅ and both create a container
+  // before either persists — the lock closes that window. Fail-fast (LockAlreadyHeldError) rather
+  // than queue: a second concurrent launch of the same campaign is a double-submit, not real work.
+  try {
+    return await withLock(`launch:campaign:${campaignId}`, 5 * 60_000, () => launchCampaignInner(campaignId, workspaceId));
+  } catch (err) {
+    if (err instanceof LockAlreadyHeldError) {
+      throw new Error(`Campaign ${campaignId} is already launching`);
+    }
+    throw err;
+  }
+}
+
+async function launchCampaignInner(campaignId: string, workspaceId: string): Promise<Campaign> {
   const campaign = await getCampaign(campaignId);
   if (!campaign) throw new Error(`Campaign ${campaignId} not found`);
 

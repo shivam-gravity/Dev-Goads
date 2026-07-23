@@ -166,6 +166,29 @@ test("Campaign Orchestrator - launchCampaign skips a stray non-active variant in
   assert.notStrictEqual(launched.status, "failed", "a stray coming-soon variant must not fail the whole campaign");
 });
 
+test("Campaign Orchestrator - launchCampaign is idempotent: a re-launch reuses the Meta container and variant ids (no duplicate spend)", async () => {
+  // launchCampaign blocks 30s–2min synchronously, so a retry/double-click is likely — it must NOT
+  // build a second Meta campaign/ad/graph (which would spend twice). Re-launching a fully-launched
+  // campaign must return the SAME externalIds it already had.
+  const strategyId = `strat_idem_${Date.now()}`;
+  const businessId = "biz_test_idem";
+  await seedTestStrategy(strategyId, businessId);
+  const draft = await buildCampaignFromStrategy(strategyId, "Idempotency Campaign", 20000);
+
+  const first = await launchCampaign(draft.id, "demo");
+  const firstMetaContainer = first.externalIds?.meta;
+  const firstVariantIds = first.variants.filter(v => v.network === "meta").map(v => v.externalId);
+  assert.ok(firstMetaContainer, "first launch should create a Meta campaign container id");
+  assert.ok(firstVariantIds.every(Boolean), "first launch should assign every Meta variant an external id");
+
+  const second = await launchCampaign(draft.id, "demo");
+  const secondMetaContainer = second.externalIds?.meta;
+  const secondVariantIds = second.variants.filter(v => v.network === "meta").map(v => v.externalId);
+
+  assert.strictEqual(secondMetaContainer, firstMetaContainer, "re-launch must REUSE the existing Meta campaign container, not mint a new one");
+  assert.deepStrictEqual(secondVariantIds, firstVariantIds, "re-launch must keep the same variant ad ids (no duplicate ads created)");
+});
+
 test("Campaign Orchestrator - buildCampaignFromStrategy applies each network's real copy limits to its own variant, not one shared truncation", async () => {
   const strategyId = `strat_test_${Date.now()}`;
   const businessId = "biz_test_1";

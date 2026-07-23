@@ -94,24 +94,122 @@ function clampName(name: string): string {
   return trimmed.length <= META_MAX_NAME_LENGTH ? trimmed : trimmed.slice(0, META_MAX_NAME_LENGTH - 1).trimEnd() + "…";
 }
 
-// Exponential Backoff Retry Helper
+/**
+ * A classified Graph API failure. Carries Meta's own error taxonomy (code / error_subcode /
+ * error_user_msg / fbtrace_id) so callers can branch on it — the orchestrator refreshes the
+ * token on an auth error, the route surfaces the human-readable error_user_msg, and
+ * fetchWithRetry decides retryable-vs-not — instead of everyone re-regexing a flat string.
+ */
+export class MetaGraphError extends Error {
+  readonly httpStatus: number;
+  readonly code?: number;
+  readonly subcode?: number;
+  /** Meta's end-user-safe message (error_user_title/error_user_msg) — safe to show a user, unlike `message`. */
+  readonly userMessage?: string;
+  readonly fbtraceId?: string;
+  readonly isAuthError: boolean;
+  readonly isRateLimit: boolean;
+  constructor(args: {
+    message: string;
+    httpStatus: number;
+    code?: number;
+    subcode?: number;
+    userMessage?: string;
+    fbtraceId?: string;
+    isAuthError: boolean;
+    isRateLimit: boolean;
+  }) {
+    super(args.message);
+    this.name = "MetaGraphError";
+    this.httpStatus = args.httpStatus;
+    this.code = args.code;
+    this.subcode = args.subcode;
+    this.userMessage = args.userMessage;
+    this.fbtraceId = args.fbtraceId;
+    this.isAuthError = args.isAuthError;
+    this.isRateLimit = args.isRateLimit;
+  }
+}
+
+// Meta rate-limit signals: top-level codes 4 (app-level), 17 (per-user), 32 (page-level),
+// 613 (custom/ads), 80000+ (business-use-case throttling), plus error_subcode 2446079. On any
+// of these, backing off and retrying is correct; on a plain 400 (bad budget/name/objective) it
+// is not — retrying just wastes ~1.5s before failing with the same error.
+const META_RATE_LIMIT_CODES = new Set([4, 17, 32, 613, 80000, 80001, 80002, 80003, 80004, 80005, 80006, 80008, 80014]);
+// Auth failures: code 190 (invalid/expired token) and the OAuthException subcodes for expired
+// session (463), changed password (460), untrusted device (461), etc. These are non-retryable
+// at the HTTP level but ARE recoverable by refreshing the token, which the orchestrator does.
+const META_AUTH_CODES = new Set([190, 102, 10, 200, 2500]);
+const META_AUTH_SUBCODES = new Set([458, 459, 460, 461, 463, 464, 467, 492]);
+
+/** Parses a Graph API error body (already read as text) into a classified MetaGraphError. */
+function classifyMetaError(httpStatus: number, bodyText: string): MetaGraphError {
+  let err: any = {};
+  try {
+    err = JSON.parse(bodyText)?.error ?? {};
+  } catch {
+    // Non-JSON body (e.g. an HTML 502 from a proxy) — no Meta taxonomy to extract.
+  }
+  const code: number | undefined = typeof err.code === "number" ? err.code : undefined;
+  const subcode: number | undefined = typeof err.error_subcode === "number" ? err.error_subcode : undefined;
+  const isAuthError =
+    err.type === "OAuthException" ||
+    (code != null && META_AUTH_CODES.has(code)) ||
+    (subcode != null && META_AUTH_SUBCODES.has(subcode));
+  const isRateLimit =
+    httpStatus === 429 ||
+    (code != null && META_RATE_LIMIT_CODES.has(code)) ||
+    subcode === 2446079;
+  const userMessage = err.error_user_msg
+    ? `${err.error_user_title ? err.error_user_title + ": " : ""}${err.error_user_msg}`
+    : undefined;
+  const message = `Meta API ${httpStatus}${code != null ? ` (code ${code}${subcode != null ? `/${subcode}` : ""})` : ""}: ${err.message ?? bodyText.slice(0, 300)}`;
+  return new MetaGraphError({ message, httpStatus, code, subcode, userMessage, fbtraceId: err.fbtrace_id, isAuthError, isRateLimit });
+}
+
+// A non-2xx is retryable only when it's transient: HTTP 5xx (server-side) or a rate limit.
+// A 4xx that isn't a rate limit is a hard client error (bad budget, name too long, invalid
+// objective, invalid/expired token) — retrying it is pointless, so we fail fast.
+function isRetryableMetaError(e: MetaGraphError): boolean {
+  return e.httpStatus >= 500 || e.isRateLimit;
+}
+
+const MAX_RETRY_DELAY_MS = 60_000;
+
+// Exponential Backoff Retry Helper. Only retries transient failures (5xx / rate limit); a hard
+// 4xx (bad request, invalid token) throws a classified MetaGraphError immediately instead of
+// burning three attempts. Honors Retry-After on rate-limit responses when present.
 async function fetchWithRetry(url: string, options: RequestInit, retries = 3, delay = 500): Promise<Response> {
   for (let i = 0; i < retries; i++) {
+    let backoffMs = delay * Math.pow(2, i);
     try {
-      logger.info(`Sending Request: ${options.method || "GET"} ${url} (Attempt ${i + 1}/${retries})`);
+      logger.info(`Sending Request: ${options.method || "GET"} ${url.split("?")[0]} (Attempt ${i + 1}/${retries})`);
       const res = await fetch(url, options);
       if (res.ok) {
         return res;
       }
-      logger.warn(`Meta Ads API returned status ${res.status}. Attempt ${i + 1} failed.`);
-      if (i === retries - 1) {
-        throw new Error(`Meta API returned ${res.status}: ${await res.text()}`);
+      const bodyText = await res.text().catch(() => "");
+      const classified = classifyMetaError(res.status, bodyText);
+      // Fail fast on non-retryable client errors — don't waste retries on a 400/401/403.
+      if (!isRetryableMetaError(classified)) {
+        logger.warn(`Meta Ads API ${res.status} (non-retryable${classified.code != null ? ` code ${classified.code}` : ""}) — not retrying: ${classified.message}`);
+        throw classified;
+      }
+      logger.warn(`Meta Ads API returned status ${res.status} (retryable). Attempt ${i + 1} failed.`);
+      if (i === retries - 1) throw classified;
+      // On a rate limit, prefer the server's Retry-After (seconds) over our own backoff.
+      const retryAfter = typeof (res.headers as any)?.get === "function" ? (res.headers as any).get("retry-after") : null;
+      if (classified.isRateLimit && retryAfter && !Number.isNaN(Number(retryAfter))) {
+        backoffMs = Math.min(Number(retryAfter) * 1000, MAX_RETRY_DELAY_MS);
       }
     } catch (err) {
+      // A classified, non-retryable Meta error must propagate immediately (don't fall into the
+      // backoff/retry loop below — that's only for transient network/5xx failures).
+      if (err instanceof MetaGraphError && !isRetryableMetaError(err)) throw err;
       logger.error(`Network Exception on Meta Ads fetch attempt ${i + 1}`, err);
       if (i === retries - 1) throw err;
     }
-    await new Promise(r => setTimeout(r, delay * Math.pow(2, i)));
+    await new Promise(r => setTimeout(r, backoffMs));
   }
   throw new Error("Meta Ads HTTP request failed after maximum retries");
 }

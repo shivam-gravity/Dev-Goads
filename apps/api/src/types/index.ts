@@ -228,6 +228,10 @@ export interface CampaignVariant {
   landingPageUrl?: string;
   /** Ad Set-level external id for hierarchy-launched variants (see metaAdapter.createAdSetContainer) — budget lives here, not on the leaf ad. */
   adSetExternalId?: string;
+  /** Human-readable reason set when status === "failed" — the network's own end-user error message
+   * (e.g. Meta's error_user_msg) so the UI can show WHY a variant failed instead of a bare "Failed".
+   * Only present on failure; cleared implicitly when a variant is (re)launched successfully. */
+  failureReason?: string;
 }
 
 export interface CreativeAssetRef {
