@@ -364,21 +364,38 @@ export default function Drafts({ businessId }: { businessId: string }) {
     });
   }
 
-  async function handlePublish(id: string) {
+  async function handlePublish(draft: Draft) {
     setError(null);
     try {
-      await api.publishDraft(id);
-      setDrafts(prev => prev.map(d => (d.id === id ? { ...d, status: "published" } : d)));
+      if (draft.origin === "campaign") {
+        // A draft-status Campaign (Generator flow) — publishing means launching the real
+        // Meta/Google hierarchy (all PAUSED), not flipping a Draft-table row's status.
+        const campaignId = (draft.data as Record<string, unknown>)?.campaignId as string | undefined;
+        if (!campaignId) { setError("This campaign draft has no linked campaign id."); return; }
+        await api.launchCampaign(campaignId, wsId);
+        // Launched campaigns leave the "draft" set, so drop it from the unpublished list.
+        setDrafts(prev => prev.filter(d => d.id !== draft.id));
+      } else {
+        await api.publishDraft(draft.id);
+        setDrafts(prev => prev.map(d => (d.id === draft.id ? { ...d, status: "published" } : d)));
+      }
     } catch (err) {
-      setError("Failed to publish draft.");
+      setError(err instanceof Error ? err.message : "Failed to publish draft.");
     }
   }
 
-  async function handleDelete(id: string) {
+  async function handleDelete(draft: Draft) {
+    // Campaign-origin drafts live in the Campaign table (no delete endpoint) — offer "open" instead
+    // of a delete that would 404. Only Draft-table rows are deletable here.
+    if (draft.origin === "campaign") {
+      const campaignId = (draft.data as Record<string, unknown>)?.campaignId as string | undefined;
+      if (campaignId) navigate(`/campaigns/${campaignId}`);
+      return;
+    }
     if (!confirm("Are you sure you want to delete this draft?")) return;
     try {
-      await api.deleteDraft(id);
-      setDrafts(prev => prev.filter(d => d.id !== id));
+      await api.deleteDraft(draft.id);
+      setDrafts(prev => prev.filter(d => d.id !== draft.id));
     } catch (err) {
       setError("Failed to delete draft.");
     }
@@ -512,8 +529,10 @@ export default function Drafts({ businessId }: { businessId: string }) {
                           <td>{new Date(d.updatedAt).toLocaleString()}</td>
                           <td className="dap-row-actions" onClick={(e) => e.stopPropagation()}>
                             <button type="button" className="dap-row-btn" onClick={() => handleEdit(d)}>Edit</button>
-                            <button type="button" className="dap-row-btn" onClick={() => handlePublish(d.id)}>Publish</button>
-                            <button type="button" className="dap-row-btn dap-row-btn-danger" onClick={() => handleDelete(d.id)}>Delete</button>
+                            <button type="button" className="dap-row-btn" onClick={() => handlePublish(d)}>Publish</button>
+                            <button type="button" className="dap-row-btn dap-row-btn-danger" onClick={() => handleDelete(d)}>
+                              {d.origin === "campaign" ? "Open" : "Delete"}
+                            </button>
                           </td>
                         </tr>
                         {isExpanded && (

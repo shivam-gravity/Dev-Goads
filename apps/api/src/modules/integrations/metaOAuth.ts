@@ -188,6 +188,58 @@ export async function listAdAccounts(workspaceId: string): Promise<{ id: string;
   }));
 }
 
+export interface MetaAccountFunding {
+  adAccountId: string;
+  currency: string;
+  /** Meta reports money amounts as integer strings in the account's minor unit (e.g. cents). We
+   * pass them straight through as numbers-in-minor-units; the UI formats with the currency. */
+  balanceMinor: number;
+  amountSpentMinor: number;
+  spendCapMinor: number | null;
+  accountStatus?: string;
+  /** Human label of the payment method backing the account, e.g. "VISA ****1234" / "PayPal". */
+  fundingSource?: string;
+  /** Deep link into Meta's own billing UI for this account — the same "Add Funds" target the CRM uses. */
+  billingUrl: string;
+}
+
+/**
+ * Fetch the connected Meta ad account's real funding/billing snapshot (balance, lifetime spend,
+ * spend cap, currency, payment method) straight from the Graph API — the numbers the Manage Funds
+ * panel shows. Meta owns the actual money (this app never holds funds), so this is read-only; the
+ * "Add Funds" action deep-links to Meta's billing UI (billingUrl). Best-effort: returns null on any
+ * error (no account connected, token expired, field not permissioned) so the caller degrades to the
+ * internal wallet ledger rather than erroring the page.
+ */
+export async function getAdAccountFunding(workspaceId: string): Promise<MetaAccountFunding | null> {
+  const credentials = await getMetaCredentials(workspaceId);
+  if (!credentials?.adAccountId) return null;
+  const bare = String(credentials.adAccountId).replace(/^act_/, "");
+  try {
+    const json = await graphGet(`/act_${bare}`, {
+      fields: "currency,balance,amount_spent,spend_cap,account_status,funding_source_details",
+      access_token: credentials.accessToken,
+    });
+    const num = (v: unknown): number => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const fs = json?.funding_source_details;
+    return {
+      adAccountId: bare,
+      currency: typeof json?.currency === "string" ? json.currency : credentials.currency ?? "USD",
+      balanceMinor: num(json?.balance),
+      amountSpentMinor: num(json?.amount_spent),
+      spendCapMinor: json?.spend_cap != null && num(json.spend_cap) > 0 ? num(json.spend_cap) : null,
+      accountStatus: ACCOUNT_STATUS_LABELS[json?.account_status] ?? undefined,
+      fundingSource: typeof fs?.display_string === "string" ? fs.display_string : undefined,
+      billingUrl: `https://adsmanager.facebook.com/adsmanager/billing/?act=${bare}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fetch a specific ad account's billing currency straight from Meta, given a raw token + account id
  * (i.e. before any Integration row exists). Used by the CRM SSO handoff, which receives an

@@ -58,7 +58,8 @@ import { listNotifications, markRead, markAllRead, unreadCount, createNotificati
 import { listAssets, createAsset, deleteAsset, updateAssetTags } from "../modules/assets/assetService.js";
 import { listInsights, dismissInsight, generateInsights, recordOptimizationInsights } from "../modules/insights/insightService.js";
 import { getOrCreateIntegrations, connectIntegration, disconnectIntegration, updateIntegrationSettings, getMetaCredentials, sanitizeIntegration, setMetaManualConnection, setGoogleManualConnection } from "../modules/integrations/integrationService.js";
-import { listAdAccounts as listMetaAdAccountsGraph, listPages as listMetaPagesGraph, listInstagramAccounts as listMetaInstagramAccountsGraph, listPixels as listMetaPixelsGraph } from "../modules/integrations/metaOAuth.js";
+import { listAdAccounts as listMetaAdAccountsGraph, listPages as listMetaPagesGraph, listInstagramAccounts as listMetaInstagramAccountsGraph, listPixels as listMetaPixelsGraph, getAdAccountFunding } from "../modules/integrations/metaOAuth.js";
+import { getWalletBalance, listWalletTransactions } from "../modules/billing/walletService.js";
 import { confirmPixelLive } from "../modules/integrations/metaPixelHelper.js";
 import { listAccessibleCustomers as listGoogleCustomersApi, listConversionActions as listGoogleConversionActionsApi, getGoogleAdsCredentials } from "../modules/integrations/googleOAuth.js";
 import { getProductCatalog } from "../modules/integrations/productCatalogService.js";
@@ -1809,6 +1810,20 @@ router.put("/workspaces/:id/payment-method", requireWorkspaceMember("params", "i
   const validationError = validatePaymentMethodInput(parsed.data);
   if (validationError) return res.status(400).json({ error: validationError });
   res.json(await setPaymentMethod(req.params.id, parsed.data));
+}));
+
+// Manage Funds — the Ads Manager's funds panel. Returns BOTH the connected Meta ad account's real
+// billing snapshot (balance/spend/cap/funding source + a deep link to Meta's own billing UI, since
+// Meta owns the actual money) AND this workspace's internal wallet ledger (balance + transactions).
+// Both are best-effort: `meta` is null when no account is connected / token expired, so the panel
+// still renders the wallet side. No new spend authority — read-only + a deep link.
+router.get("/workspaces/:id/funds", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
+  const [meta, wallet, transactions] = await Promise.all([
+    getAdAccountFunding(req.params.id).catch(() => null),
+    getWalletBalance(req.params.id).catch(() => null),
+    listWalletTransactions(req.params.id, 25).catch(() => []),
+  ]);
+  res.json({ meta, wallet, transactions });
 }));
 
 /* ═══════════════════════════════════════════════

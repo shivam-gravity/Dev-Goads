@@ -4,6 +4,7 @@ import { api, Campaign, AdSet, Ad, AdInsightsResponse, Insight, LiveInsights, Ne
 import { useAuth } from "../context/AuthContext.js";
 import StatusBadge from "../components/StatusBadge.js";
 import Reveal from "../components/Reveal.js";
+import ManageFunds from "../components/ManageFunds.js";
 
 type Mode = "campaigns" | "adsets" | "ads";
 type Network = "meta" | "google" | "tiktok";
@@ -95,7 +96,7 @@ function PagerCard({
 }
 
 export default function AdsManager({ businessId }: { businessId: string }) {
-  const { user } = useAuth();
+  const { user, workspaceId } = useAuth();
   const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
   const [mode, setMode] = useState<Mode>("campaigns");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -474,6 +475,9 @@ export default function AdsManager({ businessId }: { businessId: string }) {
           <span className="polluxa-breadcrumb-current">Ads Manager</span>
         </div>
         <div className="polluxa-header-right">
+          {/* Manage Funds — the connected Meta ad account's real balance + wallet ledger, mirroring
+              the CRM's header WalletWidget. Meta-scoped (funds are per Meta ad account). */}
+          {network === "meta" && workspaceId && <ManageFunds workspaceId={workspaceId} />}
           <div className="header-meta-item">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" />
