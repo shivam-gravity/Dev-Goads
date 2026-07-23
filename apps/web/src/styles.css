@@ -68,7 +68,11 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  overflow-x: hidden;
+  /* `overflow-x: clip` (not `hidden`): `hidden` forces overflow-y to compute to `auto`, turning
+     <body> into a scroll container that breaks `position: sticky` on descendants (the sticky
+     resubmit header scrolled away instead of pinning). `clip` still prevents horizontal scroll
+     but leaves overflow-y `visible`, so the window is the scroller and sticky works. */
+  overflow-x: clip;
   max-width: 100vw;
 }
 
@@ -6732,6 +6736,40 @@ td {
   display: flex;
   align-items: center;
   gap: 20px;
+}
+
+/* ─── Ads Manager campaign-scope banner (deep-linked from Campaigns "View") ─── */
+.polluxa-scope-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: var(--surface-tint);
+  border: 1px solid var(--accent-light);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--ink);
+}
+.polluxa-scope-banner-text strong {
+  color: var(--accent-dark);
+}
+.polluxa-scope-banner-clear {
+  flex-shrink: 0;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent-dark);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.polluxa-scope-banner-clear:hover {
+  border-color: var(--accent);
 }
 
 /* ─── Manage Funds (header wallet chip + panel; mirrors the CRM WalletWidget) ─── */

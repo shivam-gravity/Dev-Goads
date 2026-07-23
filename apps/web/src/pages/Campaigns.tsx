@@ -162,7 +162,7 @@ export default function Campaigns({ businessId }: { businessId: string }) {
                 {filtered.map((c) => (
                   <tr key={c.id} className="campaign-table-row">
                     <td>
-                      <Link to={`/campaigns/${c.id}`} className="campaign-table-name">
+                      <Link to={`/manager?campaign=${c.id}&mode=adsets`} className="campaign-table-name">
                         {c.name}
                       </Link>
                       <span className="campaign-table-date">
@@ -187,7 +187,7 @@ export default function Campaigns({ businessId }: { businessId: string }) {
                     <td>{totalConversions(c)}</td>
                     <td>
                       <div className="campaign-table-actions">
-                        <Link to={`/campaigns/${c.id}`} className="btn btn-sm btn-secondary">
+                        <Link to={`/manager?campaign=${c.id}&mode=adsets`} className="btn btn-sm btn-secondary">
                           View
                         </Link>
                         {(c.status === "draft") && (

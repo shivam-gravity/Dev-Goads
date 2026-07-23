@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, Campaign, AdSet, Ad, AdInsightsResponse, Insight, LiveInsights, NetworkSlice } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.js";
 import StatusBadge from "../components/StatusBadge.js";
@@ -98,7 +98,13 @@ function PagerCard({
 export default function AdsManager({ businessId }: { businessId: string }) {
   const { user, workspaceId } = useAuth();
   const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
-  const [mode, setMode] = useState<Mode>("campaigns");
+  // Deep-link params from the Campaigns "View" button: ?campaign=<id>&mode=adsets scopes the
+  // hub to a single campaign's ad sets / ads (so "View" opens that campaign's sets here instead
+  // of the old standalone detail page). Cleared via the scope banner's "×".
+  const [searchParams, setSearchParams] = useSearchParams();
+  const scopedCampaignId = searchParams.get("campaign");
+  const urlMode = searchParams.get("mode");
+  const [mode, setMode] = useState<Mode>(urlMode === "adsets" || urlMode === "ads" ? urlMode : "campaigns");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [adSets, setAdSets] = useState<AdSet[]>([]);
   const [ads, setAds] = useState<Ad[]>([]);
@@ -362,6 +368,20 @@ export default function AdsManager({ businessId }: { businessId: string }) {
   const campaignById = useMemo(() => Object.fromEntries(campaigns.map((c) => [c.id, c])), [campaigns]);
   const adSetById = useMemo(() => Object.fromEntries(adSets.map((s) => [s.id, s])), [adSets]);
 
+  // When deep-linked to a specific campaign, switch the network tab to one that campaign actually
+  // runs on — otherwise a Google-only campaign opened via "View" would show no ad sets under the
+  // default Meta tab. Runs once the campaign is loaded; prefers Meta when the campaign spans both.
+  useEffect(() => {
+    if (!scopedCampaignId) return;
+    const c = campaigns.find((x) => x.id === scopedCampaignId);
+    if (!c) return;
+    const nets = c.networks?.length ? c.networks : ["meta"];
+    if (!nets.includes(network as "meta" | "google")) {
+      setNetwork(nets.includes("meta") ? "meta" : (nets[0] as Network));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopedCampaignId, campaigns]);
+
   // The active network tab scopes the tables (Meta tab shows only Meta campaigns, etc.). A campaign
   // belongs to the tab's network if its `networks` array includes it; ad sets/ads inherit the
   // network of their parent campaign. Campaigns predating multi-network tagging (empty `networks`)
@@ -384,16 +404,29 @@ export default function AdsManager({ businessId }: { businessId: string }) {
     return slice && "dailyBudgetCents" in slice && slice.dailyBudgetCents != null ? slice.dailyBudgetCents : c.dailyBudgetCents;
   };
 
+  // When deep-linked from a campaign's "View", scope ad sets/ads to that campaign only. Ads belong
+  // to the campaign via their parent ad set. Campaigns list is unaffected (scope only narrows the
+  // hierarchy views the View button opens into).
+  const scopedCampaign = scopedCampaignId ? campaignById[scopedCampaignId] : undefined;
+  const adSetInScope = (s: AdSet) => !scopedCampaignId || s.campaignId === scopedCampaignId;
+  const adInScope = (a: Ad) => {
+    if (!scopedCampaignId) return true;
+    const parentSet = adSetById[a.adSetId];
+    return parentSet ? parentSet.campaignId === scopedCampaignId : false;
+  };
+
   const filteredCampaigns = campaigns
     .filter(campaignOnNetwork)
     .filter((c) => c.name.toLowerCase().includes(searchTerm.toLowerCase()))
     .filter((c) => statusFilter === "all" || c.status === statusFilter);
   const filteredAdSets = adSets
     .filter(adSetOnNetwork)
+    .filter(adSetInScope)
     .filter((s) => s.name.toLowerCase().includes(searchTerm.toLowerCase()))
     .filter((s) => statusFilter === "all" || s.status === statusFilter);
   const filteredAds = ads
     .filter(adOnNetwork)
+    .filter(adInScope)
     .filter((a) => a.name.toLowerCase().includes(searchTerm.toLowerCase()))
     .filter((a) => statusFilter === "all" || a.status === statusFilter);
 
@@ -708,6 +741,20 @@ export default function AdsManager({ businessId }: { businessId: string }) {
 
       {/* Table section */}
       <div className="polluxa-table-section">
+        {scopedCampaignId && (
+          <div className="polluxa-scope-banner">
+            <span className="polluxa-scope-banner-text">
+              Viewing <strong>{scopedCampaign?.name ?? "campaign"}</strong> — its ad sets and ads
+            </span>
+            <button
+              type="button"
+              className="polluxa-scope-banner-clear"
+              onClick={() => { setSearchParams({}); setMode("campaigns"); }}
+            >
+              ✕ Show all campaigns
+            </button>
+          </div>
+        )}
         <div className="polluxa-table-tabs">
           <button className={`polluxa-table-tab ${mode === "campaigns" ? "active" : ""}`} onClick={() => { setMode("campaigns"); setSelectedIds([]); }}>
             📁 Campaign
