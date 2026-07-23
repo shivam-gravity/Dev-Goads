@@ -1,4 +1,5 @@
 import { redisClient } from "./redisClient.js";
+import { emitCampaignProgress } from "./realtimeBridge.js";
 import { logger } from "../modules/logger/logger.js";
 
 // Long enough to cover a slow end-to-end run (research + agents + build has taken up to a
@@ -24,6 +25,9 @@ export async function recordProgressStep(prefix: string, jobId: string, stepName
     const key = keyFor(prefix, jobId);
     await redisClient.rpush(key, stepName);
     await redisClient.expire(key, PROGRESS_TTL_SECONDS);
+    // Push real-time progress to connected WebSocket clients instantly
+    const currentSteps = await redisClient.llen(key);
+    void emitCampaignProgress(jobId, stepName, prefix, currentSteps);
   } catch (err) {
     logger.warn(`recordProgressStep: failed to record "${stepName}" for ${prefix}:${jobId} — live progress UI will just show fewer steps`, err);
   }

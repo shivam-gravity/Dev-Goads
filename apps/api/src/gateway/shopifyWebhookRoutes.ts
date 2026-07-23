@@ -60,6 +60,45 @@ shopifyWebhookRoutes.post(
 );
 
 /**
+ * orders/paid — real e-commerce revenue ingestion for true ROAS.
+ *
+ * STUB: signature verification and shop→workspace resolution are wired, but the revenue is NOT
+ * yet attributed to a campaign or persisted, so it does not affect ROAS today. To finish:
+ *
+ * TODO(revenue-attribution): map each paid order's total to the campaign that drove it, then add
+ * its value to that campaign's revenueCents so ROAS (revenue/spend) reflects real store sales
+ * rather than only ad-network-reported conversion value. Concretely:
+ *   1. Read the order total from the webhook body — `current_total_price` (post-refund) or
+ *      `total_price`, in the shop's currency; convert to cents.
+ *   2. Attribute it to a campaign. Shopify orders carry no ad campaign id, so attribution needs
+ *      one of: UTM params captured at checkout (note_attributes / landing_site with utm_campaign),
+ *      a landing-page → campaign map (Campaign.variants[].landingPageUrl), or Shopify's own
+ *      marketing/UTM fields. Fall back to unattributed if none match.
+ *   3. Persist as a revenue metric for that campaign/date via analyticsStore.recordMetric (a
+ *      PerformanceMetric row with only revenueCents populated, network e.g. "shopify"), so it
+ *      flows through normalizePerformance's revenueCents sum like ad-network revenue does.
+ * Until then this acknowledges the delivery (200) so Shopify doesn't disable the subscription.
+ */
+shopifyWebhookRoutes.post(
+  "/orders-paid",
+  asyncHandler(async (req: RequestWithRawBody, res) => {
+    if (!isValidShopifyWebhookSignature(req)) return res.sendStatus(401);
+
+    const shopDomain = req.header("x-shopify-shop-domain");
+    const workspaceId = shopDomain ? await workspaceIdForShop(shopDomain) : null;
+    const body = req.body as { total_price?: string; current_total_price?: string; currency?: string };
+    const orderTotalCents = Math.round(Number(body?.current_total_price ?? body?.total_price ?? 0) * 100);
+
+    // Not yet attributed/persisted — see TODO(revenue-attribution) above.
+    logger.info(
+      `Shopify orders/paid received (workspace=${workspaceId ?? "unknown"}, shop=${shopDomain}): ` +
+        `order total ${orderTotalCents} cents ${body?.currency ?? ""} — revenue attribution not yet implemented, not counted toward ROAS`,
+    );
+    res.sendStatus(200);
+  }),
+);
+
+/**
  * The 3 GDPR-mandatory webhooks every public Shopify app must implement for App Store
  * review — customers/data_request and customers/redact concern one specific customer's
  * data within a shop (this app stores no per-customer PII beyond what's already product

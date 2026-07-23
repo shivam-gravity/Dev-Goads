@@ -29,7 +29,7 @@ const DEFAULT_AUTHORITY = 0.5;
 const LOW_GROUNDING_CONFIDENCE_THRESHOLD = 0.4;
 
 export interface FusionConflict {
-  kind: "low-grounding-despite-success" | "market-competitor-intensity-mismatch" | "competitor-profile-drift" | "low-grounding-competitor-profile";
+  kind: "low-grounding-despite-success" | "market-competitor-intensity-mismatch" | "competitor-profile-drift" | "low-grounding-competitor-profile" | "identity-vertical-mismatch";
   description: string;
   severity: "low" | "medium" | "high";
   sources: string[];
@@ -70,6 +70,46 @@ function bucketIntensity(text: string): IntensityBucket {
   return "medium";
 }
 
+// Generic/filler tokens carrying no vertical signal — stripped before comparing the website's
+// self-description against the market vertical, so a shared "platform"/"solution"/"business"
+// can't fake overlap between genuinely-different industries. Same spirit as providers/support.ts's
+// NAME_NOISE_WORDS / CITATION_KEYWORD_FILLER_WORDS (kept as its own copy — this file has no reason
+// to depend on the providers layer, and the two lists serve different call sites).
+const VERTICAL_STOPWORDS = new Set([
+  "the", "and", "for", "with", "you", "your", "our", "their", "this", "that", "from", "into", "are",
+  "business", "company", "companies", "platform", "solution", "solutions", "software", "service",
+  "services", "product", "products", "tool", "tools", "system", "systems", "market", "markets",
+  "industry", "customer", "customers", "team", "teams", "manage", "management", "based", "using",
+  "help", "helps", "make", "made", "more", "best", "leading", "trusted", "powered", "driven",
+  "global", "world", "data", "growth", "demand", "trends", "size", "billion", "million", "cagr",
+]);
+
+/** Significant vertical tokens from free text: lowercase, split on non-alphanumerics, drop
+ * stopwords/filler and anything shorter than 4 chars. Deliberately lexical (no LLM) — cheap and
+ * good enough to catch a genuinely-disjoint vertical (site says "crm/erp/plm", market says
+ * "medical/surgical") without a model call. */
+function verticalTokens(text: string): Set<string> {
+  const tokens = text.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 4 && !VERTICAL_STOPWORDS.has(t));
+  return new Set(tokens);
+}
+
+// Directional overlap at/below this (fraction of the MARKET's vocabulary also present in the
+// site's own words) reads as "the market vertical isn't grounded in what the site actually says."
+// Deliberately near-zero: a legitimate market summary about the same business almost always echoes
+// SOME of its product/category nouns, so only a pathological ~disjoint result trips this. A false
+// positive here would wrongly flag good market data, so the bar errs hard toward under-flagging —
+// a deferred LLM semantic layer is what would catch same-vertical-different-words cases this misses.
+const VERTICAL_OVERLAP_MISMATCH_THRESHOLD = 0.05;
+// Both token sets must clear this before the ratio is even computed — a sparse/degraded website
+// (crawl outage → empty title/excerpt) or a stub market must never trigger a mismatch. No
+// evidence is not a conflict.
+const VERTICAL_MIN_TOKENS = 8;
+
+// Market fallback sentinels (mirror of research/providers/support.ts's NO_SEARCH/NO_CITATIONS
+// dataSource strings) — a market result already labeled "no live data" is handled by the
+// low-grounding conflict above; don't double-flag it as an identity mismatch too.
+const MARKET_FALLBACK_DATASOURCE = /AI estimate/i;
+
 function detectConflicts(results: ProviderResult<unknown>[]): FusionConflict[] {
   const conflicts: FusionConflict[] = [];
   const byName = new Map(results.map((r) => [r.provider, r]));
@@ -100,6 +140,34 @@ function detectConflicts(results: ProviderResult<unknown>[]): FusionConflict[] {
         severity: "high",
         sources: ["market", "competitor"],
       });
+    }
+  }
+
+  // Identity-vertical mismatch: the website (the business's OWN words, high authority) and the
+  // market provider's vertical should share vocabulary. When they're lexically ~disjoint — the
+  // site says "CRM/ERP/PLM/enterprise" while market research says "medical/FDA/surgical/
+  // telemedicine" — the market field was almost certainly confabulated off a missing identity
+  // anchor (the 07-16 polluxa "medical device" hallucination). Pure lexical check, no LLM;
+  // deliberately conservative (see thresholds) since a false positive would flag good market data.
+  const website = byName.get("website");
+  const websiteData = website?.data as { title?: string; description?: string; excerpt?: string } | null;
+  const marketData = market?.data as { tam?: string; marketSize?: string; competitionLevel?: string; trends?: string[]; dataSource?: string } | null;
+  if (websiteData && marketData && !MARKET_FALLBACK_DATASOURCE.test(marketData.dataSource ?? "")) {
+    const websiteTokens = verticalTokens([websiteData.title, websiteData.description, websiteData.excerpt].filter(Boolean).join(" "));
+    const marketTokens = verticalTokens([marketData.tam, marketData.marketSize, marketData.competitionLevel, ...(marketData.trends ?? [])].filter(Boolean).join(" "));
+    // Min-evidence gate: only compare when BOTH sides carry enough signal to trust the ratio.
+    if (websiteTokens.size >= VERTICAL_MIN_TOKENS && marketTokens.size >= VERTICAL_MIN_TOKENS) {
+      let shared = 0;
+      for (const t of marketTokens) if (websiteTokens.has(t)) shared++;
+      const overlap = shared / marketTokens.size; // directional: fraction of MARKET vocab grounded in the site
+      if (overlap <= VERTICAL_OVERLAP_MISMATCH_THRESHOLD) {
+        conflicts.push({
+          kind: "identity-vertical-mismatch",
+          description: `The website's own description and the market research describe different industries — their vertical vocabulary is nearly disjoint (overlap ${(overlap * 100).toFixed(0)}%). The market field may be about the wrong industry and should be reviewed before use.`,
+          severity: "high",
+          sources: ["website", "market"],
+        });
+      }
     }
   }
 

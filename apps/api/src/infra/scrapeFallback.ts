@@ -1,48 +1,45 @@
 import { logger } from "../modules/logger/logger.js";
-import {
-  firecrawlCrawl,
-  firecrawlMap,
-  firecrawlScrape,
-  type FirecrawlCrawlPage,
-  type FirecrawlMapLink,
-  type FirecrawlOutage,
-  type FirecrawlScrapeData,
-  type FirecrawlScrapeFormat,
-} from "./firecrawlClient.js";
+import { crawl4aiCrawl, crawl4aiMap, crawl4aiScrape } from "./crawl4aiClient.js";
+import type { CrawlPage, MapLink, ScrapeData, ScrapeFormat, ScrapeOutage } from "./scrapeTypes.js";
 import { discoverSitemapPages, scrapeUrl, SCREENSHOT_TIMEOUT_MS } from "../modules/onboarding/scraper.js";
 
 /**
- * In-house-first fallback for Firecrawl's map/scrape/crawl capabilities — tries a
- * Playwright-backed (scraper-service) or sitemap-based path first, since a successful
- * in-house attempt costs zero Firecrawl credits (the actual constraint driving this: the
- * hosted free tier caps at 1,000 credits/month). Only falls through to the real Firecrawl
- * API when the in-house attempt fails, times out, or produces content that looks blocked —
- * Firecrawl (with Fire-engine) remains the safety net for pages the in-house path can't
- * handle. `search` is deliberately NOT covered here — see ReviewsProvider/SocialMediaProvider
- * for that capability's existing webSearchThenStructure-first fallback.
+ * Dual-source web content extraction: the Playwright-backed in-house scraper (scraper-service)
+ * and the self-hosted crawl4ai service run CONCURRENTLY for every map/scrape/crawl, and their
+ * results are merged. This replaces the previous "in-house first, Firecrawl only on failure"
+ * fallback chain — both were rebuilt because (a) Firecrawl was removed in favor of self-hosted
+ * crawl4ai (no per-call credit budget, so there's no cost reason to hold one back), and (b)
+ * running them together means each covers the other's blind spots on the same request rather
+ * than only after a detectable failure: crawl4ai's headless render handles JS-heavy pages the
+ * in-house sitemap/HTTP path misses, while the in-house path handles product/JSON-LD shapes
+ * and screenshots crawl4ai may not populate. `search` is deliberately NOT covered here — that
+ * capability is SearXNG (searchRouter.ts).
  */
 
-export type ScrapeSource = "inhouse" | "firecrawl";
+export type ScrapeSource = "inhouse" | "crawl4ai" | "merged" | "none";
 
-// Kill switch — set SCRAPE_FALLBACK_ENABLED=false to skip every in-house attempt below and
-// call Firecrawl directly, restoring pre-fallback behavior with no code change if the
-// in-house path proves unreliable in production.
-const FALLBACK_ENABLED = process.env.SCRAPE_FALLBACK_ENABLED !== "false";
+// Kill switch — set SCRAPE_INHOUSE_ENABLED=false to skip the in-house attempt and use only
+// crawl4ai (e.g. if the scraper-service is down), with no code change. crawl4ai can't be
+// disabled the same way; if its URL is unset it simply returns a no-key outage and the merge
+// falls back to whatever the in-house path produced.
+const INHOUSE_ENABLED = process.env.SCRAPE_INHOUSE_ENABLED !== "false" && process.env.SCRAPE_FALLBACK_ENABLED !== "false";
 
-// A third of the research orchestrator's 45s per-provider ceiling (PROVIDER_TIMEOUT_MS in
-// ResearchOrchestrator.ts) — leaves the remaining ~30s comfortably enough for a full
-// Firecrawl round-trip within that same shared window (which today runs standalone in the
-// full 45s), so a slow/stalled in-house attempt can never crowd out its own fallback.
-const INHOUSE_ATTEMPT_TIMEOUT_MS = 15_000;
+// Both sources race under this same window in parallel, so the wall-clock cost of running both
+// is the SLOWER of the two, not their sum. Env-tunable and raised from the old 15s: crawl4ai's
+// FIRST crawl after idle is a cold start (it spins up a headless browser context) and on a
+// JS-heavy SPA that legitimately takes ~15-16s — right at the old ceiling, so it aborted and the
+// prefetch got zero content → zero facts → every provider fell back to (flaky) web search and the
+// CORE providers timed out to 0. Warm, the same crawl returns in ~4s. 30s clears the cold start
+// with margin; the in-house path (fast when it works) still returns early, so this only extends
+// the wait when crawl4ai is the ONLY source that can render the page (exactly the SPA case).
+const ATTEMPT_TIMEOUT_MS = Number(process.env.SCRAPE_ATTEMPT_TIMEOUT_MS ?? 30_000);
 
 const SCRAPER_SERVICE_URL = process.env.SCRAPER_SERVICE_URL ?? "http://localhost:4003";
 const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY;
 
 // Signals a scrape landed on a bot-block/CAPTCHA page rather than real content — a real
-// HTTP 200 with garbage content would otherwise be silently accepted as "success" instead
-// of correctly falling through to Firecrawl. The whole in-house-first bet is that most
-// research targets aren't heavily bot-protected; this check is what makes that bet
-// self-correcting instead of a blind spot.
+// HTTP 200 with garbage content would otherwise be silently accepted as "success". With two
+// sources running, this decides which one's content is trustworthy when both return something.
 const BLOCK_PAGE_SIGNAL = /captcha|access denied|are you a robot|unusual traffic/i;
 const MIN_USABLE_TEXT_LENGTH = 200;
 
@@ -52,14 +49,12 @@ function looksBlocked(statusCode: number | undefined, text: string | null | unde
   return BLOCK_PAGE_SIGNAL.test(text);
 }
 
-/** Races `promise` against a plain timer — for wrapping in-house calls (discoverSitemapPages,
- * scrapeUrl) that don't accept an AbortSignal of their own. This stops WAITING at `ms`, it
- * doesn't necessarily kill the underlying operation — an honest "soft timeout," which is
- * enough here: the only requirement is that a slow in-house attempt can't crowd out its own
- * Firecrawl fallback within the shared 45s provider ceiling. */
+/** Races `promise` against a plain timer — for wrapping calls (discoverSitemapPages, scrapeUrl,
+ * crawl4ai POSTs) so one slow source can't hold the whole parallel merge past the provider
+ * ceiling. Soft timeout: stops WAITING, doesn't necessarily kill the underlying work. */
 function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`In-house attempt timed out after ${ms}ms`)), ms);
+    const timer = setTimeout(() => reject(new Error(`Attempt timed out after ${ms}ms`)), ms);
     promise.then(
       (value) => { clearTimeout(timer); resolve(value); },
       (err) => { clearTimeout(timer); reject(err); }
@@ -67,21 +62,32 @@ function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/** Runs a thunk under the attempt timeout, converting any throw/timeout into null so a failed
+ * source never rejects the Promise.all — the merge just sees "this source produced nothing." */
+async function settle<T>(label: string, thunk: () => Promise<T>): Promise<T | null> {
+  try {
+    return await raceWithTimeout(thunk(), ATTEMPT_TIMEOUT_MS);
+  } catch (err) {
+    logger.warn(`scrapeFallback: ${label} failed or timed out`, err);
+    return null;
+  }
+}
+
 interface ResearchScrapeResponse {
   markdown?: string;
   html?: string;
   links?: string[];
   screenshot?: string;
-  product?: FirecrawlScrapeData["product"];
+  product?: ScrapeData["product"];
   metadata?: { title?: string; description?: string; sourceURL?: string; statusCode?: number };
 }
 
-/** Direct fetch to scraper-service's /research/scrape — mirrors the existing
- * onboarding/scraper.ts captureScreenshot pattern (AbortController timeout,
- * X-Internal-Service-Key header, catch-and-return-null, never throws). */
+/** Direct fetch to scraper-service's /research/scrape — mirrors onboarding/scraper.ts's
+ * captureScreenshot pattern (AbortController timeout, X-Internal-Service-Key header,
+ * catch-and-return-null, never throws). */
 async function fetchResearchScrape(url: string, wantProduct: boolean): Promise<ResearchScrapeResponse | null> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), INHOUSE_ATTEMPT_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS);
   try {
     const res = await fetch(`${SCRAPER_SERVICE_URL}/research/scrape`, {
       method: "POST",
@@ -95,14 +101,14 @@ async function fetchResearchScrape(url: string, wantProduct: boolean): Promise<R
     if (!res.ok) return null;
     return (await res.json()) as ResearchScrapeResponse;
   } catch (err) {
-    logger.warn(`scrapeFallback: in-house scrape unreachable or failed for ${url} — will fall through to Firecrawl`, err);
+    logger.warn(`scrapeFallback: in-house scrape unreachable or failed for ${url}`, err);
     return null;
   } finally {
     clearTimeout(timer);
   }
 }
 
-function isUsableScrapeData(data: FirecrawlScrapeData | null, formats: FirecrawlScrapeFormat[]): boolean {
+function isUsableScrapeData(data: ScrapeData | null, formats: ScrapeFormat[]): boolean {
   if (!data) return false;
   if (looksBlocked(data.metadata?.statusCode, data.markdown)) return false;
   return formats.some((format) => {
@@ -118,132 +124,203 @@ function isUsableScrapeData(data: FirecrawlScrapeData | null, formats: Firecrawl
   });
 }
 
+/* ─────────────────────────────  map  ───────────────────────────── */
+
 export interface MapFallbackResult {
-  links: FirecrawlMapLink[];
-  outage: FirecrawlOutage | null;
+  links: MapLink[];
+  outage: ScrapeOutage | null;
   source: ScrapeSource;
 }
 
 export async function mapUrlWithFallback(url: string, opts?: { limit?: number }): Promise<MapFallbackResult> {
-  if (FALLBACK_ENABLED) {
-    try {
-      const links = await raceWithTimeout(inHouseMap(url, opts?.limit ?? 100), INHOUSE_ATTEMPT_TIMEOUT_MS);
-      if (links.length > 0) return { links, outage: null, source: "inhouse" };
-    } catch (err) {
-      logger.warn(`scrapeFallback: in-house map failed for ${url} — falling through to Firecrawl`, err);
-    }
+  const limit = opts?.limit ?? 100;
+  const [inhouse, crawl4ai] = await Promise.all([
+    INHOUSE_ENABLED ? settle("in-house map", () => inHouseMap(url, limit)) : Promise.resolve(null),
+    settle("crawl4ai map", () => crawl4aiMap(url, { limit }).then((r) => (r.outage ? null : r.links))),
+  ]);
+
+  // Merge both link sets, de-duplicated by pathname, capped at the limit.
+  const seen = new Set<string>();
+  const links: MapLink[] = [];
+  for (const link of [...(inhouse ?? []), ...(crawl4ai ?? [])]) {
+    let key: string;
+    try { key = new URL(link.url).pathname; } catch { key = link.url; }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    links.push(link);
+    if (links.length >= limit) break;
   }
 
-  const result = await firecrawlMap(url, opts);
-  return { links: result.links, outage: result.outage, source: "firecrawl" };
+  return { links, outage: null, source: mergedSource(!!inhouse?.length, !!crawl4ai?.length) };
 }
 
-async function inHouseMap(url: string, limit: number): Promise<FirecrawlMapLink[]> {
+async function inHouseMap(url: string, limit: number): Promise<MapLink[]> {
   const origin = new URL(url).origin;
   const sitemapPages = await discoverSitemapPages(origin);
   if (sitemapPages.length > 0) {
     return sitemapPages.slice(0, limit).map((page) => ({ url: page.url }));
   }
 
-  // No sitemap — fall back to one scrape of the entry URL and take its outbound links,
-  // filtered to same-origin (a "map" of the site, not every external link on the page).
+  // No sitemap — scrape the entry URL once and take its same-origin outbound links.
   const scraped = await fetchResearchScrape(url, false);
   if (!scraped?.links) return [];
   const seen = new Set<string>();
-  const links: FirecrawlMapLink[] = [];
+  const links: MapLink[] = [];
   for (const link of scraped.links) {
     try {
       const parsed = new URL(link);
       if (parsed.origin !== origin) continue;
-      const key = parsed.pathname;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      if (seen.has(parsed.pathname)) continue;
+      seen.add(parsed.pathname);
       links.push({ url: link });
       if (links.length >= limit) break;
     } catch {
-      // malformed href — skip it
+      // malformed href — skip
     }
   }
   return links;
 }
 
+/* ─────────────────────────────  scrape  ───────────────────────────── */
+
 export interface ScrapeFallbackResult {
-  data: FirecrawlScrapeData | null;
-  outage: FirecrawlOutage | null;
+  data: ScrapeData | null;
+  outage: ScrapeOutage | null;
   source: ScrapeSource;
 }
 
-export async function scrapeUrlWithFallback(url: string, formats: FirecrawlScrapeFormat[]): Promise<ScrapeFallbackResult> {
-  if (FALLBACK_ENABLED) {
-    try {
-      const wantProduct = formats.some((f) => typeof f === "object" && f.type === "product");
-      const scraped = await raceWithTimeout(fetchResearchScrape(url, wantProduct), INHOUSE_ATTEMPT_TIMEOUT_MS);
-      if (scraped) {
-        const data: FirecrawlScrapeData = {
-          markdown: scraped.markdown,
-          html: scraped.html,
-          links: scraped.links,
-          screenshot: scraped.screenshot,
-          product: scraped.product,
-          metadata: scraped.metadata,
-        };
-        if (isUsableScrapeData(data, formats)) return { data, outage: null, source: "inhouse" };
-      }
-    } catch (err) {
-      logger.warn(`scrapeFallback: in-house scrape failed for ${url} — falling through to Firecrawl`, err);
-    }
-  }
+export async function scrapeUrlWithFallback(url: string, formats: ScrapeFormat[]): Promise<ScrapeFallbackResult> {
+  const wantProduct = formats.some((f) => typeof f === "object" && f.type === "product");
 
-  const result = await firecrawlScrape(url, formats);
-  return { data: result.data, outage: result.outage, source: "firecrawl" };
+  const [inhouseData, crawl4aiData] = await Promise.all([
+    INHOUSE_ENABLED
+      ? settle("in-house scrape", async () => {
+          const scraped = await fetchResearchScrape(url, wantProduct);
+          if (!scraped) return null;
+          const data: ScrapeData = {
+            markdown: scraped.markdown,
+            html: scraped.html,
+            links: scraped.links,
+            screenshot: scraped.screenshot,
+            product: scraped.product,
+            metadata: scraped.metadata,
+          };
+          return isUsableScrapeData(data, formats) ? data : null;
+        })
+      : Promise.resolve(null),
+    settle("crawl4ai scrape", async () => {
+      const { data, outage } = await crawl4aiScrape(url, formats);
+      if (outage || !data) return null;
+      return isUsableScrapeData(data, formats) ? data : null;
+    }),
+  ]);
+
+  const merged = mergeScrapeData(inhouseData, crawl4aiData, wantProduct);
+  if (!merged) return { data: null, outage: null, source: "none" };
+  return { data: merged, outage: null, source: mergedSource(!!inhouseData, !!crawl4aiData) };
 }
+
+/**
+ * Field-level merge of the two sources' scrape output. The in-house path is preferred for
+ * product/JSON-LD structure and screenshots (its Playwright capture is purpose-built for
+ * those); crawl4ai is preferred for markdown/html body text when its headless render produced
+ * more than the in-house HTTP fetch. Each field falls back to whichever source has it, so a
+ * gap in one is filled by the other rather than lost.
+ */
+function mergeScrapeData(inhouse: ScrapeData | null, crawl4ai: ScrapeData | null, preferInhouseProduct: boolean): ScrapeData | null {
+  if (!inhouse && !crawl4ai) return null;
+  if (!crawl4ai) return inhouse;
+  if (!inhouse) return crawl4ai;
+
+  const inhouseMd = inhouse.markdown ?? "";
+  const crawlMd = crawl4ai.markdown ?? "";
+  return {
+    // richer body text wins
+    markdown: crawlMd.length > inhouseMd.length ? crawl4ai.markdown : inhouse.markdown,
+    html: inhouse.html ?? crawl4ai.html,
+    links: [...new Set([...(inhouse.links ?? []), ...(crawl4ai.links ?? [])])],
+    screenshot: inhouse.screenshot ?? crawl4ai.screenshot,
+    json: inhouse.json ?? crawl4ai.json,
+    product: preferInhouseProduct ? (inhouse.product ?? crawl4ai.product) : (crawl4ai.product ?? inhouse.product),
+    metadata: { ...crawl4ai.metadata, ...inhouse.metadata },
+  };
+}
+
+/* ─────────────────────────────  crawl (multi-page)  ───────────────────────────── */
 
 export interface CrawlFallbackResult {
-  pages: FirecrawlCrawlPage[];
-  outage: FirecrawlOutage | null;
+  pages: CrawlPage[];
+  outage: ScrapeOutage | null;
   source: ScrapeSource;
-  /** Site-level, only populated when source === "inhouse" (scrapeUrl already captures one
-   * internally) — the firecrawl branch leaves this undefined so callers make their own
-   * separate firecrawlScrape(url, ["screenshot"]) call, exactly as they do today. */
+  /** Site-level, populated when the in-house path ran (scrapeUrl captures one internally). */
   screenshot?: string;
-  /** Site-level, only populated when source === "inhouse" — in-house crawl pages don't
-   * populate per-page `links`, so callers should use this instead of deriving images from
-   * pages[0].links the way the firecrawl branch does. */
+  /** Site-level, populated when the in-house path ran — in-house crawl pages don't populate
+   * per-page `links`, so callers use this instead of deriving images from pages[0].links. */
   images?: string[];
 }
 
-export async function crawlUrlWithFallback(url: string, opts: { limit?: number; formats?: FirecrawlScrapeFormat[] }): Promise<CrawlFallbackResult> {
-  if (FALLBACK_ENABLED) {
-    try {
-      // scrapeUrl's crawl loop respects timeBudgetMs on its own, but it then awaits its
-      // trailing screenshot capture (up to SCREENSHOT_TIMEOUT_MS) before returning — the
-      // outer race needs that same headroom added on top, or a screenshot that's still
-      // legitimately in flight gets the whole crawl result (pages, images, everything)
-      // discarded a moment before it would have succeeded.
-      const site = await raceWithTimeout(
-        scrapeUrl(url, { crawlCap: opts.limit, timeBudgetMs: INHOUSE_ATTEMPT_TIMEOUT_MS }),
-        INHOUSE_ATTEMPT_TIMEOUT_MS + SCREENSHOT_TIMEOUT_MS
-      );
-      if (site.pages && site.pages.length > 0 && !looksBlocked(undefined, site.excerpt)) {
-        const pages: FirecrawlCrawlPage[] = site.pages.map((page) => ({
-          markdown: page.cleanedText,
-          html: page.html,
-          metadata: { title: page.title, sourceURL: page.url },
-        }));
-        return { pages, outage: null, source: "inhouse", screenshot: site.screenshot, images: site.images };
-      }
-    } catch (err) {
-      logger.warn(`scrapeFallback: in-house crawl failed for ${url} — falling through to Firecrawl`, err);
-    }
+export async function crawlUrlWithFallback(url: string, opts: { limit?: number; formats?: ScrapeFormat[] }): Promise<CrawlFallbackResult> {
+  const [inhouse, crawl4aiPages] = await Promise.all([
+    INHOUSE_ENABLED
+      ? settle("in-house crawl", async () => {
+          // scrapeUrl awaits a trailing screenshot (up to SCREENSHOT_TIMEOUT_MS) before
+          // returning, so give this branch that extra headroom over ATTEMPT_TIMEOUT_MS.
+          const site = await raceWithTimeout(
+            scrapeUrl(url, { crawlCap: opts.limit, timeBudgetMs: ATTEMPT_TIMEOUT_MS }),
+            ATTEMPT_TIMEOUT_MS + SCREENSHOT_TIMEOUT_MS
+          );
+          if (!site.pages?.length || looksBlocked(undefined, site.excerpt)) return null;
+          const pages: CrawlPage[] = site.pages.map((page) => ({
+            markdown: page.cleanedText,
+            html: page.html,
+            metadata: { title: page.title, sourceURL: page.url },
+          }));
+          return { pages, screenshot: site.screenshot, images: site.images };
+        })
+      : Promise.resolve(null),
+    settle("crawl4ai crawl", async () => {
+      const { pages, outage } = await crawl4aiCrawl(url, opts);
+      return outage ? null : pages;
+    }),
+  ]);
+
+  // Merge pages from both sources, de-duplicated by source URL so the same page crawled by
+  // both isn't double-counted (in-house content preferred where both have the same URL).
+  const byUrl = new Map<string, CrawlPage>();
+  for (const page of crawl4aiPages ?? []) {
+    const key = page.metadata?.sourceURL ?? `crawl4ai-${byUrl.size}`;
+    byUrl.set(key, page);
+  }
+  for (const page of inhouse?.pages ?? []) {
+    const key = page.metadata?.sourceURL ?? `inhouse-${byUrl.size}`;
+    byUrl.set(key, page); // in-house overwrites crawl4ai for the same URL
   }
 
-  const result = await firecrawlCrawl(url, opts);
-  return { pages: result.pages, outage: result.outage, source: "firecrawl" };
+  const pages = [...byUrl.values()];
+  return {
+    pages,
+    outage: null,
+    source: mergedSource(!!inhouse?.pages.length, !!crawl4aiPages?.length),
+    screenshot: inhouse?.screenshot,
+    images: inhouse?.images,
+  };
 }
 
-/** Human-readable dataSource label, source-aware — replaces a provider's previously fixed
- * Firecrawl-only DATA_SOURCE constant so the UI/audit trail can distinguish which backend
- * actually served a given result. */
+/** Which source(s) actually produced content — drives sourceLabel and audit trail. */
+function mergedSource(hasInhouse: boolean, hasCrawl4ai: boolean): ScrapeSource {
+  if (hasInhouse && hasCrawl4ai) return "merged";
+  if (hasInhouse) return "inhouse";
+  if (hasCrawl4ai) return "crawl4ai";
+  return "none";
+}
+
+/** Human-readable dataSource label, source-aware — lets the UI/audit trail distinguish which
+ * backend(s) served a given result. */
 export function sourceLabel(source: ScrapeSource, detail: string): string {
-  return source === "inhouse" ? `In-house scrape (${detail})` : `Firecrawl (${detail})`;
+  switch (source) {
+    case "inhouse": return `In-house scrape (${detail})`;
+    case "crawl4ai": return `crawl4ai (${detail})`;
+    case "merged": return `In-house + crawl4ai (${detail})`;
+    case "none": return `No content retrieved (${detail})`;
+  }
 }

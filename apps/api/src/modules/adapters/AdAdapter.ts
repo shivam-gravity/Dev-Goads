@@ -1,4 +1,5 @@
-import type { AdCreative, AdNetwork, CampaignVariant, PerformanceMetric } from "../../types/index.js";
+import type { AdCreative, AdNetwork, CampaignVariant, AdInsightStats } from "../../types/index.js";
+import type { GoogleAdsCredentials } from "../integrations/googleOAuth.js";
 
 export interface LaunchVariantInput {
   campaignId: string;
@@ -20,11 +21,14 @@ export interface SetBudgetInput {
 
 export interface AdAdapter {
   readonly network: AdNetwork;
-  launchVariant(input: LaunchVariantInput): Promise<LaunchVariantResult>;
-  pauseVariant(externalId: string): Promise<void>;
-  activateVariant(externalId: string): Promise<void>;
-  setBudget(input: SetBudgetInput): Promise<void>;
-  fetchInsights(externalId: string, date: string): Promise<Omit<PerformanceMetric, "id" | "campaignId" | "variantId" | "network" | "date">>;
+  launchVariant(input: LaunchVariantInput, credentials?: MetaCredentials): Promise<LaunchVariantResult>;
+  pauseVariant(externalId: string, credentials?: MetaCredentials): Promise<void>;
+  activateVariant(externalId: string, credentials?: MetaCredentials): Promise<void>;
+  setBudget(input: SetBudgetInput, credentials?: MetaCredentials): Promise<void>;
+  // Credentials are network-specific: Meta variants pass MetaCredentials, Google variants pass
+  // GoogleAdsCredentials. The union keeps the shared AdAdapter type honest while each adapter's
+  // own resolveCredentials narrows to the shape it needs.
+  fetchInsights(externalId: string, date: string, credentials?: MetaCredentials | GoogleAdsCredentials): Promise<AdInsightStats>;
 }
 
 /**
@@ -66,6 +70,13 @@ export interface AdSetContainerInput {
   endTime?: string;
   /** Meta only — maps to targeting_automation.advantage_audience. */
   advantagePlus?: boolean;
+  /** Frequency cap: max impressions per user within a time window. */
+  frequencyCap?: {
+    maxImpressions: number;
+    intervalDays: number; // 1 = daily, 7 = weekly
+  };
+  /** Campaign-level objective — used to derive ad-set optimization_goal. */
+  objective?: string;
 }
 
 export interface CreativeUploadInput {

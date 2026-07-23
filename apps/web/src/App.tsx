@@ -2,6 +2,7 @@ import { NavLink, Route, Routes, Navigate, useLocation, useNavigate } from "reac
 import { useEffect, useRef, useState } from "react";
 import { MascotIcon, SearchIcon } from "./components/icons.js";
 import { AuthProvider, useAuth } from "./context/AuthContext.js";
+import { RealtimeProvider } from "./providers/RealtimeProvider.js";
 
 // Page imports
 import Onboarding from "./pages/Onboarding.js";
@@ -43,10 +44,16 @@ import BrandProfile from "./pages/BrandProfile.js";
 import Products from "./pages/Products.js";
 import NotFound from "./pages/NotFound.js";
 import UserCenter from "./pages/UserCenter/index.js";
+import Landing from "./pages/Landing.js";
+import Login from "./pages/Login.js";
+import Register from "./pages/Register.js";
+import CrmRedirect from "./pages/CrmRedirect.js";
 import { CopilotProvider, useCopilot } from "./providers/CopilotProvider.js";
 import CopilotDrawer from "./components/Copilot/Drawer.js";
 import ErrorBoundary from "./components/ErrorBoundary.js";
 import HelpWidget from "./components/HelpWidget.js";
+import RouteProgressBar from "./components/RouteProgressBar.js";
+import FullPageLoader from "./components/FullPageLoader.js";
 
 const MARKETING_ROUTES: Record<string, JSX.Element> = {
   "/features": <Features />,
@@ -108,12 +115,13 @@ function AuthenticatedApp() {
 
   return (
     <div className="app-shell-sidebar">
+      <RouteProgressBar />
       {/* Sidebar */}
       <aside className={`sidebar polluxa-sidebar ${sidebarOpen ? "sidebar-open" : ""} ${brandMenuOpen ? "sidebar-pinned" : ""}`}>
         <div className="sidebar-brand polluxa-brand">
           <NavLink to="/dashboard" className="brand-lockup-polluxa" onClick={() => setSidebarOpen(false)}>
-            <span className="brand-logo-badge"><img src="/logo-icon.png" alt="CRM Ads" /></span>
-            <span className="brand-text-polluxa">CRM Ads</span>
+            <span className="brand-logo-badge"><img src="/polluxa-logo.svg" alt="Polluxa" /></span>
+            <span className="brand-text-polluxa">Polluxa Ads</span>
           </NavLink>
         </div>
 
@@ -188,7 +196,7 @@ function AuthenticatedApp() {
                 <span className="sidebar-link-label">New Campaign</span>
               </span>
             </NavLink>
-            <NavLink to="/wizard" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
+            <NavLink to="/campaigns/generator" className={({ isActive }) => `sidebar-link polluxa-link ${isActive ? "active" : ""}`} onClick={() => setSidebarOpen(false)}>
               <span className="sidebar-link-inner">
                 <svg className="sidebar-link-icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
                 <span className="sidebar-link-label">Campaign Generator</span>
@@ -295,7 +303,7 @@ function AuthenticatedApp() {
           </button>
           <NavLink to="/" className="brand brand-lockup">
             <MascotIcon className="mascot mascot-sm" />
-            <span className="brand-text">Polluxa</span>
+            <span className="brand-text">CRM Ads</span>
           </NavLink>
         </header>
 
@@ -315,7 +323,7 @@ function AuthenticatedApp() {
             <Route path="/billing" element={<Billing businessId={businessId!} />} />
 
             {/* New Routes */}
-            <Route path="/wizard" element={<CampaignGenerator businessId={businessId!} />} />
+            <Route path="/campaigns/generator" element={<CampaignGenerator businessId={businessId!} />} />
             <Route path="/studio" element={<CreativeStudio businessId={businessId!} />} />
             <Route path="/manager" element={<AdsManager businessId={businessId!} />} />
             <Route path="/drafts" element={<Drafts businessId={businessId!} />} />
@@ -360,18 +368,24 @@ function CopilotFab() {
   );
 }
 
-// There is no login flow — the only gate left is "has this workspace finished
-// onboarding (created a business) yet," not "is this user authenticated."
 function RequireAuth({ children }: { children: JSX.Element }) {
-  const { isLoading, businessId } = useAuth();
-  if (isLoading) return null;
+  const { isLoading, isAuthenticated, businessId } = useAuth();
+  if (isLoading) return <FullPageLoader />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (!businessId) return <Navigate to="/get-started" replace />;
+  return children;
+}
+
+function RedirectIfAuthenticated({ children }: { children: JSX.Element }) {
+  const { isLoading, isAuthenticated } = useAuth();
+  if (isLoading) return <FullPageLoader />;
+  if (isAuthenticated) return <Navigate to="/dashboard" replace />;
   return children;
 }
 
 function OnboardingWrapper() {
   const { isLoading, businessId, setBusinessId } = useAuth();
-  if (isLoading) return null;
+  if (isLoading) return <FullPageLoader />;
   if (businessId) return <Navigate to="/dashboard" replace />;
   return <Onboarding onOnboarded={setBusinessId} />;
 }
@@ -387,12 +401,18 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <CopilotProvider>
-          <Routes>
-            <Route path="/get-started" element={<OnboardingWrapper />} />
-            <Route path="/*" element={<RequireAuth><AuthenticatedApp /></RequireAuth>} />
-          </Routes>
-        </CopilotProvider>
+        <RealtimeProvider>
+          <CopilotProvider>
+            <Routes>
+              <Route path="/" element={<RedirectIfAuthenticated><Landing /></RedirectIfAuthenticated>} />
+              <Route path="/login" element={<RedirectIfAuthenticated><Login /></RedirectIfAuthenticated>} />
+              <Route path="/register" element={<RedirectIfAuthenticated><Register /></RedirectIfAuthenticated>} />
+              <Route path="/auth/crm-callback" element={<CrmRedirect />} />
+              <Route path="/get-started" element={<OnboardingWrapper />} />
+              <Route path="/*" element={<RequireAuth><AuthenticatedApp /></RequireAuth>} />
+            </Routes>
+          </CopilotProvider>
+        </RealtimeProvider>
       </AuthProvider>
     </ErrorBoundary>
   );

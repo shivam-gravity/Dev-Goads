@@ -4,37 +4,22 @@ import type { ResearchContext } from "../research/types/index.js";
 import type { AgentEvidenceItem } from "../agents/types/index.js";
 
 delete process.env.OPENAI_API_KEY;
-delete process.env.GROQ_API_KEY;
-delete process.env.GEMINI_API_KEY;
-delete process.env.MISTRAL_API_KEY;
+delete process.env.AWS_BEARER_TOKEN_BEDROCK;
 
-// No API key alone no longer guarantees zero network calls: every agent is assigned to
-// Ollama by default (llmTaskConfig.ts), which has no "configured or not" concept the way a
-// hosted API with a key does — if a real Ollama server happens to be reachable at
-// localhost:11434 in whatever environment this runs, the agent can genuinely succeed via a
-// real model call instead of falling back, making these tests flaky (this actually
-// happened — see the session notes around 2026-07-15). Blocking `global.fetch` at the
-// module level, before any agent module is imported, is what makes "no live model call
-// can succeed" deterministic regardless of what's reachable on the network: the Groq/
-// Ollama clients (both the OpenAI SDK pointed at different baseURLs) capture `fetch` once
-// at client-construction time, so the indirection has to be installed before that
-// construction happens, same technique llmRouter.test.ts uses.
+// Deleting the Bedrock key can be load-order-fragile (an earlier test file may have already
+// frozen llmClient.ts's `llm` gate with a real key). Blocking `global.fetch` at the module
+// level, before any agent module is imported, is what makes "no live model call can succeed"
+// deterministic regardless of load order: bedrockClient.ts uses plain fetch() per call, so the
+// indirection installed before the dynamic (cache-busted) agent imports below covers it.
 let currentFetchImpl: typeof fetch = (async () => {
   throw new Error("network unavailable (simulated)");
 }) as typeof fetch;
 global.fetch = ((...args: Parameters<typeof fetch>) => currentFetchImpl(...args)) as typeof fetch;
 
 const t = Date.now();
-const { ProductAgent } = await import(`../agents/agents/ProductAgent.js?t=${t}`);
-const { AudienceAgent } = await import(`../agents/agents/AudienceAgent.js?t=${t}`);
-const { CompetitorAgent } = await import(`../agents/agents/CompetitorAgent.js?t=${t}`);
-const { MarketAgent } = await import(`../agents/agents/MarketAgent.js?t=${t}`);
-const { KeywordAgent } = await import(`../agents/agents/KeywordAgent.js?t=${t}`);
-const { CreativeAgent } = await import(`../agents/agents/CreativeAgent.js?t=${t}`);
-const { BudgetAgent } = await import(`../agents/agents/BudgetAgent.js?t=${t}`);
-const { PersonaAgent } = await import(`../agents/agents/PersonaAgent.js?t=${t}`);
-const { CampaignAgent } = await import(`../agents/agents/CampaignAgent.js?t=${t}`);
-const { CriticAgent } = await import(`../agents/agents/CriticAgent.js?t=${t}`);
+const { StrategyAgent } = await import(`../agents/agents/StrategyAgent.js?t=${t}`);
+const { CreativeOfferAgent } = await import(`../agents/agents/CreativeOfferAgent.js?t=${t}`);
+const { ReviewerAgent } = await import(`../agents/agents/ReviewerAgent.js?t=${t}`);
 // Plain (non-busted) import intentionally shares the same singleton the busted agent
 // modules use — their static imports resolve without the query param, so it's one registry.
 const { promptRegistry } = await import("../agents/prompts/PromptRegistry.js");
@@ -56,28 +41,21 @@ function fixtureContext(): ResearchContext {
   };
 }
 
-const AGENTS = [
-  { Ctor: ProductAgent, name: "product-agent" },
-  { Ctor: AudienceAgent, name: "audience-agent" },
-  { Ctor: CompetitorAgent, name: "competitor-agent" },
-  { Ctor: MarketAgent, name: "market-agent" },
-  { Ctor: KeywordAgent, name: "keyword-agent" },
-  { Ctor: CreativeAgent, name: "creative-agent" },
-  { Ctor: BudgetAgent, name: "budget-agent" },
-  { Ctor: PersonaAgent, name: "persona-agent" },
-  { Ctor: CampaignAgent, name: "campaign-agent" },
+// The 2 composite PRODUCER super-agents. Each degrades to a labeled fallback (with every
+// sub-part populated) when no live model call can succeed.
+const PRODUCERS = [
+  { Ctor: StrategyAgent, name: "strategy-agent" },
+  { Ctor: CreativeOfferAgent, name: "creative-offer-agent" },
 ];
 
-for (const { Ctor, name } of AGENTS) {
+for (const { Ctor, name } of PRODUCERS) {
   test(`${name} - degrades to a labeled fallback when no live model call can succeed`, async () => {
     const agent = new Ctor();
     const result = await agent.execute(fixtureContext());
 
     assert.strictEqual(result.agent, name);
     assert.strictEqual(result.promptId, name);
-    // Agents always run the registry's latest prompt version (render() with no pin) —
-    // compare against the registry rather than hardcoding, so registering a v2 prompt
-    // (e.g. the fact-grounded creative/campaign/critic prompts) doesn't break this test.
+    // Agents always run the registry's latest prompt version (render() with no pin).
     assert.strictEqual(result.promptVersion, promptRegistry.get(name).version);
     assert.strictEqual(result.usedFallback, true);
     assert.strictEqual(result.confidence, 0.2, "a fully-degraded run must report the flat fallback confidence");
@@ -86,38 +64,55 @@ for (const { Ctor, name } of AGENTS) {
   });
 }
 
-test("PersonaAgent - fallback builds one persona per audience segment when no model is available", async () => {
-  const agent = new PersonaAgent();
+test("StrategyAgent - fallback bundle populates all four sub-parts (campaign/audience/keyword/budget)", async () => {
+  const agent = new StrategyAgent();
   const result = await agent.execute(fixtureContext());
-  assert.strictEqual(result.data.personas.length, 1);
-  assert.strictEqual(result.data.personas[0].name, "New customers");
+  const data = result.data as {
+    campaign: { creatives: unknown[]; recommendedNetworks: unknown[] };
+    audience: { personas: { name: string }[] };
+    keyword: { primaryKeywords: unknown[] };
+    budget: { recommendedDailyBudgetCents: number };
+  };
+  assert.ok(data.campaign.recommendedNetworks.length > 0 && data.campaign.creatives.length > 0, "campaign sub-part must be populated");
+  // Personas are derived from audience segments on the fallback path — one per segment.
+  assert.strictEqual(data.audience.personas.length, 1);
+  assert.strictEqual(data.audience.personas[0].name, "New customers");
+  assert.ok(Array.isArray(data.keyword.primaryKeywords), "keyword sub-part must be present");
+  assert.ok(data.budget.recommendedDailyBudgetCents > 0, "budget sub-part must have a positive fallback budget");
 });
 
-test("CriticAgent - with no prior results, reports zero confidence/score and asks for at least one agent to run first", async () => {
-  const agent = new CriticAgent();
+test("CreativeOfferAgent - fallback bundle populates creative/pricingOffer/objectionHandling", async () => {
+  const agent = new CreativeOfferAgent();
+  const result = await agent.execute(fixtureContext());
+  const data = result.data as {
+    creative: { headlines: unknown[] };
+    pricingOffer: { recommendedOfferType: string };
+    objectionHandling: { topObjections: unknown[] };
+  };
+  assert.ok(data.creative.headlines.length > 0, "creative sub-part must be populated");
+  assert.ok(typeof data.pricingOffer.recommendedOfferType === "string", "pricingOffer sub-part must be present");
+  assert.ok(Array.isArray(data.objectionHandling.topObjections), "objectionHandling sub-part must be present");
+});
+
+test("ReviewerAgent - with no prior results, reports low confidence and asks for a producer to run first", async () => {
+  const agent = new ReviewerAgent();
   const result = await agent.execute(fixtureContext(), { priorResults: {} });
   assert.strictEqual(result.confidence, 0.1);
-  assert.strictEqual(result.data.overallScore, 0);
-  assert.match(result.data.recommendation, /before requesting a critique/);
+  const data = result.data as { critic: { overallScore: number }; compliance: { overallRisk: string } };
+  assert.strictEqual(data.critic.overallScore, 0);
+  assert.ok(["low", "medium", "high"].includes(data.compliance.overallRisk));
 });
 
-test("CriticAgent - with prior results supplied, includes each reviewed agent in its evidence trail", async () => {
-  const agent = new CriticAgent();
+test("ReviewerAgent - with prior results supplied, includes each reviewed agent in its evidence trail", async () => {
+  const agent = new ReviewerAgent();
   const priorResults = {
-    "product-agent": {
-      agent: "product-agent", promptId: "product-agent", promptVersion: 1,
-      data: { productName: "Acme" }, confidence: 0.8, evidence: [], usedFallback: false,
+    "campaign-agent": {
+      agent: "campaign-agent", promptId: "campaign-agent", promptVersion: 1,
+      data: { summary: "Acme" }, confidence: 0.8, evidence: [], usedFallback: false,
       generatedAt: "now", durationMs: 1,
     },
   };
   const result = await agent.execute(fixtureContext(), { priorResults });
-  assert.ok(result.evidence.some((e: AgentEvidenceItem) => e.source === "product-agent" && /Reviewed/.test(e.detail)));
-  assert.strictEqual(result.confidence, 0.2, "a fully-degraded run with non-empty proposals still floors at the fallback confidence, not the empty-proposals 0.1");
-});
-
-test("CampaignAgent - does not require any other agent's output to run (independently testable)", async () => {
-  const agent = new CampaignAgent();
-  const result = await agent.execute(fixtureContext());
-  assert.ok(Array.isArray(result.data.recommendedNetworks) && result.data.recommendedNetworks.length > 0);
-  assert.ok(Array.isArray(result.data.creatives) && result.data.creatives.length > 0);
+  assert.ok(result.evidence.some((e: AgentEvidenceItem) => e.source === "campaign-agent" && /Reviewed/.test(e.detail)));
+  assert.strictEqual(result.confidence, 0.2, "a fully-degraded run with non-empty proposals floors at the fallback confidence, not the empty-proposals 0.1");
 });

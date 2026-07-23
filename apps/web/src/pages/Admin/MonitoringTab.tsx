@@ -10,84 +10,11 @@ interface Monitor {
   incidents: number;
 }
 
-const DEFAULT_MONITORS: Monitor[] = [
-  {
-    id: "mon-1",
-    name: "API Health Gateway",
-    status: "healthy",
-    latency: "14ms",
-    uptime: "99.99%",
-    lastCheck: "Just now",
-    incidents: 0
-  },
-  {
-    id: "mon-2",
-    name: "Meta Ads API Sync",
-    status: "healthy",
-    latency: "182ms",
-    uptime: "99.95%",
-    lastCheck: "30s ago",
-    incidents: 1
-  },
-  {
-    id: "mon-3",
-    name: "Google Ads API Sync",
-    status: "warning",
-    latency: "410ms",
-    uptime: "99.88%",
-    lastCheck: "1m ago",
-    incidents: 3
-  },
-  {
-    id: "mon-4",
-    name: "Webhook Delivery Queue",
-    status: "healthy",
-    latency: "8ms",
-    uptime: "100.00%",
-    lastCheck: "Just now",
-    incidents: 0
-  },
-  {
-    id: "mon-5",
-    name: "Background Optimizer Jobs",
-    status: "healthy",
-    latency: "24ms",
-    uptime: "99.99%",
-    lastCheck: "15s ago",
-    incidents: 0
-  },
-  {
-    id: "mon-6",
-    name: "Job Execution Retry Queue",
-    status: "healthy",
-    latency: "0ms (empty)",
-    uptime: "100.00%",
-    lastCheck: "2m ago",
-    incidents: 0
-  }
-];
-
+// No hardcoded fake monitors and no Math.random() latency jitter. There is no system-health API
+// wired up yet, so this shows an honest empty state until real diagnostics are connected — rather
+// than fabricated "99.99% uptime / 14ms" numbers that look like live monitoring.
 export default function MonitoringTab() {
-  const [monitors, setMonitors] = useState<Monitor[]>(DEFAULT_MONITORS);
-
-  function handleTriggerCheck(id: string) {
-    setMonitors(prev =>
-      prev.map(m => {
-        if (m.id === id) {
-          // Simulate latency jitter on check
-          const randomLatency = m.status === "healthy"
-            ? `${Math.floor(Math.random() * 20 + 8)}ms`
-            : `${Math.floor(Math.random() * 100 + 350)}ms`;
-          return {
-            ...m,
-            latency: randomLatency,
-            lastCheck: "Just now"
-          };
-        }
-        return m;
-      })
-    );
-  }
+  const [monitors] = useState<Monitor[]>([]);
 
   return (
     <div>
@@ -97,6 +24,12 @@ export default function MonitoringTab() {
           <p className="muted-text">Live diagnostics, integration sync delays, and queue processing metrics.</p>
         </div>
       </div>
+
+      {monitors.length === 0 && (
+        <div className="card muted-text" style={{ textAlign: "center", padding: "32px" }}>
+          No live monitoring data available yet.
+        </div>
+      )}
 
       <div className="monitoring-grid">
         {monitors.map((mon) => (
@@ -130,12 +63,6 @@ export default function MonitoringTab() {
               </div>
             </div>
 
-            <button
-              className="btn btn-sm btn-secondary mt-2 w-full"
-              onClick={() => handleTriggerCheck(mon.id)}
-            >
-              🔄 Refresh Check
-            </button>
           </div>
         ))}
       </div>

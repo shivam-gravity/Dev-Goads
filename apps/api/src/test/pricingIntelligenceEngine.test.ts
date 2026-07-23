@@ -1,6 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { computePosition, median } from "../research/pricing-intelligence/PricingIntelligenceEngine.js";
+
+// The LLM gate (llmClient.ts's `llm`) is a frozen const set to isBedrockConfigured() at first
+// module load. A STATIC import of the engine here would be hoisted ahead of the deletes below
+// and freeze that gate while the real AWS_BEARER_TOKEN_BEDROCK (loaded from apps/api/.env by an
+// earlier test file's dotenv/config) is still present — making the "zero network calls" degrade
+// tests attempt a real Bedrock call. So scrub the key FIRST, then dynamically import the engine
+// (pure helpers included) so llmClient freezes to `false`. See audienceIntelligenceEngine.test.ts.
+delete process.env.OPENAI_API_KEY;
+delete process.env.AWS_BEARER_TOKEN_BEDROCK;
+// Firecrawl's /search now backs runWebSearch (infra/llmClient.ts) — this must be deleted
+// too, or this file's "zero network calls" tests below would actually attempt a real
+// Firecrawl call instead of degrading immediately (firecrawlClient.ts reads this key fresh
+// on every call, not frozen, so deleting it here — before the test body runs — is enough;
+// no cache-busting needed for this specific key).
+delete process.env.FIRECRAWL_API_KEY;
+const { computePosition, median, runPricingIntelligence } = await import(`../research/pricing-intelligence/PricingIntelligenceEngine.js?t=${Date.now()}`);
 
 test("median - odd-length array returns the middle value", () => {
   assert.strictEqual(median([10, 30, 20]), 20);
@@ -33,15 +48,6 @@ test("computePosition - unknown when the company's price or competitor prices ar
   assert.strictEqual(computePosition(50, []), "unknown");
 });
 
-delete process.env.OPENAI_API_KEY;
-// Firecrawl's /search now backs runWebSearch (infra/llmClient.ts) — this must be deleted
-// too, or this file's "zero network calls" tests below would actually attempt a real
-// Firecrawl call instead of degrading immediately (firecrawlClient.ts reads this key fresh
-// on every call, not frozen, so deleting it here — before the test body runs — is enough;
-// no cache-busting needed for this specific key).
-delete process.env.FIRECRAWL_API_KEY;
-const t = Date.now();
-const { runPricingIntelligence } = await import(`../research/pricing-intelligence/PricingIntelligenceEngine.js?t=${t}`);
 
 test("runPricingIntelligence - with no OPENAI_API_KEY, degrades gracefully with zero network calls", async () => {
   const original = global.fetch;

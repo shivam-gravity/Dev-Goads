@@ -23,9 +23,31 @@ model User {
   name         String
   avatar       String?
   googleId     String?  @unique
+  isExternal   Boolean  @default(false)
+  crmUserId    String?  @unique
+  crmBusinessId String?
+  crmPartnerId  String?
   createdAt    DateTime @default(now())
 
+  refreshTokens RefreshToken[]
+
   @@map("users")
+}
+
+model RefreshToken {
+  id         String    @id
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  family     String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedBy String?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([family])
+  @@map("refresh_tokens")
 }
 
 model Workspace {
@@ -907,6 +929,30 @@ model AdCreativeAnalysis {
   generatedAt      DateTime     @default(now())
 
   @@map("ad_creative_analyses")
+}
+
+// ── Wallet / Prepaid Balance ──
+// One row per workspace (id = workspaceId, upserted) holding the current balance
+// and metadata; WalletTransaction is the append-only ledger of every credit/debit.
+
+model Wallet {
+  id          String   @id // = workspaceId
+  workspaceId String   @unique
+  data        Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id          String   @id
+  workspaceId String
+  data        Json
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId])
+  @@map("wallet_transactions")
 }
 
 // The 6 ranked, fully-specified campaign packages the Campaign Recommendation Engine

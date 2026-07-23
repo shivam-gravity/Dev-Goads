@@ -9,7 +9,7 @@ export default function SiteFooter() {
           <span className="brand-lockup">
             <MascotIcon className="mascot mascot-sm" />
             <span className="brand-text">
-              Polluxa
+              CRM Ads
               <span className="brand-tagline">AI ad automation</span>
             </span>
           </span>
@@ -37,7 +37,7 @@ export default function SiteFooter() {
         </div>
       </div>
       <div className="footer-bottom">
-        <span>Polluxa — AI Ad Automation</span>
+        <span>CRM Ads — AI Ad Automation</span>
         <div className="footer-bottom-links">
           <Link to="/privacy-policy">Privacy policy</Link>
           <Link to="/terms">Terms of service</Link>

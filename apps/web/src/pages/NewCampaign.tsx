@@ -2,22 +2,54 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.js";
-import { TargetIcon, UserIcon, LightningIcon, GlobeIcon, SparkleIcon } from "../components/icons.js";
+import { useRealtimeContext } from "../providers/RealtimeProvider.js";
+import { TargetIcon, UserIcon, LightningIcon, GlobeIcon, SparkleIcon, SearchIcon } from "../components/icons.js";
 import type {
   AudiencePersonaCard,
+  BudgetSimulation,
+  Campaign,
   CampaignGenerationCitations,
   CampaignGenerationFacts,
   CampaignGenerationJobStatus,
   CampaignGenerationPipelineStatus,
+  CampaignObjectiveOption,
   CampaignStrategyOption,
   CompetitorAdsData,
   DecisionContext,
   RankedRecommendation,
+  ResearchContextLite,
   StrategySimulationResult,
 } from "../api/client.js";
 
 const AVATAR_EMOJIS = ["🤖", "👨", "👩", "👩‍🦰", "🧑", "👩🏾"];
 const POLL_INTERVAL_MS = 1500;
+const SIMULATE_DEBOUNCE_MS = 400;
+
+// Networks the adsgo.ai-style setup exposes as one-click toggles. Both default on to match the
+// "publish to Meta and Google" promise; the launch pre-flight prompts to connect whichever isn't.
+const NETWORK_OPTIONS: { value: "meta" | "google"; label: string }[] = [
+  { value: "meta", label: "Meta" },
+  { value: "google", label: "Google" },
+];
+
+// Fallback objective list if GET /campaigns/objectives hasn't resolved yet — replaced by the
+// engine-driven list (metaObjectives.ts) as soon as it loads, so this is only ever a brief default.
+const FALLBACK_OBJECTIVES: CampaignObjectiveOption[] = [
+  { value: "OUTCOME_TRAFFIC", label: "Traffic", description: "Send people to your site" },
+  { value: "OUTCOME_LEADS", label: "Leads", description: "Collect leads via forms or calls" },
+  { value: "OUTCOME_SALES", label: "Sales", description: "Find people likely to purchase" },
+  { value: "OUTCOME_AWARENESS", label: "Awareness", description: "Maximize reach and recall" },
+];
+
+const DEFAULT_BUDGET_CENTS = 2000;
+
+function formatMoney(cents: number): string {
+  return `$${(cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+function formatCompact(n: number): string {
+  return Number(n || 0).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
+}
 
 /**
  * Mirrors the pipeline's real phases (modules/orchestrator/campaignGenerationPipeline.ts) —
@@ -28,10 +60,10 @@ const POLL_INTERVAL_MS = 1500;
  * review the result in the Campaign Builder before actually launching it.
  */
 const PHASE_ORDER: { key: CampaignGenerationPipelineStatus; label: string; icon: typeof TargetIcon }[] = [
-  { key: "researching", label: "Researching the business across 9 parallel research providers", icon: GlobeIcon },
-  { key: "aggregating", label: "Fusing research into one confidence-scored context", icon: TargetIcon },
-  { key: "running_agents", label: "Ranking recommendations and simulating campaign strategies", icon: LightningIcon },
-  { key: "building_campaign", label: "Building your campaign and generating real ad creative", icon: SparkleIcon },
+  { key: "researching", label: "Comprehensive product, audience & market analysis", icon: GlobeIcon },
+  { key: "aggregating", label: "Fusing intelligence across all sources with confidence scoring", icon: TargetIcon },
+  { key: "running_agents", label: "Mining Meta Ads interests, validating keywords & simulating strategies", icon: LightningIcon },
+  { key: "building_campaign", label: "Generating publication-ready ad creative & campaign structure", icon: SparkleIcon },
 ];
 
 function phaseIndex(status: CampaignGenerationPipelineStatus): number {
@@ -45,22 +77,35 @@ function phaseIndex(status: CampaignGenerationPipelineStatus): number {
 const PHASE_SUBLINES: Record<CampaignGenerationPipelineStatus, string[]> = {
   pending: [],
   researching: [
-    "Crawling the site, screenshotting pages, and reading competitor + market signals…",
-    "Cross-checking sources for conflicting claims…",
-    "Gathering audience, keyword, and news data in parallel…",
+    "Analyzing product positioning, features, pricing and use cases…",
+    "Analyzing target audience profile and buyer personas…",
+    "Analyzing competitors and calculating daily budget recommendations…",
+    "Analyzing global market trends and regional growth patterns for target location recommendations…",
+    "Comparing advertising platform performance to recommend optimal channel mix…",
+    "Mining Meta Ads audience interest keywords from multiple dimensions…",
+    "Crawling landing pages and extracting verified facts…",
+    "Reading customer reviews and social signals…",
   ],
   aggregating: [
-    "Merging 9 providers into one confidence-scored context…",
-    "Resolving conflicts between sources…",
+    "Validating product-related and competitor interest keywords in Meta Ads audience database…",
+    "Validating user occupation and industry interest keywords…",
+    "Validating professional interest and content consumption keywords…",
+    "Validating extended competitor and business function keywords…",
+    "Merging research sources into one confidence-scored context…",
   ],
   running_agents: [
-    "Scoring and ranking candidate recommendations…",
-    "Simulating 3 campaign strategies head-to-head…",
-    "Picking the strategy with the best expected ROI…",
+    "Based on product analysis, mining Meta Ads audience interest keywords from multiple perspectives…",
+    "Scoring and ranking 5 candidate recommendations head-to-head…",
+    "Simulating 3 campaign strategies with real market data…",
+    "Calculating genuine budget recommendation based on CPC benchmarks and competition…",
+    "Building 6 audience personas with interest targeting…",
+    "Analyzing opportunities, risks, and competitive gaps…",
   ],
   building_campaign: [
-    "Generating real ad copy and creative…",
-    "Assembling the campaign for review…",
+    "Generating publication-ready ad headlines and body copy…",
+    "Building Meta & Google Ads campaign structure…",
+    "Validating ad copy against platform character limits…",
+    "Output Audience Profile Data…",
   ],
   completed: [],
   failed: [],
@@ -77,55 +122,55 @@ function phaseSubline(key: CampaignGenerationPipelineStatus): string {
 // back to the raw name for anything added on the backend before this map is updated, so a
 // new provider/agent shows up as slightly-less-polished text instead of nothing.
 const STEP_LABELS: Record<string, string> = {
-  website: "Reading your website",
-  company: "Researching your company",
-  market: "Analyzing the market",
-  technology: "Detecting your tech stack",
-  competitor: "Searching competitors",
-  seo: "Finding keywords",
-  audience: "Building your audience profile",
-  news: "Checking recent news",
-  "social-media": "Checking social presence",
-  reviews: "Reading customer reviews",
-  funding: "Checking funding signals",
-  "hiring-signals": "Checking hiring activity",
-  "content-marketing": "Analyzing content marketing",
-  "backlink-authority": "Checking domain authority",
-  "app-store": "Checking app store presence",
-  "video-presence": "Checking video presence",
-  "local-presence": "Checking local presence",
-  partnerships: "Checking partnerships",
-  "legal-regulatory": "Checking legal & regulatory risk",
-  search: "Searching the web",
-  product: "Crawling product & pricing pages",
-  navigation: "Mapping your site structure",
-  "search-ranking": "Checking real search rankings",
-  "ad-library": "Checking competitor ad libraries",
-  autocomplete: "Checking search autocomplete",
-  "serp-features": "Checking related searches",
-  reddit: "Checking community discussion",
-  aggregating: "Fusing research into one context",
-  "product-agent": "Defining your product positioning",
-  "audience-agent": "Refining your audience",
-  "competitor-agent": "Mapping competitive differentiation",
-  "market-agent": "Scoring market opportunity",
-  "keyword-agent": "Building keyword strategy",
-  "creative-agent": "Writing ad creative",
-  "budget-agent": "Calculating your budget",
-  "persona-agent": "Building personas",
-  "campaign-agent": "Synthesizing your campaign strategy",
-  "landing-page-agent": "Reviewing your landing page",
-  "pricing-offer-agent": "Analyzing pricing",
-  "localization-agent": "Planning localization",
-  "seo-content-agent": "Planning SEO content",
-  "seasonality-timing-agent": "Timing your launch",
-  "channel-placement-agent": "Choosing ad placements",
-  "funnel-retargeting-agent": "Planning your funnel",
-  "objection-handling-agent": "Preparing objection handling",
-  "forecasting-kpi-agent": "Forecasting performance",
-  "critic-agent": "Reviewing for quality",
-  "compliance-agent": "Reviewing for compliance",
-  "campaign-built": "Assembling your campaign",
+  website: "Analyzing product positioning, features and use cases",
+  company: "Researching company background and brand identity",
+  market: "Analyzing global market trends and regional growth patterns",
+  technology: "Detecting tech stack and integration opportunities",
+  competitor: "Analyzing competitors and calculating daily budget benchmarks",
+  seo: "Mining SEO keywords and search intent data",
+  audience: "Analyzing target audience profile and behavior patterns",
+  news: "Checking recent industry news and market signals",
+  "social-media": "Analyzing social media engagement and brand sentiment",
+  reviews: "Reading customer reviews for messaging insights",
+  funding: "Checking funding signals and growth trajectory",
+  "hiring-signals": "Analyzing hiring patterns for market timing",
+  "content-marketing": "Evaluating content strategy and thought leadership",
+  "backlink-authority": "Checking domain authority and competitive standing",
+  "app-store": "Checking app store presence and ratings",
+  "video-presence": "Analyzing video content and ad creative potential",
+  "local-presence": "Checking local market presence and geo-targeting opportunities",
+  partnerships: "Mapping partnership ecosystem and co-marketing opportunities",
+  "legal-regulatory": "Checking legal & regulatory compliance for ad content",
+  search: "Searching the web for real-time market intelligence",
+  product: "Deep-crawling product pages, pricing tiers and feature comparisons",
+  navigation: "Mapping site structure for landing page recommendations",
+  "search-ranking": "Checking real search rankings vs. competitors",
+  "ad-library": "Analyzing competitor ad libraries across Meta & Google",
+  autocomplete: "Mining search autocomplete for audience intent signals",
+  "serp-features": "Analyzing SERP features and ad opportunity gaps",
+  reddit: "Mining community discussions for pain points and objections",
+  aggregating: "Fusing research sources into confidence-scored context",
+  "product-agent": "Analyzing product positioning and unique selling propositions",
+  "audience-agent": "Mining Meta Ads audience interest keywords from multiple dimensions",
+  "competitor-agent": "Mapping competitive gaps and differentiation strategy",
+  "market-agent": "Comparing advertising platform performance for optimal channel recommendation",
+  "keyword-agent": "Validating interest keywords in Meta Ads audience database",
+  "creative-agent": "Generating publication-ready ad headlines and body copy",
+  "budget-agent": "Calculating genuine budget recommendation based on CPC data and competition",
+  "persona-agent": "Building 6 detailed audience personas with interest targeting",
+  "campaign-agent": "Synthesizing full campaign strategy with platform-specific structure",
+  "landing-page-agent": "Analyzing landing page conversion potential and recommendations",
+  "pricing-offer-agent": "Analyzing pricing strategy and offer positioning for ads",
+  "localization-agent": "Planning multi-market localization and geo-targeting",
+  "seo-content-agent": "Planning SEO content funnel for organic growth alongside paid",
+  "seasonality-timing-agent": "Analyzing seasonality patterns for optimal launch timing",
+  "channel-placement-agent": "Recommending ad placements across Feed, Stories, Reels, Search",
+  "funnel-retargeting-agent": "Planning retargeting funnel stages and audience segments",
+  "objection-handling-agent": "Preparing objection-handling copy for ad variations",
+  "forecasting-kpi-agent": "Forecasting KPIs: expected ROAS, CPA, reach and conversions",
+  "critic-agent": "Quality review — validating strategy coherence and ad effectiveness",
+  "compliance-agent": "Compliance review — checking Meta & Google ad policies",
+  "campaign-built": "Assembling final campaign with real ad preview data",
 };
 
 function stepLabel(step: string): string {
@@ -175,7 +220,7 @@ function AssistantTag({ time }: { time: string }) {
   return (
     <div className="decision-assistant-tag">
       <span className="copilot-avatar">🤖</span>
-      <span className="decision-assistant-name">Polluxa AI</span>
+      <span className="decision-assistant-name">CRM Ads AI</span>
       {stamp && <span className="decision-assistant-time">{stamp}</span>}
     </div>
   );
@@ -227,15 +272,25 @@ const METRIC_ROWS: { key: keyof StrategySimulationResult; label: string; goodHig
   { key: "budgetEfficiency", label: "Budget eff.", goodHigh: true },
 ];
 
-function StrategyCard({ strategy, simulation, isWinner }: { strategy: CampaignStrategyOption; simulation?: StrategySimulationResult; isWinner: boolean }) {
+function truncateText(s: string, max: number) {
+  if (!s || s.length <= max) return s;
+  return s.slice(0, max).trimEnd() + "…";
+}
+
+function StrategyCard({ strategy, simulation, isWinner, onSelect, selecting, disabled }: {
+  strategy: CampaignStrategyOption;
+  simulation?: StrategySimulationResult;
+  isWinner: boolean;
+  onSelect?: () => void;
+  selecting?: boolean;
+  disabled?: boolean;
+}) {
   const platforms = strategy.platforms ?? [];
-  const strengths = strategy.strengths ?? [];
-  const weaknesses = strategy.weaknesses ?? [];
   return (
     <div className={`strategy-card-v2 ${isWinner ? "winner" : ""}`}>
       <div className="strategy-card-v2-head">
         <span className="strategy-card-v2-label">{strategy.label}</span>
-        {isWinner && <span className="decision-winner-badge">★ Winner</span>}
+        {isWinner && <span className="decision-winner-badge">★ Recommended</span>}
       </div>
 
       {simulation && (
@@ -259,14 +314,21 @@ function StrategyCard({ strategy, simulation, isWinner }: { strategy: CampaignSt
         </div>
       )}
 
-      <div className="strategy-card-v2-field"><strong>Target Audience</strong>{strategy.targetAudience}</div>
+      <div className="strategy-card-v2-field"><strong>Target Audience</strong>{truncateText(strategy.targetAudience, 80)}</div>
       <div className="strategy-card-v2-field"><strong>Platforms &amp; Objective</strong>{platforms.join(", ") || "—"} · {strategy.objective}</div>
-      <div className="strategy-card-v2-field"><strong>Budget</strong>{formatCents(strategy.budgetDailyCents)}/day · KPI: {strategy.expectedKpi}</div>
-      <div className="strategy-card-v2-field"><strong>Creative Direction</strong>{strategy.creativeDirection}</div>
-      <div className="strategy-card-v2-field"><strong>Messaging</strong>{strategy.messaging}</div>
-      <div className="strategy-card-v2-field"><strong>Offer</strong>{strategy.offer}</div>
-      {strengths.length > 0 && <div className="strategy-card-v2-field"><strong>Strengths</strong>{strengths.join("; ")}</div>}
-      {weaknesses.length > 0 && <div className="strategy-card-v2-field"><strong>Weaknesses</strong>{weaknesses.join("; ")}</div>}
+      <div className="strategy-card-v2-field"><strong>Budget</strong>{formatCents(strategy.budgetDailyCents)}/day · KPI: {truncateText(strategy.expectedKpi, 60)}</div>
+      <div className="strategy-card-v2-field"><strong>Creative Direction</strong>{truncateText(strategy.creativeDirection, 100)}</div>
+      <div className="strategy-card-v2-field"><strong>Messaging</strong>{truncateText(strategy.messaging, 80)}</div>
+      {onSelect && (
+        <button
+          type="button"
+          className={`btn btn-sm strategy-card-v2-select ${isWinner ? "btn-primary" : "btn-secondary"}`}
+          onClick={onSelect}
+          disabled={selecting || disabled}
+        >
+          {selecting ? "Building campaign…" : "Use this campaign"}
+        </button>
+      )}
     </div>
   );
 }
@@ -276,41 +338,44 @@ const PERSONA_AVATAR_COLORS = [
   { bg: "#e6f4ea", color: "#34a853" },
   { bg: "#fef7e0", color: "#f9ab00" },
   { bg: "#fce8e6", color: "#ea4335" },
-  { bg: "#f3e8fd", color: "#7033f5" },
+  { bg: "#f3e8fd", color: "#1c9ce0" },
 ];
 
 function PersonaCarousel({ personas }: { personas: AudiencePersonaCard[] }) {
   return (
-    <div className="crawler-block-content">
-      <p>Who's actually going to see this — {personas.length} audience persona{personas.length === 1 ? "" : "s"} built from the research:</p>
-      <div className="persona-carousel">
-        <div className="persona-carousel-track">
-          {personas.map((p, i) => {
-            const avatar = PERSONA_AVATAR_COLORS[i % PERSONA_AVATAR_COLORS.length];
-            return (
-              <div key={p.name} className="persona-card">
-                <div className="persona-card-avatar" style={{ background: avatar.bg, color: avatar.color }}>
+    <div className="persona-grid-wrap">
+      <div className="persona-grid">
+        {personas.map((p, i) => {
+          const avatar = PERSONA_AVATAR_COLORS[i % PERSONA_AVATAR_COLORS.length];
+          const desc = p.description.length > 90 ? p.description.slice(0, 90).trimEnd() + "…" : p.description;
+          const interests = (p.interests ?? []).slice(0, 3);
+          return (
+            <div key={p.name} className="persona-card-v2" style={{ borderTopColor: avatar.color }}>
+              <div className="persona-card-v2-top">
+                <div className="persona-card-v2-avatar" style={{ background: avatar.bg, color: avatar.color }}>
                   <UserIcon />
                 </div>
-                <div className="persona-card-name">{p.name}</div>
-                {(p.ageRange || p.genderSplit) && (
-                  <div className="persona-card-meta">
-                    {p.ageRange && <span><strong>Age:</strong> {p.ageRange}</span>}
-                    {p.genderSplit && <span><strong>Gender:</strong> {p.genderSplit}</span>}
-                  </div>
-                )}
-                <p className="persona-card-details">{p.description}</p>
-                {(p.interests ?? []).length > 0 && (
-                  <div className="persona-card-interest-chips">
-                    {(p.interests ?? []).map((tag) => (
-                      <span key={tag} className="persona-card-interest-chip" style={{ color: avatar.color, borderColor: avatar.color }}>{tag}</span>
-                    ))}
-                  </div>
-                )}
+                <div className="persona-card-v2-info">
+                  <div className="persona-card-v2-name">{p.name}</div>
+                  {(p.ageRange || p.genderSplit) && (
+                    <div className="persona-card-v2-meta">
+                      {p.ageRange && <span>{p.ageRange}</span>}
+                      {p.genderSplit && <span>{p.genderSplit}</span>}
+                    </div>
+                  )}
+                </div>
               </div>
-            );
-          })}
-        </div>
+              <p className="persona-card-v2-desc">{desc}</p>
+              {interests.length > 0 && (
+                <div className="persona-card-v2-tags">
+                  {interests.map((tag) => (
+                    <span key={tag} className="persona-card-v2-tag" style={{ color: avatar.color, background: avatar.bg }}>{tag.length > 25 ? tag.slice(0, 25) + "…" : tag}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -385,7 +450,26 @@ function HeroScreenshot({ url, screenshot }: { url: string; screenshot?: string 
   );
 }
 
-function DecisionContextView({ decision: raw, url }: { decision: DecisionContext; url: string }) {
+function CollapsibleSection({ title, icon, defaultOpen = false, children }: { title: string; icon: React.ReactNode; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className={`decision-section dc-collapsible${open ? " dc-open" : ""}`}>
+      <button type="button" className="dc-toggle" onClick={() => setOpen(!open)}>
+        <span className="decision-section-title"><span className="icon-badge">{icon}</span>{title}</span>
+        <span className="dc-chevron">{open ? "−" : "+"}</span>
+      </button>
+      {open && <div className="dc-body">{children}</div>}
+    </div>
+  );
+}
+
+function DecisionContextView({ decision: raw, url, jobId, onSelectStrategy, selectingStrategy }: {
+  decision: DecisionContext;
+  url: string;
+  jobId?: string;
+  onSelectStrategy?: (strategyRef: string) => void;
+  selectingStrategy?: string | null;
+}) {
   const decision = normalizeDecision(raw);
   const simByStrategy = new Map(decision.simulations.map((s) => [s.strategyId, s]));
   const sortedStrategies = [...decision.strategies].sort(
@@ -397,22 +481,12 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
   const confidencePct = Math.round(decision.confidence * 100);
   const region = decision.regionalMarketDepth;
 
-  const sectionsShown = [
-    true, // hero
-    decision.recommendedDailyBudgetCents > 0,
-    decision.audiencePersonas.length > 0,
-    decision.topOpportunities.length > 0 || decision.topRisks.length > 0,
-    true, // recommended direction
-    decision.pricingTiers.length > 0,
-    topRecommendations.length > 0,
-    sortedStrategies.length > 0,
-  ].filter(Boolean).length;
-
   return (
     <div className="decision-results-shell">
     <div className="decision-results">
       <AssistantTag time={decision.generatedAt} />
 
+      {/* Hero — always visible */}
       <div className="decision-hero">
         <HeroScreenshot url={url} screenshot={decision.websiteScreenshot} />
         <div className="decision-hero-body">
@@ -421,14 +495,8 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
 
           {decision.quantifiedProofPoints.length > 0 && (
             <div className="proof-chip-row">
-              {decision.quantifiedProofPoints.map((p) => <span key={p} className="proof-chip">{p}</span>)}
+              {decision.quantifiedProofPoints.slice(0, 3).map((p) => <span key={p} className="proof-chip">{p}</span>)}
             </div>
-          )}
-
-          {decision.notableCustomers.length > 0 && (
-            <p className="trusted-by-row">
-              Trusted by <strong>{decision.notableCustomers.join(", ")}</strong>
-            </p>
           )}
 
           <div className="decision-hero-meta">
@@ -440,133 +508,112 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
               </div>
             </div>
             {sortedStrategies[0] && <span className="decision-winner-badge">★ {sortedStrategies[0].label} wins</span>}
+            {decision.recommendedDailyBudgetCents > 0 && (
+              <span className="decision-budget-badge">{formatCents(decision.recommendedDailyBudgetCents)}/day</span>
+            )}
           </div>
         </div>
       </div>
 
-      {decision.recommendedDailyBudgetCents > 0 && (
-        <div className="decision-section budget-hero">
-          <div className="budget-hero-figure-wrap">
-            <div className="budget-hero-figure">{formatCents(decision.recommendedDailyBudgetCents)}/day</div>
-            <div className="budget-hero-figure-label">Recommended Daily Budget</div>
+      {/* Quick summary bar — channels + budget allocation */}
+      <div className="dc-summary-bar">
+        {decision.recommendedChannels.length > 0 && (
+          <div className="dc-summary-item">
+            <span className="dc-summary-label">Channels</span>
+            <span className="channel-chip-row">
+              {decision.recommendedChannels.map((c) => <span key={c} className="channel-chip">{c}</span>)}
+            </span>
           </div>
-          {decision.budgetReasoning.length > 0 && (
-            <ul className="budget-hero-reasoning">
-              {decision.budgetReasoning.map((r) => <li key={r}>{r}</li>)}
-            </ul>
-          )}
-        </div>
-      )}
+        )}
+        {budgetEntries.length > 0 && (
+          <div className="dc-summary-item dc-summary-grow">
+            <span className="dc-summary-label">Budget Split</span>
+            <span className="budget-bar">
+              {budgetEntries.map(([k, v], i) => (
+                <span key={k} className="budget-bar-segment" style={{ width: `${v * 100}%`, background: BUDGET_COLORS[i % BUDGET_COLORS.length] }} title={`${k} ${pct(v)}`} />
+              ))}
+            </span>
+            <span className="budget-bar-legend">
+              {budgetEntries.map(([k, v], i) => (
+                <span key={k}><span className="budget-bar-legend-dot" style={{ background: BUDGET_COLORS[i % BUDGET_COLORS.length] }} />{k} {pct(v)}</span>
+              ))}
+            </span>
+          </div>
+        )}
+      </div>
 
+      {/* Collapsible sections */}
       {decision.audiencePersonas.length > 0 && (
-        <div className="decision-section">
-          <p className="decision-section-title"><span className="icon-badge"><UserIcon /></span>Who You're Talking To</p>
+        <CollapsibleSection title={`Audience Personas (${decision.audiencePersonas.length})`} icon={<UserIcon />} defaultOpen>
           <PersonaCarousel personas={decision.audiencePersonas} />
-        </div>
+        </CollapsibleSection>
       )}
 
       {(decision.topOpportunities.length > 0 || decision.topRisks.length > 0) && (
-        <div className="decision-section">
-          <p className="decision-section-title"><span className="icon-badge"><LightningIcon /></span>Opportunities &amp; Risks</p>
+        <CollapsibleSection title="Opportunities & Risks" icon={<LightningIcon />}>
           <div className="callout-grid">
             {decision.topOpportunities.length > 0 && (
               <div className="callout-card good">
-                <p className="callout-card-title">↑ Opportunities</p>
-                <ul>{decision.topOpportunities.map((o) => <li key={o}>{o}</li>)}</ul>
+                <p className="callout-card-title">Opportunities</p>
+                <ul>{decision.topOpportunities.slice(0, 4).map((o) => <li key={o}>{o}</li>)}</ul>
               </div>
             )}
             {decision.topRisks.length > 0 && (
               <div className="callout-card risk">
-                <p className="callout-card-title">⚠ Risks</p>
-                <ul>{decision.topRisks.map((r) => <li key={r}>{r}</li>)}</ul>
+                <p className="callout-card-title">Risks</p>
+                <ul>{decision.topRisks.slice(0, 4).map((r) => <li key={r}>{r}</li>)}</ul>
               </div>
             )}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
-      <div className="decision-section">
-        <p className="decision-section-title"><span className="icon-badge"><GlobeIcon /></span>Recommended Direction</p>
+      <CollapsibleSection title="Recommended Direction" icon={<GlobeIcon />}>
         {region && (
           <div className="regional-depth-row">
             <span className="regional-depth-stat"><strong>Region</strong>{region.region}</span>
             {region.marketSize && <span className="regional-depth-stat"><strong>Market Size</strong>{region.marketSize}</span>}
             {region.growthRate && <span className="regional-depth-stat"><strong>Growth Rate</strong>{region.growthRate}</span>}
-            {region.policyDrivers.length > 0 && (
-              <span className="regional-depth-stat"><strong>Policy Drivers</strong>{region.policyDrivers.join(", ")}</span>
-            )}
           </div>
         )}
         <dl className="field-grid">
           <div><dt>Positioning</dt><dd>{decision.recommendedPositioning}</dd></div>
           <div><dt>Audience Priority</dt><dd>{decision.recommendedAudiencePriority}</dd></div>
-          <div>
-            <dt>Channels</dt>
-            <dd>
-              {decision.recommendedChannels.length > 0 ? (
-                <span className="channel-chip-row">
-                  {decision.recommendedChannels.map((c) => <span key={c} className="channel-chip">{c}</span>)}
-                </span>
-              ) : "—"}
-            </dd>
-          </div>
-          {budgetEntries.length > 0 && (
-            <div>
-              <dt>Budget Allocation</dt>
-              <dd>
-                <span className="budget-bar">
-                  {budgetEntries.map(([k, v], i) => (
-                    <span key={k} className="budget-bar-segment" style={{ width: `${v * 100}%`, background: BUDGET_COLORS[i % BUDGET_COLORS.length] }} />
-                  ))}
-                </span>
-                <span className="budget-bar-legend">
-                  {budgetEntries.map(([k, v], i) => (
-                    <span key={k}><span className="budget-bar-legend-dot" style={{ background: BUDGET_COLORS[i % BUDGET_COLORS.length] }} />{k} {pct(v)}</span>
-                  ))}
-                </span>
-              </dd>
-            </div>
-          )}
           <div className="field-full"><dt>Creative Direction</dt><dd>{decision.recommendedCreativeDirection}</dd></div>
           <div><dt>Offer</dt><dd>{decision.recommendedOffer}</dd></div>
           <div><dt>Messaging</dt><dd>{decision.recommendedMessaging}</dd></div>
         </dl>
-      </div>
-
-      {decision.pricingTiers.length > 0 && (
-        <div className="decision-section">
-          <p className="decision-section-title"><span className="icon-badge"><SparkleIcon /></span>Pricing &amp; Monetization</p>
-          <div className="pricing-table">
-            {decision.pricingTiers.map((t) => (
-              <div key={t.tier} className="pricing-tile">
-                <div className="pricing-tile-name">{t.tier}</div>
-                <div className="pricing-tile-range">{t.priceRange}</div>
-                <div className="pricing-tile-details">{t.details}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      </CollapsibleSection>
 
       {topRecommendations.length > 0 && (
-        <div className="decision-section">
-          <p className="decision-section-title"><span className="icon-badge"><SparkleIcon /></span>Top Ranked Recommendations</p>
+        <CollapsibleSection title={`Top Recommendations (${topRecommendations.length})`} icon={<SparkleIcon />}>
           <div className="rec-list">
             {topRecommendations.map((r, i) => <RecommendationRow key={r.id} rec={r} rank={i + 1} />)}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {sortedStrategies.length > 0 && (
-        <div className="decision-section">
-          <AssistantTag time={decision.generatedAt} />
-          <p className="decision-section-title"><span className="icon-badge"><TargetIcon /></span>Candidate Strategies (ranked)</p>
+        <CollapsibleSection title={`${sortedStrategies.length} Complete Campaign Suggestions`} icon={<TargetIcon />} defaultOpen>
+          {onSelectStrategy && (
+            <p className="strategy-grid-hint muted-text">
+              Each suggestion is a complete campaign with Meta &amp; Google ads ready to launch. Pick one to open it in the builder.
+            </p>
+          )}
           <div className="strategy-grid">
             {sortedStrategies.map((s) => (
-              <StrategyCard key={s.id} strategy={s} simulation={simByStrategy.get(s.id)} isWinner={s.id === winnerId} />
+              <StrategyCard
+                key={s.id}
+                strategy={s}
+                simulation={simByStrategy.get(s.id)}
+                isWinner={s.id === winnerId}
+                onSelect={onSelectStrategy ? () => onSelectStrategy(s.id) : undefined}
+                selecting={selectingStrategy === s.id}
+                disabled={!!selectingStrategy && selectingStrategy !== s.id}
+              />
             ))}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {decision.evidence.length > 0 && (
@@ -575,11 +622,6 @@ function DecisionContextView({ decision: raw, url }: { decision: DecisionContext
           <ul>{decision.evidence.map((e) => <li key={e}>{e}</li>)}</ul>
         </details>
       )}
-    </div>
-    <div className="decision-progress-rail" aria-hidden="true">
-      {Array.from({ length: sectionsShown }).map((_, i) => (
-        <span key={i} className="decision-progress-dot filled" />
-      ))}
     </div>
     </div>
   );
@@ -610,54 +652,150 @@ function looksLikePageUrl(value: string): boolean {
   return !!parsed && parsed.hostname.includes(".");
 }
 
-/** "Grounded in N verified facts from your website" — the trust panel. Every concrete
- * claim the AI agents used (prices, named customers, guarantees) is shown with the exact
- * page it was read from, so the campaign is auditable rather than take-our-word-for-it.
- * Renders nothing while facts are loading or when the run produced none. */
-function VerifiedFactsSection({ jobId }: { jobId: string }) {
-  const [data, setData] = useState<CampaignGenerationFacts | null>(null);
-  const [expanded, setExpanded] = useState(false);
+/** Streams the RESEARCHED OUTPUT (company summary, market, audience, competitors) into the UI
+ * DURING the run — research completes roughly halfway through, well before the decision engine
+ * produces the final strategy, so this shows what we've learned about the business while the rest
+ * still runs. Fetches once `researchJobId` exists, re-polls while `streaming`, and is meant to be
+ * hidden by the caller once the full DecisionContextView renders at completion (avoids duplication).
+ * Renders nothing until a research context with a company summary is available. */
+function ResearchOutputPreview({ researchJobId, streaming }: { researchJobId: string; streaming?: boolean }) {
+  const [ctx, setCtx] = useState<ResearchContextLite | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    api.getCampaignGenerationFacts(jobId).then((d) => { if (!cancelled) setData(d); }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [jobId]);
+    const load = () => api.getResearchJob(researchJobId).then((r) => { if (!cancelled) setCtx(r.context); }).catch(() => {});
+    load();
+    if (!streaming) return () => { cancelled = true; };
+    const timer = window.setInterval(load, 4000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [researchJobId, streaming]);
 
-  if (!data || data.facts.length === 0) return null;
-  const shown = expanded ? data.facts : data.facts.slice(0, FACTS_PREVIEW_COUNT);
-  const crawlHost = data.crawl ? (safeParseUrl(data.crawl.url)?.hostname.replace(/^www\./, "") ?? data.crawl.url) : null;
+  const summary = ctx?.company?.summary?.trim();
+  if (!summary) return null;
+
+  const competitors = (ctx?.competitors?.competitors ?? []).map((c) => c.name).filter(Boolean).slice(0, 5);
+  const painPoints = (ctx?.audience?.painPoints ?? []).filter(Boolean).slice(0, 3);
 
   return (
-    <div className="verified-facts-section">
+    <div className="research-output-preview">
       <p className="decision-section-title">
-        <span className="icon-badge verified-facts-badge" aria-hidden="true">✓</span>
-        Grounded in {data.facts.length} verified facts from your website
+        <span className="icon-badge" aria-hidden="true">🔎</span>
+        What we've learned so far{streaming ? " — still analyzing…" : ""}
       </p>
-      {data.crawl && (
-        <p className="verified-facts-subline">
-          We crawled {data.crawl.pagesCrawled} pages of {crawlHost} — every concrete claim in this campaign traces back
-          to one of the facts below, so nothing is invented.
-        </p>
-      )}
-      <ul className="verified-facts-list">
-        {shown.map((f, i) => (
-          <li key={`${f.field}-${i}`} className="verified-fact-row">
-            <span className="verified-fact-value">{f.value}</span>
-            <span className="verified-fact-meta">
-              {f.sourceUrl && (
-                <a href={f.sourceUrl} target="_blank" rel="noreferrer" className="verified-fact-source">
-                  {f.sourcePageType && f.sourcePageType !== "other" ? f.sourcePageType : (safeParseUrl(f.sourceUrl)?.pathname ?? f.sourceUrl)}
-                </a>
-              )}
-              <span className="verified-fact-confidence">{Math.round(f.confidence * 100)}%</span>
-            </span>
-          </li>
-        ))}
-      </ul>
-      {data.facts.length > FACTS_PREVIEW_COUNT && (
+      <p className="research-output-summary">{summary}</p>
+      <div className="research-output-grid">
+        {ctx?.audience?.primaryAudience && (
+          <div className="research-output-item"><span className="research-output-key">Primary audience</span><span>{ctx.audience.primaryAudience}</span></div>
+        )}
+        {painPoints.length > 0 && (
+          <div className="research-output-item"><span className="research-output-key">Pain points</span><span>{painPoints.join(" · ")}</span></div>
+        )}
+        {ctx?.market?.recommendedRegion && (
+          <div className="research-output-item"><span className="research-output-key">Region</span><span>{ctx.market.recommendedRegion}</span></div>
+        )}
+        {competitors.length > 0 && (
+          <div className="research-output-item"><span className="research-output-key">Competitors</span><span>{competitors.join(" · ")}</span></div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Maps a fact's dot-path `field` (e.g. "pricing.starterPlan.price", "metrics.customerCount",
+// "product.name") to a human-readable category + display label for the grouped Research Findings
+// view. Keeps the AdsGo-style "labeled sections with bold values" layout without needing the
+// backend to change the fact shape. Order here is the display order of the category cards.
+const FACT_CATEGORIES: { key: string; label: string; match: RegExp }[] = [
+  { key: "brand", label: "Brand & Positioning", match: /^(brand|company|positioning|mission|tagline|about|usp|differentiat|value)/i },
+  { key: "product", label: "Product & Offering", match: /^(product|offering|feature|service|platform|software|solution|capabilit|integration)/i },
+  { key: "pricing", label: "Pricing & Plans", match: /^(pricing|price|plan|tier|cost|subscription|billing|free)/i },
+  { key: "proof", label: "Proof & Traction", match: /^(metric|proof|customer|client|traction|retention|uptime|growth|revenue|guarantee|award|certification|notable|casestudy|case_study)/i },
+  { key: "audience", label: "Audience & Use Cases", match: /^(audience|segment|usecase|use_case|persona|industry|vertical|market)/i },
+];
+function categorizeFact(field: string): { key: string; label: string } {
+  const hit = FACT_CATEGORIES.find((c) => c.match.test(field));
+  return hit ? { key: hit.key, label: hit.label } : { key: "other", label: "Other Findings" };
+}
+// Turn a dot-path field into a readable label: "pricing.starterPlan.price" → "Starter Plan Price".
+function humanizeField(field: string): string {
+  const tail = field.split(".").slice(-2).join(" ");
+  return tail
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
+/** The verified-facts trust panel, presented AdsGo-style: concrete claims the AI extracted from
+ * the site (prices, named customers, guarantees, metrics) grouped into labeled categories with the
+ * key in muted text and the value bold, each linked to its source page. First-party pages only
+ * (homepage/about/product/pricing/features) — case-study/blog ("other") pages are excluded so one
+ * business's page can't surface another company's details as if they were this one's. Renders
+ * nothing while loading or when no first-party facts were found. */
+function VerifiedFactsSection({ jobId, streaming }: { jobId: string; streaming?: boolean }) {
+  const [data, setData] = useState<CampaignGenerationFacts | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  // Fetch once on mount, then — while the run is still in progress (`streaming`) — re-poll so newly
+  // extracted facts appear progressively instead of only at completion. The interval clears the
+  // moment `streaming` goes false (job done/failed), so a finished run fetches exactly once.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => api.getCampaignGenerationFacts(jobId).then((d) => { if (!cancelled) setData(d); }).catch(() => {});
+    load();
+    if (!streaming) return () => { cancelled = true; };
+    const timer = window.setInterval(load, 4000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [jobId, streaming]);
+
+  if (!data || data.facts.length === 0) return null;
+
+  // First-party only: keep homepage/about/product/pricing/features; drop "other" (case studies,
+  // blog posts) whose facts are often ABOUT a different company mentioned on the page.
+  const firstParty = data.facts.filter((f) => f.sourcePageType == null || f.sourcePageType !== "other");
+  const usable = firstParty.length > 0 ? firstParty : data.facts;
+  // Highest-confidence first within each group; cap per group so no single category floods the view.
+  const sorted = [...usable].sort((a, b) => b.confidence - a.confidence);
+
+  const groups = new Map<string, { label: string; facts: typeof sorted }>();
+  for (const f of sorted) {
+    const { key, label } = categorizeFact(f.field);
+    if (!groups.has(key)) groups.set(key, { label, facts: [] });
+    groups.get(key)!.facts.push(f);
+  }
+  // Display in FACT_CATEGORIES order, "other" last.
+  const orderedKeys = [...FACT_CATEGORIES.map((c) => c.key), "other"].filter((k) => groups.has(k));
+  const PER_GROUP_PREVIEW = 4;
+
+  return (
+    <div className="research-findings">
+      {orderedKeys.map((key) => {
+        const group = groups.get(key)!;
+        const shown = expanded ? group.facts : group.facts.slice(0, PER_GROUP_PREVIEW);
+        return (
+          <div key={key} className="research-findings-group">
+            <p className="research-findings-group-title">{group.label}</p>
+            <dl className="research-findings-list">
+              {shown.map((f, i) => (
+                <div key={`${f.field}-${i}`} className="research-findings-row">
+                  <dt>{humanizeField(f.field)}</dt>
+                  <dd>
+                    {f.value}
+                    {f.sourceUrl && (
+                      <a href={f.sourceUrl} target="_blank" rel="noreferrer" className="research-findings-source" title={f.sourceUrl}>
+                        {f.sourcePageType && f.sourcePageType !== "other" ? f.sourcePageType : "source"}
+                      </a>
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        );
+      })}
+      {usable.some((_, i) => i >= PER_GROUP_PREVIEW) && (
         <button type="button" className="verified-facts-toggle" onClick={() => setExpanded((e) => !e)}>
-          {expanded ? "Show fewer" : `Show all ${data.facts.length} facts`}
+          {expanded ? "Show fewer" : `Show all ${usable.length} findings`}
         </button>
       )}
     </div>
@@ -705,6 +843,7 @@ function CompetitorAdsSection({ jobId }: { jobId: string }) {
 export default function NewCampaign() {
   const { workspaceId, businessId } = useAuth();
   const navigate = useNavigate();
+  const { subscribe } = useRealtimeContext();
   const wsId = workspaceId ?? localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
   const activeJobKey = `polluxa_active_campaign_generation_${wsId}`;
   const activeJobUrlKey = `${activeJobKey}_url`;
@@ -718,28 +857,106 @@ export default function NewCampaign() {
   const [refreshing, setRefreshing] = useState(false);
   const pollRef = useRef<number | null>(null);
 
-  // Same resumability contract as the old flow: generation runs server-side (BullMQ worker)
-  // regardless of whether this component is mounted — persisting just the job id means
-  // switching pages and back resumes exactly where it left off. The URL is persisted
-  // alongside it purely for display (the resubmit bar / decision hero eyebrow) — the job
-  // itself doesn't need it re-sent, since generation is already running server-side.
+  // ── adsgo.ai-style setup controls ──
+  const [objectives, setObjectives] = useState<CampaignObjectiveOption[]>(FALLBACK_OBJECTIVES);
+  const [objective, setObjective] = useState<string>("OUTCOME_TRAFFIC");
+  const [networks, setNetworks] = useState<("meta" | "google")[]>(["meta", "google"]);
+  const [dailyBudgetCents, setDailyBudgetCents] = useState<number>(DEFAULT_BUDGET_CENTS);
+  const [simulation, setSimulation] = useState<BudgetSimulation | null>(null);
+  const [connections, setConnections] = useState<{ meta: boolean; google: boolean }>({ meta: false, google: false });
+  const simulateTimerRef = useRef<number | null>(null);
+
+  // ── publish / go-live / auto-optimize (post-generation) ──
+  const [publishedCampaign, setPublishedCampaign] = useState<Campaign | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [goingLive, setGoingLive] = useState(false);
+  const [autoOptimize, setAutoOptimize] = useState(true);
+  // Which candidate strategy (by id) is currently being materialized into an editable campaign,
+  // so the picked card shows "Building…" and the others disable while the build is in flight.
+  const [selectingStrategy, setSelectingStrategy] = useState<string | null>(null);
+
+  // Resume ONLY a still-running generation. Generation runs server-side (BullMQ worker) regardless
+  // of whether this component is mounted, so persisting the job id lets an IN-PROGRESS run resume
+  // when you navigate back. But a COMPLETED/FAILED job must NOT be auto-restored: doing so
+  // resurrected a days-old finished result (the "stale 62% / Strategy C" polluxa view) every time
+  // the page was opened, because the status fetch succeeds for a finished job and it never
+  // self-cleared. Now a terminal job clears the pointer and leaves a fresh form instead.
   useEffect(() => {
     const savedId = localStorage.getItem(activeJobKey);
     if (!savedId) return;
-    const savedUrl = localStorage.getItem(activeJobUrlKey);
-    if (savedUrl) setPageUrl(savedUrl);
+    const clearPointer = () => {
+      localStorage.removeItem(activeJobKey);
+      localStorage.removeItem(activeJobUrlKey);
+    };
     api
       .getCampaignGenerationStatus(savedId)
-      .then(setJob)
-      .catch(() => {
-        localStorage.removeItem(activeJobKey);
-        localStorage.removeItem(activeJobUrlKey);
-      });
+      .then((restored) => {
+        // Only in-flight statuses resume; a finished/failed job is stale — drop it and start clean.
+        const inProgress = restored.status !== "completed" && restored.status !== "failed";
+        if (inProgress) {
+          const savedUrl = localStorage.getItem(activeJobUrlKey);
+          if (savedUrl) setPageUrl(savedUrl);
+          setJob(restored);
+        } else {
+          clearPointer();
+        }
+      })
+      .catch(clearPointer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const factsVisible = job?.status === "completed" || job?.status === "building_campaign";
+  // Load engine-driven objective list + current platform connection status once, for the setup UI.
+  useEffect(() => {
+    let cancelled = false;
+    api.getCampaignObjectives().then((r) => { if (!cancelled && r.objectives?.length) setObjectives(r.objectives); }).catch(() => {});
+    api.listIntegrations(wsId).then((list) => {
+      if (cancelled) return;
+      const isConnected = (p: string) => list.some((i) => i.platform === p && i.status === "connected");
+      setConnections({ meta: isConnected("meta"), google: isConnected("google") });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [wsId]);
 
+  // Live budget/goal simulator — debounced so dragging the slider doesn't spam the API. Only
+  // meaningful before generation (the setup screen); skipped once a job exists.
+  useEffect(() => {
+    if (job) return;
+    if (simulateTimerRef.current) window.clearTimeout(simulateTimerRef.current);
+    simulateTimerRef.current = window.setTimeout(async () => {
+      try {
+        const sim = await api.simulateCampaign({ objective, dailyBudgetCents, platforms: networks });
+        setSimulation(sim);
+      } catch {
+        // simulator is best-effort — a failure just hides the preview
+      }
+    }, SIMULATE_DEBOUNCE_MS);
+    return () => { if (simulateTimerRef.current) window.clearTimeout(simulateTimerRef.current); };
+  }, [objective, dailyBudgetCents, networks, job]);
+
+  // Verified facts are persisted in Phase 1 (crawl fact-extraction), long before the run finishes,
+  // so reveal them as soon as we're PAST research — they stream in progressively via the status
+  // poll instead of staying hidden until "completed". The facts endpoint returns [] until rows
+  // exist, so showing the section early just renders empty until the first facts land, never errors.
+  const factsVisible =
+    job?.status === "completed" ||
+    job?.status === "building_campaign" ||
+    job?.status === "running_agents" ||
+    job?.status === "aggregating";
+
+  // Real-time WebSocket progress updates (instant, replaces polling as primary source)
+  useEffect(() => {
+    if (!job || job.status === "completed" || job.status === "failed") return;
+    const unsub = subscribe(`campaign.progress:${job.id}`, (_ch, payload: any) => {
+      if (payload?.step) {
+        setProgressSteps((prev) => prev.includes(payload.step) ? prev : [...prev, payload.step]);
+      }
+      if (payload?.progress) setProgressTotal((prev) => Math.max(prev ?? 0, Number(payload.progress) || 0));
+    });
+    return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id, job?.status, subscribe]);
+
+  // Polling fallback: still needed for status changes (completed/failed) and as a safety net
   useEffect(() => {
     if (!job || job.status === "completed" || job.status === "failed") {
       if (pollRef.current) window.clearInterval(pollRef.current);
@@ -780,10 +997,14 @@ export default function NewCampaign() {
       setError("No business selected yet — try again in a moment.");
       return;
     }
+    if (networks.length === 0) {
+      setError("Select at least one platform (Meta or Google).");
+      return;
+    }
     setError(null);
     setStarting(true);
     try {
-      const created = await api.generateCampaign({ workspaceId: wsId, businessId, url });
+      const created = await api.generateCampaign({ workspaceId: wsId, businessId, url, dailyBudgetCents, objective, channels: networks });
       setJob(created);
       setProgressSteps([]);
       setProgressTotal(null);
@@ -796,16 +1017,80 @@ export default function NewCampaign() {
     }
   }
 
+  // One-click publish: builds the real Meta/Google hierarchy (all PAUSED) via launchCampaign,
+  // using the workspace's default ad-account connection — no builder round-trip. A 422 means a
+  // needed platform isn't connected; surface it with a link to the connection settings.
+  async function handlePublish() {
+    if (!job?.campaignId) return;
+    setPublishing(true);
+    setError(null);
+    try {
+      const launched = await api.launchCampaign(job.campaignId, wsId);
+      setPublishedCampaign(launched);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Publish failed — try again.";
+      if (/META_NOT_CONNECTED|Meta ad account/i.test(msg)) {
+        setError("Connect your Meta ad account before publishing. Open Settings → Ad Platform Connection.");
+      } else if (/GOOGLE_NOT_CONNECTED|Google Ads account/i.test(msg)) {
+        setError("Connect your Google Ads account before publishing. Open Settings → Ad Platform Connection.");
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  // "Go live" — flips every launched (PAUSED) variant to ACTIVE, sets the persistent auto-optimize
+  // preference, then pulls metrics once immediately so CampaignDetail isn't empty for 15 minutes.
+  async function handleGoLive() {
+    const campaign = publishedCampaign;
+    if (!campaign) return;
+    setGoingLive(true);
+    setError(null);
+    try {
+      const launchedVariants = campaign.variants.filter((v) => v.externalId && v.status !== "active");
+      for (const v of launchedVariants) {
+        try { await api.activateVariant(campaign.id, v.id); } catch { /* one variant failing shouldn't block the rest */ }
+      }
+      await api.setAutoOptimize(campaign.id, autoOptimize).catch(() => {});
+      await api.ingestMetrics(campaign.id).catch(() => {}); // best-effort first metrics pull
+      navigate(`/campaigns/${campaign.id}`);
+    } finally {
+      setGoingLive(false);
+    }
+  }
+
+  // Picks one of the 3 candidate strategies and opens its complete campaign in the builder.
+  // The winner reuses the campaign the pipeline already built; a non-winner is built on demand
+  // from data already computed (POST .../select-strategy). Either way the user lands in the
+  // builder with a full Meta + Google ad set for that strategy.
+  async function handleSelectStrategy(strategyRef: string) {
+    if (!job?.id || selectingStrategy) return;
+    setSelectingStrategy(strategyRef);
+    setError(null);
+    try {
+      const result = await api.selectCampaignStrategy(job.id, strategyRef);
+      navigate(`/campaigns/${result.campaignId}/builder`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't build that campaign — try another suggestion.");
+      setSelectingStrategy(null);
+    }
+  }
+
   // Re-runs the exact same generation pipeline against the same URL/business — deliberately
-  // just another POST /campaigns/generate call (same path `handleStart` uses), not a separate
-  // "refresh" endpoint: there's no caching/invalidation to bypass, staleness here just means
-  // "the last run is old," so the fix is running the same real pipeline again.
+  // "Refresh research" must force a genuinely fresh crawl, so it passes forceRefresh:true. Without
+  // it, POST /campaigns/generate re-serves a recent completed job for the same (workspace,business,
+  // url) — AND the pipeline reuses cached research within its TTL — so "refresh" would silently
+  // return the same stale run (and, worse, a job whose campaign may since have been deleted, which
+  // is exactly how the builder ended up on a "Campaign not found" id). forceRefresh bypasses both
+  // the router short-circuit and the pipeline research cache, guaranteeing a real re-crawl.
   async function handleRefresh() {
     if (!job?.url || !businessId) return;
     setRefreshing(true);
     setError(null);
     try {
-      const created = await api.generateCampaign({ workspaceId: wsId, businessId, url: job.url });
+      const created = await api.generateCampaign({ workspaceId: wsId, businessId, url: job.url, forceRefresh: true });
       setJob(created);
       setProgressSteps([]);
       setProgressTotal(null);
@@ -824,6 +1109,7 @@ export default function NewCampaign() {
     setPageUrl("");
     setProgressSteps([]);
     setProgressTotal(null);
+    setPublishedCampaign(null);
     localStorage.removeItem(activeJobKey);
     localStorage.removeItem(activeJobUrlKey);
   }
@@ -855,8 +1141,8 @@ export default function NewCampaign() {
             <span className="new-campaign-word-accent">page</span> would you like to promote?
           </h2>
           <p className="new-campaign-subtext">
-            Paste your link below — the Research Orchestrator (9 parallel research providers) and Decision Engine
-            will analyze it and build a ranked, evidence-backed campaign strategy, then generate real ads for you.
+            Paste your link below — 10 research providers will analyze product positioning, audience, competitors, and market data in real-time.
+            The AI will mine Meta Ads interest keywords, validate them against the platform database, and generate publication-ready campaigns with genuine budget recommendations.
           </p>
 
           {error && <p className="error">{error}</p>}
@@ -877,18 +1163,87 @@ export default function NewCampaign() {
             </button>
           </div>
 
+          {/* adsgo.ai-style setup: objective + networks + budget slider with a live outcome preview */}
+          <div className="new-campaign-setup">
+            <div className="ncs-field">
+              <label className="ncs-label">Objective</label>
+              <div className="ncs-objective-row">
+                {objectives.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    className={`ncs-chip${objective === o.value ? " ncs-chip-active" : ""}`}
+                    onClick={() => setObjective(o.value)}
+                    title={o.description}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="ncs-field">
+              <label className="ncs-label">Platforms</label>
+              <div className="ncs-objective-row">
+                {NETWORK_OPTIONS.map((n) => {
+                  const on = networks.includes(n.value);
+                  const connected = connections[n.value];
+                  return (
+                    <button
+                      key={n.value}
+                      type="button"
+                      className={`ncs-chip${on ? " ncs-chip-active" : ""}`}
+                      onClick={() => setNetworks((prev) => prev.includes(n.value) ? prev.filter((x) => x !== n.value) : [...prev, n.value])}
+                    >
+                      {n.label}
+                      <span className={`ncs-conn-dot${connected ? " ncs-conn-ok" : ""}`} title={connected ? `${n.label} connected` : `${n.label} not connected — you can still generate, but you'll be asked to connect before publishing`} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="ncs-field">
+              <label className="ncs-label">Daily budget: <strong>{formatMoney(dailyBudgetCents)}</strong></label>
+              <input
+                type="range"
+                className="ncs-slider"
+                min={500}
+                max={50000}
+                step={500}
+                value={dailyBudgetCents}
+                onChange={(e) => setDailyBudgetCents(Number(e.target.value))}
+              />
+            </div>
+
+            {simulation && (
+              <div className="ncs-sim">
+                <span className="ncs-sim-title">Ballpark projection — from your objective, budget &amp; platforms</span>
+                <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estImpressionsPerDay)}</span><span className="ncs-sim-key">impressions/day</span></div>
+                <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estClicks)}</span><span className="ncs-sim-key">clicks/day</span></div>
+                <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estConversions)}</span><span className="ncs-sim-key">conv./day</span></div>
+                <div className="ncs-sim-item"><span className="ncs-sim-val">{simulation.estRoas.toFixed(1)}×</span><span className="ncs-sim-key">est. ROAS</span></div>
+                <span className="ncs-sim-note">Industry-average estimate, not a forecast for your business yet — it moves with the objective, budget, and platform mix above. You'll get real numbers for {pageUrl ? "this site" : "your site"} after Deep Research runs.</span>
+              </div>
+            )}
+          </div>
+
           <div className="new-campaign-value-row">
             <div className="new-campaign-value-item">
               <span className="new-campaign-value-icon"><TargetIcon /></span>
-              <span>Ranked, explainable recommendations</span>
+              <span>6 audience personas with real Meta Ads interest targeting</span>
             </div>
             <div className="new-campaign-value-item">
               <span className="new-campaign-value-icon"><LightningIcon /></span>
-              <span>3 simulated strategies — the best one wins</span>
+              <span>Genuine budget based on CPC benchmarks &amp; competition</span>
             </div>
             <div className="new-campaign-value-item">
               <span className="new-campaign-value-icon"><SparkleIcon /></span>
-              <span>Real ads generated automatically</span>
+              <span>Publication-ready ads that comply with platform policies</span>
+            </div>
+            <div className="new-campaign-value-item">
+              <span className="new-campaign-value-icon"><GlobeIcon /></span>
+              <span>Scale from test to millions with tiered growth plan</span>
             </div>
           </div>
         </div>
@@ -917,10 +1272,10 @@ export default function NewCampaign() {
           {isActive && (
             <div className="crawler-trace">
               <div className="crawler-trace-header">
-                <span>Generating your campaign — research, ranking, and ad creation all happen automatically.</span>
+                <span>Analyzing {pageUrl || "your page"} with comprehensive product and audience analysis.</span>
               </div>
               <p className="crawler-trace-time-note">
-                This usually takes a few minutes — feel free to browse other pages, we'll keep working in the background.
+                Deep research across every source, Meta Ads interest mining, and strategy simulation in progress — this runs in the background.
               </p>
               <ul className="crawler-trace-steps">
                 {PHASE_ORDER.map((phase, i) => {
@@ -952,27 +1307,78 @@ export default function NewCampaign() {
             </div>
           )}
 
+          {/* Stream the researched output the moment research completes (mid-run), so the user sees
+              what we've learned while agents + strategy still run. Superseded by the full decision
+              view below once it lands, so this only shows in the gap between the two. */}
+          {isActive && job.researchJobId && !job.decisionContext && (
+            <ResearchOutputPreview researchJobId={job.researchJobId} streaming={isActive} />
+          )}
+
           {isDone && <FreshnessBadge job={job} onRefresh={handleRefresh} refreshing={refreshing} />}
 
-          {job.decisionContext && <DecisionContextView decision={job.decisionContext} url={pageUrl} />}
+          {job.decisionContext && (
+            <DecisionContextView
+              decision={job.decisionContext}
+              url={pageUrl}
+              jobId={job.id}
+              onSelectStrategy={isDone && !publishedCampaign ? handleSelectStrategy : undefined}
+              selectingStrategy={selectingStrategy}
+            />
+          )}
 
-          {factsVisible && <VerifiedFactsSection jobId={job.id} />}
+          {/* Research Findings — the concrete facts extracted from the site, grouped into labeled
+              categories (Brand, Product, Pricing, Proof, Audience) with bold values. Scoped to
+              first-party pages inside the component, which resolves the earlier case-study-leak
+              concern that had this hidden. Shows once the run is done and the decision view is up. */}
+          {isDone && job.decisionContext && (
+            <CollapsibleSection title="Research Findings" icon={<SearchIcon />} defaultOpen>
+              <VerifiedFactsSection jobId={job.id} streaming={isActive} />
+            </CollapsibleSection>
+          )}
 
           {factsVisible && <CompetitorAdsSection jobId={job.id} />}
 
-          {isDone && (
+          {isDone && !publishedCampaign && (
             <div className="all-set-banner">
               <span className="all-set-banner-icon" aria-hidden="true">✓</span>
-              <span>Your campaign is ready — real ads have been generated. Review and launch it in the builder.</span>
+              <span>Your campaign is ready — real ads have been generated. Publish to {networks.map((n) => n === "meta" ? "Meta" : "Google").join(" & ")} in one click, or fine-tune it in the builder.</span>
             </div>
           )}
 
-          {isDone && job.campaignId && (
+          {/* One-click publish (pre-publish) */}
+          {isDone && job.campaignId && !publishedCampaign && (
             <div className="crawler-result-actions">
-              <button className="btn btn-primary" onClick={() => navigate(`/campaigns/${job.campaignId}/builder`)}>
-                Review in Campaign Builder
+              <button className="btn btn-primary" onClick={handlePublish} disabled={publishing}>
+                {publishing ? "Publishing…" : `Publish to ${networks.map((n) => n === "meta" ? "Meta" : "Google").join(" & ")}`}
+              </button>
+              <button className="btn btn-secondary" onClick={() => navigate(`/campaigns/${job.campaignId}/builder`)}>
+                Customize in Builder
               </button>
               <button className="btn btn-secondary" onClick={handleReset}>Try a different page</button>
+            </div>
+          )}
+
+          {/* Published (PAUSED) — go live + auto-optimize */}
+          {publishedCampaign && (
+            <div className="publish-live-panel">
+              <div className="all-set-banner">
+                <span className="all-set-banner-icon" aria-hidden="true">✓</span>
+                <span>
+                  Published to {publishedCampaign.networks.map((n) => n === "meta" ? "Meta" : "Google").join(" & ")} — {publishedCampaign.variants.filter((v) => v.externalId).length} ad(s) created and <strong>paused</strong>. Nothing spends until you go live.
+                </span>
+              </div>
+              <label className="ncs-optimize-toggle">
+                <input type="checkbox" checked={autoOptimize} onChange={(e) => setAutoOptimize(e.target.checked)} />
+                <span><strong>24/7 auto-optimize</strong> — automatically shift budget to winning ads and pause underperformers.</span>
+              </label>
+              <div className="crawler-result-actions">
+                <button className="btn btn-primary" onClick={handleGoLive} disabled={goingLive}>
+                  {goingLive ? "Going live…" : "Go live"}
+                </button>
+                <button className="btn btn-secondary" onClick={() => navigate(`/campaigns/${publishedCampaign.id}`)}>
+                  View campaign
+                </button>
+              </div>
             </div>
           )}
         </div>

@@ -1,5 +1,5 @@
 import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
-import { hostnameOf, sanitizeBusinessName } from "../providers/support.js";
+import { factGroundingScore, hostnameOf, sanitizeBusinessName, type VerifiedFactInput } from "../providers/support.js";
 import { readMemory, writeMemory } from "../memory/MemoryCoordinator.js";
 import type { Citation } from "../../types/index.js";
 
@@ -19,6 +19,11 @@ export interface MarketIntelligenceInput {
   industry?: string;
   workspaceId: string;
   businessId?: string;
+  /** Verified facts from the business's OWN site (fact-first pipeline). Injected as
+   * authoritative grounding so the analysis identifies the RIGHT market/category — without it
+   * the generic "market size for X" search drifted to an unrelated market (e.g. "AI service
+   * marketplaces / telecom" for what is actually a CRM/sales-software product). */
+  verifiedFacts?: { field: string; value: string; sourceUrl?: string; confidence: number }[];
 }
 
 export type MarketLevel = "low" | "medium" | "high";
@@ -117,8 +122,18 @@ function fallbackFields(subject: string): MarketFields {
   };
 }
 
-function computeConfidence(usedFallback: boolean, citationCount: number): number {
+// factGrounded: the synthesis was anchored in the business's OWN verified facts (fact-first
+// pipeline). That's STRONGER grounding than a web citation — the facts came from the actual
+// site — so a fact-grounded result earns a high floor even with zero web citations, instead of
+// being scored as an ungrounded "AI estimate" (0.35) the way it was before. Without facts, the
+// old citation-count behavior is unchanged.
+function computeConfidence(usedFallback: boolean, citationCount: number, facts?: VerifiedFactInput[]): number {
   if (usedFallback) return 0.1;
+  // Fact-grounded: score by the QUALITY of the business's own verified facts (shared 0.8 floor +
+  // a bonus for a rich/high-confidence/multi-source fact base). The fact-first path skips web
+  // search, so citationCount is 0 here — previously that pinned the score flat at 0.8; now the
+  // fact base itself moves it, the same way for every fact-first engine (see factGroundingScore).
+  if (facts?.length) return factGroundingScore(facts);
   return citationCount === 0 ? 0.35 : Math.round(Math.min(0.55 + citationCount * 0.07, 0.9) * 100) / 100;
 }
 
@@ -161,14 +176,27 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
     return { ...fallbackFields(subject), opportunityScore: 0, citations: [], confidence: computeConfidence(true, 0), generatedAt: new Date().toISOString() };
   }
 
+  // Fact-first: when the up-front crawl produced verified facts, they pin down the real
+  // market/category, so we SKIP the two live web searches (the flaky SearXNG+crawl4ai path whose
+  // cold-start latency is the main cause of provider timeouts → 0 scores). The searches only
+  // supplemented the facts, which already win on conflict; dropping them when facts exist gives a
+  // fast, reliable, fact-grounded market read. With no facts (crawl failed), we still search.
+  const hasFacts = !!input.verifiedFacts?.length;
+  const emptyResearch = { narrative: "", citations: [] as Citation[] };
   const [marketResearch, regulatoryResearch, priorMatches] = await Promise.all([
-    runWebSearch(`What is the current market size (TAM), CAGR/growth rate, demand trends, seasonality, and regional/geographic demand breakdown for ${industry} (relevant to a business like "${subject}")? Include any notable trends.`),
-    runWebSearch(`What emerging/newer competitors are gaining traction in ${industry}, and what regulatory factors affect this market?`),
+    hasFacts ? Promise.resolve(emptyResearch) : runWebSearch(`What is the current market size (TAM), CAGR/growth rate, demand trends, seasonality, and regional/geographic demand breakdown for ${industry} (relevant to a business like "${subject}")? Include any notable trends.`),
+    hasFacts ? Promise.resolve(emptyResearch) : runWebSearch(`What emerging/newer competitors are gaining traction in ${industry}, and what regulatory factors affect this market?`),
     readMemory({ kind: MEMORY_KIND, queryText: `${subject} — ${industry}`, workspaceId: input.workspaceId, excludeBusinessId: input.businessId, topK: 2 }),
   ]);
 
   const memoryContext = priorMatches.length > 0
     ? `\n\nPrior market research on OTHER businesses, retrieved by loose text similarity (Research Memory — this may be about a completely different industry that just happens to use similar vocabulary; only reuse a finding below if it is genuinely about the same product category/market as "${subject}" (${industry}) — otherwise ignore it entirely, do not blend it in):\n${priorMatches.map((m) => `- ${m.content}`).join("\n")}`
+    : "";
+
+  // Authoritative grounding: the business's own facts pin down the REAL market/category, so the
+  // synthesis sizes the correct market instead of whatever the generic search happened to return.
+  const factsContext = input.verifiedFacts?.length
+    ? `AUTHORITATIVE — verified facts from the business's own website. First infer the SPECIFIC market/category from these (be precise, e.g. "AI-powered CRM / sales automation software", not a vague "services" market), then size THAT market. Where the web research below is about a different market, IGNORE it:\n${input.verifiedFacts.slice(0, 40).map((f) => `- ${f.field}: ${f.value}`).join("\n")}\n\n`
     : "";
 
   const structured = await runStructured<MarketFields>({
@@ -177,13 +205,38 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
     messages: [
       {
         role: "user",
-        content: `Synthesize a market-intelligence profile for "${subject}" (${industry}) from this research.\n\nMarket/growth/demand research:\n${marketResearch.narrative}\n\nEmerging competitors/regulatory research:\n${regulatoryResearch.narrative}${memoryContext}`,
+        content: `${factsContext}Synthesize a market-intelligence profile for "${subject}" (${industry}) grounded in the authoritative facts above.\n\nMarket/growth/demand research:\n${marketResearch.narrative}\n\nEmerging competitors/regulatory research:\n${regulatoryResearch.narrative}${memoryContext}`,
       },
     ],
   });
 
   const usedFallback = !structured;
   const fields = structured ?? fallbackFields(subject);
+
+  // Strip the business's OWN name back out of the model's market signals. The subject ("Master's",
+  // derived from workspace "Master's Business") is the thing we asked the model to analyze, and
+  // ungrounded models routinely echo it back as an "emerging competitor" or as a trend/demand/
+  // seasonality token — producing nonsense like "1 emerging competitor gaining traction: Master's"
+  // and "trends: Master's". A business is never its own competitor or market trend; drop any signal
+  // whose normalized text matches the subject, the raw business name, or the domain host.
+  const selfNames = new Set(
+    [subject, cleanName, input.businessName, hostnameOf(input.url)]
+      .filter(Boolean)
+      .map((n) => String(n).toLowerCase().replace(/[^a-z0-9]/g, "")),
+  );
+  const isSelfReference = (s: string): boolean => {
+    const norm = s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!norm) return false;
+    for (const self of selfNames) {
+      if (self.length >= 3 && (norm === self || norm.includes(self) || self.includes(norm))) return true;
+    }
+    return false;
+  };
+  fields.emergingCompetitors = (fields.emergingCompetitors ?? []).filter((c) => !isSelfReference(c));
+  fields.trends = (fields.trends ?? []).filter((t) => !isSelfReference(t));
+  if (isSelfReference(fields.demand)) fields.demand = "";
+  if (isSelfReference(fields.seasonality)) fields.seasonality = "";
+
   const citations = usedFallback ? [] : [...marketResearch.citations, ...regulatoryResearch.citations];
   const opportunityScore = usedFallback ? 0 : computeOpportunityScore(fields.growthLevel, fields.demandLevel, fields.regulations.length, fields.emergingCompetitors.length);
 
@@ -191,7 +244,7 @@ export async function runMarketIntelligence(input: MarketIntelligenceInput): Pro
     ...fields,
     opportunityScore,
     citations,
-    confidence: computeConfidence(usedFallback, citations.length),
+    confidence: computeConfidence(usedFallback, citations.length, input.verifiedFacts),
     generatedAt: new Date().toISOString(),
   };
 

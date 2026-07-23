@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, AudienceAnalysis, Insight, ProductAnalysis, ScrapedSite } from "../api/client.js";
+import { api, AdStrategy, AudienceAnalysis, Campaign, Insight, ProductAnalysis, ScrapedSite } from "../api/client.js";
 import Reveal from "../components/Reveal.js";
 import { ClockIcon, GlobeIcon, SparkleIcon, XIcon } from "../components/icons.js";
 
@@ -21,62 +21,12 @@ const CATEGORY_FILTERS: { value: "all" | Insight["category"]; label: string }[] 
 interface KnowledgeItem {
   id: string;
   name: string;
-  industry: string;
-  objective: string;
-  platform: "Meta Ads" | "Google Ads" | "Omnichannel";
+  platform: string;
   budget: string;
-  roas: string;
-  ctr: string;
-  creativeType: string;
-  audience: string;
-  rationale: string;
-  tags: string[];
+  audiences: string;
+  summary: string;
+  networks: string[];
 }
-
-const KNOWLEDGE_BASE_ITEMS: KnowledgeItem[] = [
-  {
-    id: "kb-1",
-    name: "Omnichannel Lead Gen scale",
-    industry: "SaaS & services",
-    objective: "Lead Generation",
-    platform: "Omnichannel",
-    budget: "$3,000 - $5,000 / mo",
-    roas: "4.5x",
-    ctr: "2.8%",
-    creativeType: "Text Search + Square Promo Variant",
-    audience: "B2B Retargeting + 1% Lookalike",
-    rationale: "Google Search Ads captured high-intent keyword search traffic, while Meta Ads retargeted visitors with value-prop case study graphics, maximizing direct conversions.",
-    tags: ["SaaS", "B2B", "Lead-Gen", "Epsilon-Greedy"]
-  },
-  {
-    id: "kb-2",
-    name: "Summer Season Promo campaign",
-    industry: "E-commerce",
-    objective: "Sales & Catalog Conversions",
-    platform: "Meta Ads",
-    budget: "$5,000 - $10,000 / mo",
-    roas: "5.2x",
-    ctr: "3.4%",
-    creativeType: "Carousel + Video UGC Promo",
-    audience: "Interests: Fashion & Online Shoppers",
-    rationale: "UGC style video review creative variants drove 60% lower acquisition cost than standard product catalog shots. Epsilon-greedy optimization shifted budget automatically to the video variant within 3 days.",
-    tags: ["Retail", "D2C", "Social", "Creative-Fatigue"]
-  },
-  {
-    id: "kb-3",
-    name: "Local Service Expansion booking",
-    industry: "Local services",
-    objective: "Local Bookings",
-    platform: "Google Ads",
-    budget: "$1,000 - $2,500 / mo",
-    roas: "3.8x",
-    ctr: "5.1%",
-    creativeType: "Local Map Search + Call Ads",
-    audience: "Local Radius (15 miles)",
-    rationale: "Call-only ads during service operating hours generated double the booking conversion rate compared to landing page bookings.",
-    tags: ["Services", "Map-Ads", "Lead-Gen", "Schedules"]
-  }
-];
 
 export default function AIInsights({ businessId }: { businessId: string }) {
   const navigate = useNavigate();
@@ -86,9 +36,10 @@ export default function AIInsights({ businessId }: { businessId: string }) {
   const [runningAction, setRunningAction] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<"all" | Insight["category"]>("all");
 
-  // Tabs & Search State
   const [activeTab, setActiveTab] = useState<"insights" | "kb">("insights");
   const [searchQuery, setSearchQuery] = useState("");
+  const [kbItems, setKbItems] = useState<KnowledgeItem[]>([]);
+  const [kbLoading, setKbLoading] = useState(false);
 
   // Brand Profile analysis modal state
   const [brandModalOpen, setBrandModalOpen] = useState(false);
@@ -100,11 +51,48 @@ export default function AIInsights({ businessId }: { businessId: string }) {
 
   const wsId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
+  useEffect(() => {
+    let cancelled = false;
+    setKbLoading(true);
+    Promise.all([
+      api.listStrategies(businessId).catch(() => [] as AdStrategy[]),
+      api.listCampaigns(businessId).catch(() => [] as Campaign[]),
+    ]).then(([strategies, campaigns]) => {
+      if (cancelled) return;
+      const items: KnowledgeItem[] = [];
+      for (const s of strategies) {
+        items.push({
+          id: s.id,
+          name: s.summary.slice(0, 60) || "Strategy",
+          platform: s.recommendedNetworks.map((n) => n === "meta" ? "Meta Ads" : "Google Ads").join(" + "),
+          budget: `$${Object.values(s.budgetSplit).reduce((a, b) => a + b, 0).toFixed(0)}/day`,
+          audiences: s.audiences.slice(0, 3).join(", "),
+          summary: s.summary,
+          networks: s.recommendedNetworks,
+        });
+      }
+      for (const c of campaigns) {
+        if (items.some((i) => i.id === c.strategyId)) continue;
+        items.push({
+          id: c.id,
+          name: c.name,
+          platform: c.networks.map((n) => n === "meta" ? "Meta Ads" : "Google Ads").join(" + "),
+          budget: `$${(c.dailyBudgetCents / 100).toFixed(0)}/day`,
+          audiences: c.variants.map((v) => v.audienceName).filter(Boolean).slice(0, 2).join(", ") || "—",
+          summary: `${c.name} — ${c.networks.join(", ")} campaign`,
+          networks: c.networks,
+        });
+      }
+      setKbItems(items);
+    }).finally(() => { if (!cancelled) setKbLoading(false); });
+    return () => { cancelled = true; };
+  }, [businessId]);
+
   async function loadInsights() {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.listInsights(wsId);
+      const data = await api.listInsights(wsId, businessId);
       setInsights(data.filter(i => !i.dismissed));
     } catch (err) {
       setError("Failed to fetch performance insights.");
@@ -185,12 +173,10 @@ export default function AIInsights({ businessId }: { businessId: string }) {
     }
   }
 
-  // Filter Knowledge Base items
-  const filteredKb = KNOWLEDGE_BASE_ITEMS.filter(item =>
+  const filteredKb = kbItems.filter(item =>
     item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.industry.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.rationale.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()))
+    item.platform.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    item.summary.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
@@ -309,82 +295,69 @@ export default function AIInsights({ businessId }: { businessId: string }) {
           </Reveal>
         )
       ) : (
-        /* Knowledge Base Tab */
+        /* Strategy & Campaign Playbook */
         <div>
           <div className="audit-logs-controls mb-4">
-            <span className="font-size-14 text-secondary">Search Winning Blueprints &amp; Creative Angles</span>
+            <span className="font-size-14 text-secondary">Your strategies &amp; campaigns — real data from your account</span>
             <input
               type="text"
               className="audit-search-input"
-              placeholder="Search playbook by tags, platforms..."
+              placeholder="Search by name, platform…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
 
-          <Reveal>
-            <div className="insights-feed flex-col gap-4">
-              {filteredKb.length === 0 ? (
-                <p className="muted-text">No optimization playbook items matched your query.</p>
-              ) : (
-                filteredKb.map(item => (
-                  <div key={item.id} className="card insight-card" style={{ borderColor: "#e5e7eb" }}>
-                    <div className="insight-card-header flex justify-between items-start">
-                      <div>
-                        <span className="pill text-uppercase font-size-11" style={{ background: "rgba(16, 185, 129, 0.08)", color: "#10b981", fontWeight: 700 }}>
-                          {item.platform}
-                        </span>
-                        <h3 className="insight-title mt-2">{item.name}</h3>
-                      </div>
-                      <div className="flex gap-4 font-size-13" style={{ textAlign: "right" }}>
-                        <div>
-                          <span className="block muted-text font-size-11">Avg ROAS</span>
-                          <strong className="text-secondary font-size-15" style={{ color: "var(--accent-2)" }}>{item.roas}</strong>
-                        </div>
-                        <div>
-                          <span className="block muted-text font-size-11">Avg CTR</span>
-                          <strong className="text-secondary font-size-15" style={{ color: "var(--accent)" }}>{item.ctr}</strong>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Metadata specs */}
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", border: "1px solid #f3f4f6", padding: "10px", borderRadius: "8px", background: "#f9fafb" }} className="mt-3 font-size-12">
-                      <div>
-                        <span className="muted-text block">Industry</span>
-                        <strong style={{ color: "#374151" }}>{item.industry}</strong>
-                      </div>
-                      <div>
-                        <span className="muted-text block">Objective</span>
-                        <strong style={{ color: "#374151" }}>{item.objective}</strong>
-                      </div>
-                      <div>
-                        <span className="muted-text block">Budget Range</span>
-                        <strong style={{ color: "#374151" }}>{item.budget}</strong>
-                      </div>
-                      <div>
-                        <span className="muted-text block">Creative Type</span>
-                        <strong style={{ color: "#374151" }}>{item.creativeType}</strong>
-                      </div>
-                    </div>
-
-                    {/* AI Rationale */}
-                    <div className="mt-3 font-size-13">
-                      <strong className="block mb-1" style={{ color: "#7033f5" }}>📈 AI Rationale &amp; Key Learning</strong>
-                      <p style={{ margin: 0, color: "#4b5563" }}>{item.rationale}</p>
-                    </div>
-
-                    {/* Tags row */}
-                    <div className="flex flex-wrap gap-2 mt-4">
-                      {item.tags.map(t => (
-                        <span key={t} className="pill font-size-11" style={{ background: "#f3f4f6", color: "#4b5563" }}>#{t}</span>
-                      ))}
-                    </div>
-                  </div>
-                ))
-              )}
+          {kbLoading ? (
+            <div className="campaigns-loading">
+              {[1, 2].map(i => <div key={i} className="campaign-row-skeleton" />)}
             </div>
-          </Reveal>
+          ) : (
+            <Reveal>
+              <div className="insights-feed flex-col gap-4">
+                {filteredKb.length === 0 ? (
+                  <div className="empty-state">
+                    <span className="empty-icon">📋</span>
+                    <p>No strategies or campaigns yet. Generate a campaign to build your playbook.</p>
+                  </div>
+                ) : (
+                  filteredKb.map(item => (
+                    <div key={item.id} className="card insight-card" style={{ borderColor: "#e5e7eb" }}>
+                      <div className="insight-card-header flex justify-between items-start">
+                        <div>
+                          <span className="pill text-uppercase font-size-11" style={{ background: "rgba(16, 185, 129, 0.08)", color: "#10b981", fontWeight: 700 }}>
+                            {item.platform}
+                          </span>
+                          <h3 className="insight-title mt-2">{item.name}</h3>
+                        </div>
+                        <div className="flex gap-4 font-size-13" style={{ textAlign: "right" }}>
+                          <div>
+                            <span className="block muted-text font-size-11">Budget</span>
+                            <strong style={{ color: "var(--accent)" }}>{item.budget}</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", border: "1px solid #f3f4f6", padding: "10px", borderRadius: "8px", background: "#f9fafb" }} className="mt-3 font-size-12">
+                        <div>
+                          <span className="muted-text block">Audiences</span>
+                          <strong style={{ color: "#374151" }}>{item.audiences || "—"}</strong>
+                        </div>
+                        <div>
+                          <span className="muted-text block">Networks</span>
+                          <strong style={{ color: "#374151" }}>{item.networks.join(", ")}</strong>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 font-size-13">
+                        <p style={{ margin: 0, color: "#4b5563" }}>{item.summary}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </Reveal>
+          )}
         </div>
       )}
 

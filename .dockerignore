@@ -9,3 +9,8 @@ node_modules
 *.log
 .vscode
 .idea
+*.png
+*.jpg
+data/
+.playwright-mcp/
+.claude/

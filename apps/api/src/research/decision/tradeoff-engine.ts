@@ -57,7 +57,12 @@ export async function analyzeTradeoffs(recommendations: Recommendation[]): Promi
 
   const structured = await callDecisionModel<{ tradeoffs: TradeoffFields[] }>({
     taskName: "tradeoff-analysis",
-    maxTokens: 2048,
+    // 4096, not 2048: this returns one full trade-off object (benefits + risks + alternatives +
+    // impact + complexity) PER recommendation — 5 recommendations blew past 2048, truncating the
+    // tool-call JSON so `tradeoffs.length !== recommendations.length` and the WHOLE result fell
+    // back to the "No live research was available to assess risk" placeholder (the empty Risks
+    // panel). Same truncation class as the fact-extraction/StrategyAgent/audience fixes.
+    maxTokens: 4096,
     tool: TRADEOFF_TOOL,
     messages: [
       {

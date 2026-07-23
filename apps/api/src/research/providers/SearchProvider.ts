@@ -1,7 +1,7 @@
 import { llm, runWebSearch } from "../../infra/llmClient.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { GeneralSearchData, ProviderResult, ResearchProviderInput } from "../types/index.js";
-import { citationsToEvidence, hostnameOf, runProviderStep } from "./support.js";
+import { citationsToEvidence, factGroundingScore, hostnameOf, runProviderStep } from "./support.js";
 import { TtlCache, normalizeCacheKey } from "../cache/TtlCache.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000;
@@ -38,6 +38,34 @@ export class SearchProvider implements ResearchProvider<GeneralSearchData> {
       if (!cached) cache.set(cacheKey, result);
 
       const citations = result.citations;
+
+      // Fact-first fallback: when the live web search comes back empty (the self-hosted backend
+      // often does for a niche B2B site), fold the up-front verified facts + site excerpt into the
+      // overview narrative instead of returning nothing (which scored ~0.05 and dragged the
+      // aggregate). This provider is cross-cutting supporting evidence, so a grounded, fact-based
+      // overview is exactly the "what it does / who it serves" summary it's meant to supply.
+      if (!result.narrative && (input.verifiedFacts?.length || input.websiteExcerpt)) {
+        const factsText = input.verifiedFacts?.length
+          ? input.verifiedFacts.slice(0, 30).map((f) => `- ${f.field}: ${f.value}`).join("\n")
+          : "";
+        const narrative = [
+          `Overview grounded in the business's own website${input.businessName ? ` ("${input.businessName}")` : ""}:`,
+          factsText,
+          input.websiteExcerpt ? input.websiteExcerpt.slice(0, 1500) : "",
+        ].filter(Boolean).join("\n\n");
+        const factCitation = [{ url: input.url, title: `Verified from ${hostnameOf(input.url)}` }];
+        return {
+          status: "success",
+          data: { narrative, searchesUsed: result.searchesUsed, dataSource: `Grounded in ${input.verifiedFacts?.length ?? 0} verified facts from the site` },
+          citations: factCitation,
+          evidence: citationsToEvidence(factCitation),
+          // Score by the fact base backing this overview (shared floor + quality bonus), consistent
+          // with the other fact-first providers — replaces the old flat 0.7 that ignored how many
+          // facts actually grounded it. A pure excerpt-only fallback (no facts) still earns the floor.
+          confidence: factGroundingScore(input.verifiedFacts ?? []),
+        };
+      }
+
       const data: GeneralSearchData = {
         narrative: result.narrative,
         searchesUsed: result.searchesUsed,

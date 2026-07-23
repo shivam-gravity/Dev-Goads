@@ -2,10 +2,10 @@ import { Router } from "express";
 import { asyncHandler } from "./asyncHandler.js";
 import { sendError } from "./errorResponse.js";
 import { prisma } from "../db/prisma.js";
+import { externalLogin } from "../modules/auth/crmAuthService.js";
 import {
   listLeadForms,
   listLeads,
-  seedMockLeadData,
   toCrmLeadPayload,
   type LeadPlatform,
 } from "../modules/leadgen/leadIngestionService.js";
@@ -14,7 +14,8 @@ import { backfillMetaLeads } from "../modules/leadgen/metaLeadSync.js";
 import { syncGoogleLeadForms, syncGoogleLeadSubmissions } from "../modules/leadgen/googleLeadSyncService.js";
 import { getMetaCredentials, getOrCreateIntegrations } from "../modules/integrations/integrationService.js";
 import { getGoogleAdsCredentials } from "../modules/integrations/googleOAuth.js";
-import { getRawMetrics, ESTIMATED_REVENUE_CENTS_PER_CONVERSION } from "../modules/pipeline/performancePipeline.js";
+import { getRawMetrics, ingestCampaignMetrics } from "../modules/pipeline/performancePipeline.js";
+import { logger } from "../modules/logger/logger.js";
 import { listSavedAudiences, type AudienceType } from "../modules/audience/savedAudienceService.js";
 import { estimateReachHeuristic } from "../modules/adapters/metaTargetingMapper.js";
 import { leadIngestionQueue } from "../infra/queue.js";
@@ -29,6 +30,35 @@ import type { AdNetwork } from "../types/index.js";
  */
 export const adsDataRoutes = Router();
 
+/* ── External login (shared-secret) ─────────────────────────────────────────
+ * The CRM data-plane proxy (sales_tech_backend/integration/devgoads_proxy.py) calls this
+ * FIRST to resolve a CRM identity → this workspace's id + a Dev-Goads user JWT, which it then
+ * uses for all the ads-data reads below. Without this route the proxy's external-login 404'd,
+ * so every "Automated Ads Insights" tab load failed with "insights are unavailable". Returns
+ * exactly the { workspaceId, accessToken } the proxy reads (businessId is extra, harmless). */
+adsDataRoutes.post(
+  "/auth/external-login",
+  asyncHandler(async (req, res) => {
+    const body = req.body ?? {};
+    const email = typeof body.email === "string" ? body.email.trim() : "";
+    const externalUserId = body.externalUserId != null ? String(body.externalUserId) : "";
+    if (!email && !externalUserId) {
+      return sendError(res, new Error("email or externalUserId is required"), 400, "Missing CRM identity");
+    }
+    const result = await externalLogin({
+      email: email || `${externalUserId}@crm.local`,
+      name: typeof body.name === "string" ? body.name : undefined,
+      source: typeof body.source === "string" ? body.source : "crm",
+      externalUserId: externalUserId || undefined,
+      businessId: body.businessId != null ? String(body.businessId) : undefined,
+      businessName: typeof body.businessName === "string" ? body.businessName : undefined,
+      websiteUrl: typeof body.websiteUrl === "string" ? body.websiteUrl : undefined,
+      partnerId: body.partnerId != null ? String(body.partnerId) : undefined,
+    });
+    res.json(result);
+  })
+);
+
 function isLeadPlatform(value: unknown): value is LeadPlatform {
   return value === "meta" || value === "google";
 }
@@ -38,10 +68,12 @@ async function hasRealCredentials(workspaceId: string, platform: LeadPlatform): 
   return Boolean(await getGoogleAdsCredentials(workspaceId));
 }
 
-/** Seeds mock leads/forms for a platform only if it has no real integration credentials yet — real, connected platforms wait for an actual sync instead of being papered over with fake data. */
-async function ensureMockDataIfDisconnected(workspaceId: string, platform: LeadPlatform): Promise<void> {
-  if (await hasRealCredentials(workspaceId, platform)) return;
-  await seedMockLeadData(workspaceId, platform);
+/** No-op: mock lead/form seeding has been removed. A disconnected platform now shows an honest
+ * empty CRM (no leads/forms) until a real integration is connected and syncs actual data, rather
+ * than being papered over with fabricated leads ("Priya Sharma", @example.com). Kept as a no-op so
+ * the GET routes' call sites stay unchanged. */
+async function ensureMockDataIfDisconnected(_workspaceId: string, _platform: LeadPlatform): Promise<void> {
+  return;
 }
 
 /* ── Lead Forms ─────────────────────────────────────────────────────────── */
@@ -176,6 +208,27 @@ adsDataRoutes.get(
 
     const campaigns = await prisma.campaign.findMany({ where: { workspaceId } });
 
+    // Real-time refresh: pull fresh insights on-demand for every LAUNCHED campaign before reading,
+    // rather than serving only whatever the 15-min metricsIngestionWorker last wrote. This is what
+    // makes the CRM's Automated Insights tab reflect live delivery instead of a stale/empty tick.
+    // A campaign is "launched" once any variant carries a per-platform externalId (set by
+    // launchMetaHierarchy/launchGoogleHierarchy); unlaunched drafts have nothing to fetch and are
+    // skipped. Best-effort per campaign: one platform/credential hiccup logs and is skipped, never
+    // failing the whole tab (the stored rows for the others still render). Ingests run in parallel.
+    await Promise.all(
+      campaigns.map(async (c) => {
+        const d = c.data as any;
+        const status = d?.status;
+        const launched = Array.isArray(d?.variants) && d.variants.some((v: any) => v?.externalId);
+        if (!launched || (status !== "active" && status !== "paused")) return;
+        try {
+          await ingestCampaignMetrics(c.id);
+        } catch (err) {
+          logger.warn(`ads-data/insights: live metrics ingest failed for campaign ${c.id} — serving last stored metrics`, err);
+        }
+      })
+    );
+
     type Row = {
       date: string; id: string; name: string;
       metrics: { impressions: number; reach: number; clicks: number; conversions: number; cost_micros: number; cpm_micros: number; cpc_micros: number; roas: number };
@@ -186,15 +239,16 @@ adsDataRoutes.get(
       const campaignData = c.data as any;
       const name: string = campaignData?.name ?? c.id;
       const metrics = await getRawMetrics(c.id);
-      const byDate = new Map<string, { impressions: number; reach: number; clicks: number; conversions: number; spendCents: number }>();
+      const byDate = new Map<string, { impressions: number; reach: number; clicks: number; conversions: number; spendCents: number; revenueCents: number }>();
       for (const m of metrics) {
         if (network && m.network !== network) continue;
-        const acc = byDate.get(m.date) ?? { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0 };
+        const acc = byDate.get(m.date) ?? { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0 };
         acc.impressions += m.impressions;
         acc.reach += m.reach;
         acc.clicks += m.clicks;
         acc.conversions += m.conversions;
         acc.spendCents += m.spendCents;
+        acc.revenueCents += m.revenueCents ?? 0;
         byDate.set(m.date, acc);
       }
       for (const [date, acc] of byDate) {
@@ -215,7 +269,7 @@ adsDataRoutes.get(
             cost_micros: costMicros,
             cpm_micros: acc.impressions > 0 ? Math.round((costMicros / acc.impressions) * 1000) : 0,
             cpc_micros: acc.clicks > 0 ? Math.round(costMicros / acc.clicks) : 0,
-            roas: acc.spendCents > 0 && acc.conversions > 0 ? (acc.conversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / acc.spendCents : 0,
+            roas: acc.spendCents > 0 && acc.revenueCents > 0 ? acc.revenueCents / acc.spendCents : 0,
           },
         });
       }

@@ -21,7 +21,7 @@ async function buildSystemPrompt(businessId: string): Promise<string> {
     performance: summary,
   };
 
-  return `You are the Polluxa Strategist, an expert media-buying assistant embedded in the "Media Plan" section of a paid-ads platform. You help the user generate, revise, and evaluate their media plan, and can set long-term brand preferences on request.
+  return `You are the CRM Ads Strategist, an expert media-buying assistant embedded in the "Media Plan" section of a paid-ads platform. You help the user generate, revise, and evaluate their media plan, and can set long-term brand preferences on request.
 
 Speak concisely and concretely, referencing real numbers from the account data below when relevant. If the account has no active campaigns yet, say so and guide the user toward launching their first campaign rather than inventing data.
 

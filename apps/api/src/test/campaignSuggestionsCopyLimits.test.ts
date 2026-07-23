@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert";
 
-// generateCampaignSuggestions's fallback path (no OPENAI_API_KEY) is what this test exercises
+// generateCampaignSuggestions's fallback path (no LLM configured) is what this test exercises
 // — deterministic, no network mocking needed, and it's the same code path real callers hit
-// whenever there's no live model available.
+// whenever there's no live model available. The LLM gate is Bedrock, so scrub its token.
 delete process.env.OPENAI_API_KEY;
+delete process.env.AWS_BEARER_TOKEN_BEDROCK;
 
 const { generateCampaignSuggestions } = await import("../modules/strategy/strategyEngine.js");
 import type { ResearchStrategyInput } from "../modules/strategy/strategyEngine.js";

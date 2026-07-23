@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, CatalogSourceResult, Draft, GenerationJob, ProductAnalysis, ProductCatalogItem } from "../api/client.js";
+import { api, CatalogSourceResult, Draft, ProductAnalysis, ProductCatalogItem } from "../api/client.js";
 import {
   ClockIcon as HistoryIcon,
   LightningIcon,
@@ -18,6 +18,7 @@ import {
 } from "../components/icons.js";
 import { GoogleIcon } from "../components/icons.js";
 import { DropdownField, type Option } from "../components/DropdownField.js";
+import { SUPPORTED_PLATFORMS, ACTIVE_PLATFORM_VALUES, CATALOG_COMING_SOON_LABEL } from "../constants/platforms.js";
 
 const COUNTRY_OPTIONS: Option[] = [
   { value: "US", label: "United States" },
@@ -34,17 +35,45 @@ const COUNTRY_OPTIONS: Option[] = [
   { value: "MX", label: "Mexico" },
 ];
 
-const CHANNEL_OPTIONS: Option[] = [
-  { value: "meta", label: "Meta", icon: <MetaInfinityIcon /> },
-  { value: "google", label: "Google", icon: <GoogleIcon /> },
-  { value: "tiktok", label: "TikTok" },
+// Per-platform icons live in the UI (the shared platform catalog is icon-free). Anything not
+// listed here simply renders without an icon.
+const PLATFORM_ICONS: Record<string, React.ReactNode> = {
+  meta: <MetaInfinityIcon />,
+  google: <GoogleIcon />,
+};
+
+// Derived from the central platform catalog (constants/platforms.ts): "active" platforms are
+// selectable; "coming_soon" ones render greyed with a "Coming soon" badge and can't be selected
+// (DropdownField ignores clicks on disabled options). Add/flip a platform there, not here.
+const CHANNEL_OPTIONS: Option[] = SUPPORTED_PLATFORMS.map((p) => ({
+  value: p.value,
+  label: p.label,
+  icon: PLATFORM_ICONS[p.value],
+  disabled: p.status !== "active",
+}));
+
+// AdsGo-style "Your Business Goal" — Sales is the recommended default (matches the reference UI).
+const OBJECTIVE_OPTIONS: Option[] = [
+  { value: "sales", label: "Sales", description: "Find people who take desired actions within your website." },
+  { value: "leads", label: "Leads", description: "Collect leads for your business." },
+  { value: "awareness", label: "Awareness & Engagement", description: "Find people interested in your product or business." },
+  { value: "traffic", label: "Traffic", description: "Increase traffic to your website." },
 ];
 
-const OBJECTIVE_OPTIONS: Option[] = [
-  { value: "sales", label: "Sales / Conversions" },
-  { value: "leads", label: "Lead Generation" },
-  { value: "traffic", label: "Website Traffic" },
-  { value: "awareness", label: "Brand Awareness" },
+// AdsGo-style "Business Type" — presentation-only context for the strategy; does not change the
+// generate payload (the pipeline infers business type from the crawled site), but mirrors the
+// reference UI so the demo reads identically.
+const BUSINESS_TYPE_OPTIONS: Option[] = [
+  { value: "online_shopping", label: "Online Shopping" },
+  { value: "solution_service", label: "Solution & Online Service" },
+  { value: "local_store", label: "Local Store & Service" },
+  { value: "app", label: "App" },
+];
+
+// AdsGo-style "Promotion Type" — presentation-only (long-term vs short-term campaign framing).
+const PROMOTION_TYPE_OPTIONS: Option[] = [
+  { value: "long_term", label: "Long-term" },
+  { value: "short_term", label: "Short-term" },
 ];
 
 const CONVERSION_EVENT_OPTIONS: Option[] = [
@@ -74,10 +103,15 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
   const navigate = useNavigate();
   const workspaceId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
-  const [countries, setCountries] = useState<string[]>([]);
-  const [channels, setChannels] = useState<string[]>(["meta"]);
-  const [objective, setObjective] = useState<string[]>([]);
+  const [countries, setCountries] = useState<string[]>(["US"]);
+  const [channels, setChannels] = useState<string[]>([...ACTIVE_PLATFORM_VALUES]);
+  const [objective, setObjective] = useState<string[]>(["sales"]);
   const [conversionEvent, setConversionEvent] = useState<string[]>([]);
+  // Presentation-only fields mirroring the AdsGo reference form (Business Type / Promotion Type).
+  // They contextualize the strategy visually but aren't part of the generate payload — the pipeline
+  // derives business type from the crawled site.
+  const [businessType, setBusinessType] = useState<string[]>(["solution_service"]);
+  const [promotionType, setPromotionType] = useState<string[]>(["long_term"]);
 
   const [productUrl, setProductUrl] = useState("");
   const [parsing, setParsing] = useState(false);
@@ -234,6 +268,11 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
     setHistoricalOpen(false);
   }
 
+  // Opens the store/catalog product picker. Intentionally retained but currently unreachable:
+  // store/catalog sync is deferred ("Coming Soon" — see the disabled "Pick from store" button and
+  // constants/platforms.ts), so no UI path calls this today. Kept for the future version that
+  // re-enables catalog sync; the referenced-by-JSX modal below stays wired to it.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   function openProductsModal(tab: "all" | "shopify" | "facebook" | "google") {
     setHistoricalOpen(false);
     setProductsModalTab(tab);
@@ -245,15 +284,6 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
     navigate("/profile/ad-platform-connection");
   }
 
-  async function pollGenerationJob(jobId: string, timeoutMs = 120000): Promise<GenerationJob> {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const job = await api.getGenerationJob(jobId);
-      if (job.status === "done" || job.status === "failed") return job;
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
-    throw new Error("Creative generation timed out — check /studio for its status");
-  }
 
   async function handleGenerate() {
     setGenerateError(null);
@@ -272,41 +302,59 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
     }
 
     setGenerating(true);
+    const primaryProduct = products[0];
+    const url = primaryProduct.url ?? `https://example.com/${encodeURIComponent(primaryProduct.name)}`;
+
     try {
-      setGenerationStage("Generating AI strategy…");
-      const strategy = await api.generateStrategy(businessId);
+      const channelLabels = channels.map(c => c === "meta" ? "Meta Ads" : c === "google" ? "Google Ads" : c === "tiktok" ? "TikTok" : c).join(" + ");
+      setGenerationStage(`Researching product for ${channelLabels}…`);
 
-      setGenerationStage("Generating AI creative (image + copy)…");
-      const primaryProduct = products[0];
-      const job = await api.createGenerationJob(workspaceId, {
+      const genResult = await api.generateCampaign({
+        workspaceId,
         businessId,
-        productUrl: primaryProduct.url,
-        prompt: primaryProduct.url ? undefined : primaryProduct.summary,
-        wantVideo: false,
-      });
-      const completedJob = await pollGenerationJob(job.id);
-      if (completedJob.status === "failed") {
-        throw new Error(completedJob.error ?? "Creative generation failed");
-      }
-
-      setGenerationStage("Building campaign…");
-      const campaign = await api.createCampaign({
-        strategyId: strategy.id,
-        name: `Campaign Generator - ${(objective[0] ?? "sales").toUpperCase()}`,
+        url,
+        name: `${(objective[0] ?? "sales").charAt(0).toUpperCase() + (objective[0] ?? "sales").slice(1)} — ${channelLabels}`,
         dailyBudgetCents,
+        channels: channels as any[],
+        objective: objective[0],
+        countries: countries.length > 0 ? countries : undefined,
       });
 
-      if (completedJob.result) {
-        await api.applyCreativeMedia(campaign.id, {
-          imageUrl: completedJob.result.imageUrl,
-          videoUrl: completedJob.result.videoUrl,
-        });
+      if (genResult.status === "completed" && genResult.campaignId) {
+        navigate(`/campaigns/${genResult.campaignId}`);
+        return;
       }
 
-      setGenerationStage("Launching on Meta (starts paused for your review)…");
-      await api.launchCampaign(campaign.id, workspaceId);
+      setGenerationStage("Running AI agents — strategy, audience, creative…");
+      const jobId = genResult.id;
+      const start = Date.now();
+      const timeoutMs = 180000;
 
-      navigate(`/campaigns/${campaign.id}`);
+      while (Date.now() - start < timeoutMs) {
+        await new Promise((r) => setTimeout(r, 3000));
+        try {
+          const progress = await api.getCampaignGenerationProgress(jobId);
+          if (progress.completedSteps.length > 0) {
+            const lastStep = progress.completedSteps[progress.completedSteps.length - 1];
+            setGenerationStage(`${lastStep} (${progress.completedSteps.length}/${progress.total})…`);
+          }
+        } catch { /* progress endpoint optional */ }
+
+        const status = await api.getCampaignGenerationStatus(jobId);
+        if (status.status === "completed") {
+          if (status.campaignId) {
+            navigate(`/campaigns/${status.campaignId}`);
+          } else {
+            navigate("/campaigns");
+          }
+          return;
+        }
+        if (status.status === "failed") {
+          throw new Error(status.error ?? "Campaign generation failed");
+        }
+      }
+
+      throw new Error("Generation timed out — check Campaigns for status");
     } catch (err) {
       setGenerateError(err instanceof Error ? err.message : "Failed to generate campaign");
     } finally {
@@ -325,7 +373,7 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
               <circle cx="12" cy="12" r="10" />
               <polyline points="12 6 12 12 16 14" />
             </svg>
-            <span>UTC+5.5</span>
+            <span>{Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
           </div>
           <div className="header-meta-item">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -342,65 +390,87 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
             </svg>
           </div>
           <div className="header-profile-dropdown">
-            <div className="profile-avatar">SS</div>
+            <div className="profile-avatar">P</div>
             <div className="profile-info">
-              <span className="profile-name">ssrivastava</span>
-              <span className="profile-username">ssrivastava</span>
+              <span className="profile-name">My Account</span>
+              <span className="profile-username">workspace</span>
             </div>
             <span style={{ fontSize: "10px", color: "#9ca3af", marginLeft: "4px" }}>▼</span>
           </div>
         </div>
       </header>
 
+      <div className="gen-allset-banner">
+        <span className="gen-allset-emoji">🎉</span>
+        <span><strong>All set! Your best ad strategy is ready.</strong> Review your goals below and start your campaign with one click!</span>
+      </div>
+
       <section className="gen-card">
         <div className="gen-card-header">
           <span className="gen-card-icon gen-card-icon-purple">
             <TargetIcon />
           </span>
-          <h2>Goals &amp; channels</h2>
+          <h2>Promotion Objective</h2>
         </div>
         <div className="gen-fields-grid">
           <DropdownField
-            label="Target countries / regions"
+            label="Business Type"
+            options={BUSINESS_TYPE_OPTIONS}
+            selected={businessType}
+            onChange={setBusinessType}
+          />
+          <DropdownField
+            label="Your Business Goal"
+            options={OBJECTIVE_OPTIONS}
+            selected={objective}
+            onChange={setObjective}
+            recommendedValue="sales"
+          />
+          <DropdownField
+            label="Your Ad Performance Goal"
+            icon={<LightningIcon />}
+            options={CONVERSION_EVENT_OPTIONS}
+            selected={conversionEvent}
+            onChange={setConversionEvent}
+            placeholder="In-web actions"
+          />
+          <DropdownField
+            label="Ad Platform"
+            icon={<MetaInfinityIcon />}
+            options={CHANNEL_OPTIONS}
+            selected={channels}
+            onChange={setChannels}
+            multi
+            testId="channel-select"
+            recommendedValue="meta"
+          />
+          <DropdownField
+            label="Target Locations"
             icon={<PinIcon />}
             options={COUNTRY_OPTIONS}
             selected={countries}
             onChange={setCountries}
             multi
           />
-          <DropdownField
-            label="Placement channels"
-            icon={<MetaInfinityIcon />}
-            options={CHANNEL_OPTIONS}
-            selected={channels}
-            onChange={setChannels}
-            multi
-          />
-          <DropdownField
-            label="Primary objective"
-            icon={<TargetIcon />}
-            options={OBJECTIVE_OPTIONS}
-            selected={objective}
-            onChange={setObjective}
-          />
-          <DropdownField
-            label="Conversion optimization event"
-            icon={<LightningIcon />}
-            options={CONVERSION_EVENT_OPTIONS}
-            selected={conversionEvent}
-            onChange={setConversionEvent}
-          />
           <div className="gen-field">
-            <span className="gen-field-label">Daily budget (USD)</span>
-            <input
-              type="number"
-              min="1"
-              step="1"
-              className="gen-field-control"
-              value={dailyBudget}
-              onChange={(e) => setDailyBudget(e.target.value)}
-            />
+            <span className="gen-field-label">Suggested Daily Limit</span>
+            <div className="gen-field-control gen-field-budget">
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={dailyBudget}
+                onChange={(e) => setDailyBudget(e.target.value)}
+              />
+              <span className="gen-field-budget-unit">USD</span>
+            </div>
           </div>
+          <DropdownField
+            label="Promotion Type"
+            options={PROMOTION_TYPE_OPTIONS}
+            selected={promotionType}
+            onChange={setPromotionType}
+          />
         </div>
       </section>
 
@@ -425,8 +495,9 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
             onChange={(e) => setProductUrl(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleParseUrl()}
             disabled={parsing}
+            data-testid="product-url-input"
           />
-          <button type="button" className="gen-url-drop-add" onClick={handleParseUrl} disabled={parsing || !productUrl.trim()} aria-label="Parse URL">
+          <button type="button" className="gen-url-drop-add" onClick={handleParseUrl} disabled={parsing || !productUrl.trim()} aria-label="Parse URL" data-testid="parse-url-button">
             <PlusIcon />
           </button>
         </div>
@@ -453,9 +524,20 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
           </div>
 
           <div className="gen-catalog-action-wrap">
-            <button type="button" className="btn btn-secondary" onClick={() => openProductsModal("shopify")}>
+            {/* Store/catalog sync is deferred to a future version — disabled with a "Coming Soon"
+                badge so there's no UI path into the store-connect modal. Add products via the URL
+                field above or the historical-catalog picker instead. */}
+            <button
+              type="button"
+              className="btn btn-secondary disabled"
+              disabled
+              aria-disabled
+              title="Store & catalog sync is coming soon — add products by URL for now"
+              style={{ opacity: 0.5, cursor: "not-allowed" }}
+            >
               <ShoppingBagIcon />
-              Pick from Shopify
+              Pick from store
+              <span className="coming-soon-badge">{CATALOG_COMING_SOON_LABEL}</span>
             </button>
           </div>
         </div>
@@ -481,9 +563,14 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
       {generateError && <p className="error mb-2">{generateError}</p>}
 
       <div className="gen-footer-actions">
-        {generationStage && <span className="muted-text mr-2">{generationStage}</span>}
-        <button type="button" className="btn btn-primary" onClick={handleGenerate} disabled={generating}>
-          {generating ? "Generating..." : "Generate Campaign"}
+        {generationStage && (
+          <div className="gen-progress-indicator" data-testid="generation-stage">
+            <span className="gen-progress-spinner" />
+            <span className="gen-progress-text">{generationStage}</span>
+          </div>
+        )}
+        <button type="button" className="btn btn-primary gen-generate-btn" onClick={handleGenerate} disabled={generating} data-testid="generate-campaign-button">
+          {generating ? "Generating..." : "✦ Generate Campaign"}
         </button>
       </div>
 

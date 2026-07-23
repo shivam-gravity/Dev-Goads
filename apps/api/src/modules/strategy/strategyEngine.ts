@@ -7,6 +7,7 @@ import { filterPlaceholderTerms } from "../../agents/support.js";
 import type { DecisionContext } from "../../research/decision/types.js";
 import { logger } from "../logger/logger.js";
 import { truncateForPlatform, PLATFORM_COPY_LIMITS } from "./platformCopyLimits.js";
+import { ACTIVE_NETWORK_LIST } from "../../config/platforms.js";
 
 function isAdNetwork(value: string): value is AdNetwork {
   return value === "meta" || value === "google" || value === "tiktok";
@@ -19,8 +20,9 @@ function isAdNetwork(value: string): value is AdNetwork {
 // this product actually launches campaigns on today (TikTok shows as "Coming soon" in the
 // builder — see generateCampaignSuggestions's own comment), so buildCampaignFromStrategy
 // should always have both to build variants for, not whichever single one a strategy
-// happened to name. Applied once here rather than duplicated at each call site.
-const CORE_NETWORKS: AdNetwork[] = ["meta", "google"];
+// happened to name. Applied once here rather than duplicated at each call site. Sourced from
+// the central platform catalog (config/platforms.ts) so it stays in sync with the launchable set.
+const CORE_NETWORKS: AdNetwork[] = ACTIVE_NETWORK_LIST;
 
 function ensureCoreNetworks(networks: AdNetwork[]): AdNetwork[] {
   const withCore = new Set(networks);
@@ -293,6 +295,8 @@ function complianceWarningFrom(businessId: string, compliance: ComplianceAgentOu
 // panel), with headline/body staying the first entry for back-compat. Cap matches that field's
 // documented "up to 5 variants".
 const MAX_COPY_VARIANTS = 5;
+// Google RSA allows at most 4 description assets (see GOOGLE_RSA_LIMITS.maxDescriptions).
+const MAX_RSA_DESCRIPTIONS = 4;
 
 function dedupeCapped(values: string[], cap: number): string[] {
   const seen = new Set<string>();
@@ -318,6 +322,11 @@ function withCreativeVariants(creative: AdCreative, creativeAgent: CreativeAgent
     ...creative,
     headlines: dedupeCapped([creative.headline, ...creativeAgent.headlines].map((h) => truncateHeadline(h)), MAX_COPY_VARIANTS),
     primaryTexts: dedupeCapped([creative.body, ...creativeAgent.primaryTexts], MAX_COPY_VARIANTS),
+    // Google RSA descriptions (≤90 chars) — a separate pool from primaryTexts (Meta 125-char body).
+    // Per-asset truncation to the RSA limit happens in applyGoogleRsaLimits at build/launch; here we
+    // just carry the agent's distinct pool, capped at Google's 4-description max, with the creative's
+    // own body as the first entry for a sensible default when the agent produced none.
+    descriptions: dedupeCapped([creative.body, ...(creativeAgent.descriptions ?? [])], MAX_RSA_DESCRIPTIONS),
   };
 }
 
@@ -335,6 +344,45 @@ function qualityWarningFrom(businessId: string, critic: CriticAgentOutput): AdSt
   return { score: critic.overallScore, issues: critic.issues, missingData: critic.missingData, recommendation: critic.recommendation };
 }
 
+// Fix #3, Option C (flag + downgrade, never hard-suppress): a high-severity identity-vertical
+// mismatch from Knowledge Fusion (site describes one industry, market research another) is
+// surfaced as an advisory qualityWarning issue so the confabulated market framing isn't presented
+// confidently. Merges into any existing critic-agent qualityWarning rather than clobbering it:
+// the identity issue is appended, and the displayed score is downgraded to the lower of the
+// critic's score and IDENTITY_MISMATCH_SCORE_CAP so a "medical device"-for-a-CRM strategy can't
+// read as high-quality. When there's no critic warning at all, a minimal one is created.
+const IDENTITY_MISMATCH_SCORE_CAP = 40;
+
+function mergeIdentityConflictWarning(
+  existing: AdStrategy["qualityWarning"],
+  identityConflicts: AgentStrategyExtras["identityConflicts"],
+  businessId: string
+): AdStrategy["qualityWarning"] {
+  const mismatch = identityConflicts?.find((c) => c.kind === "identity-vertical-mismatch" && c.severity === "high");
+  if (!mismatch) return existing;
+
+  logger.warn(`Identity-vertical mismatch flagged for business ${businessId} — market research may not match the site's actual industry: ${mismatch.description}`);
+  const identityIssue = {
+    agent: "knowledge-fusion",
+    severity: "high" as const,
+    issue: `Market analysis may not match this business's actual industry. ${mismatch.description} Review before launch.`,
+  };
+
+  if (!existing) {
+    return {
+      score: IDENTITY_MISMATCH_SCORE_CAP,
+      issues: [identityIssue],
+      missingData: [],
+      recommendation: "Verify the business's industry against the website before relying on the market analysis.",
+    };
+  }
+  return {
+    ...existing,
+    score: Math.min(existing.score, IDENTITY_MISMATCH_SCORE_CAP),
+    issues: [...existing.issues, identityIssue],
+  };
+}
+
 export interface AgentStrategyExtras {
   pricingOffer?: PricingOfferAgentOutput | null;
   objectionHandling?: ObjectionHandlingAgentOutput | null;
@@ -344,6 +392,11 @@ export interface AgentStrategyExtras {
   keyword?: KeywordAgentOutput | null;
   persona?: PersonaAgentOutput | null;
   audience?: AudienceAgentOutput | null;
+  /** Knowledge Fusion conflicts (context.metadata.fusion.conflicts) — read for a high-severity
+   * identity-vertical-mismatch, which attaches an advisory qualityWarning (Fix #3, Option C:
+   * flag + downgrade, never hard-suppress context.market). Threaded from the pipeline since
+   * createStrategyFromAgentResults takes businessId, not the full ResearchContext. */
+  identityConflicts?: { kind: string; severity: "low" | "medium" | "high"; description: string; sources: string[] }[] | null;
 }
 
 /**
@@ -419,7 +472,17 @@ export async function createStrategyFromAgentResults(
     audiences,
     creatives: sanitizeCreatives([...baseCreatives, ...extraCreatives]),
     ...(extras?.compliance ? { complianceWarning: complianceWarningFrom(businessId, extras.compliance) } : {}),
-    ...(extras?.critic ? { qualityWarning: qualityWarningFrom(businessId, extras.critic) } : {}),
+    // qualityWarning: the critic's review (if any), then merged with a high-severity
+    // identity-vertical-mismatch from Knowledge Fusion (Fix #3, Option C). The merge can also
+    // CREATE the warning when there's no critic result, so it's computed outside the critic guard.
+    ...(() => {
+      const merged = mergeIdentityConflictWarning(
+        extras?.critic ? qualityWarningFrom(businessId, extras.critic) : undefined,
+        extras?.identityConflicts,
+        businessId
+      );
+      return merged ? { qualityWarning: merged } : {};
+    })(),
     // Google Search-only: positive + negative keywords threaded to launch. adGroupSuggestions is
     // deliberately dropped — using it would require restructuring the shared ad-group grouping.
     // primaryKeywords filtered — a placeholder positive keyword ("Not yet researched") would waste

@@ -172,14 +172,12 @@ export async function handleMetaOAuthCallback(code: string, state: string): Prom
 // returns null for mock-connected or disconnected workspaces) — same "(mock)" naming
 // convention as connectIntegration's mock connect above, so the campaign builder always
 // has something to show in local/demo mode.
-const MOCK_AD_ACCOUNTS = [{ id: "act_1000000001", name: "Polluxa Meta Business Manager (mock)", currency: "USD", timezoneName: "America/Los_Angeles", accountStatus: "ACTIVE" }];
-const MOCK_PAGES = [{ id: "200000000001", name: "Polluxa Demo Page (mock)" }];
-const MOCK_INSTAGRAM_ACCOUNTS = [{ id: "300000000001", username: "polluxa_demo_mock" }];
-const MOCK_PIXELS = [{ id: "400000000001", name: "Polluxa Demo Pixel (mock)" }];
-
+// No mock account pickers: without a real Meta OAuth connection these lists are empty, so the
+// connect UI shows "connect your Meta account" rather than fabricated "(mock)" accounts a user
+// could select and appear connected against.
 export async function listAdAccounts(workspaceId: string): Promise<{ id: string; name: string; currency: string; timezoneName?: string; accountStatus?: string }[]> {
   const credentials = await getMetaCredentials(workspaceId);
-  if (!credentials) return MOCK_AD_ACCOUNTS;
+  if (!credentials) return [];
   const json = await graphGet("/me/adaccounts", { fields: "id,name,currency,timezone_name,account_status", access_token: credentials.accessToken });
   return (json.data ?? []).map((a: any) => ({
     id: a.id,
@@ -190,16 +188,33 @@ export async function listAdAccounts(workspaceId: string): Promise<{ id: string;
   }));
 }
 
+/**
+ * Fetch a specific ad account's billing currency straight from Meta, given a raw token + account id
+ * (i.e. before any Integration row exists). Used by the CRM SSO handoff, which receives an
+ * ad-account id but not its currency — hardcoding "USD" there mis-converts every budget on non-USD
+ * accounts (an INR account then fails Meta's minimum-budget check, subcode 1885272). Best-effort:
+ * returns null on any error so the caller can fall back rather than block the login.
+ */
+export async function fetchAdAccountCurrency(accessToken: string, adAccountId: string): Promise<string | null> {
+  try {
+    const bare = String(adAccountId).replace(/^act_/, "");
+    const json = await graphGet(`/act_${bare}`, { fields: "currency", access_token: accessToken });
+    return typeof json?.currency === "string" ? json.currency : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function listPages(workspaceId: string): Promise<{ id: string; name: string }[]> {
   const credentials = await getMetaCredentials(workspaceId);
-  if (!credentials) return MOCK_PAGES;
+  if (!credentials) return [];
   const json = await graphGet("/me/accounts", { fields: "id,name", access_token: credentials.accessToken });
   return (json.data ?? []).map((p: any) => ({ id: p.id, name: p.name }));
 }
 
 export async function listInstagramAccounts(workspaceId: string, pageId: string): Promise<{ id: string; username: string }[]> {
   const credentials = await getMetaCredentials(workspaceId);
-  if (!credentials) return MOCK_INSTAGRAM_ACCOUNTS;
+  if (!credentials) return [];
   const json = await graphGet(`/${pageId}`, { fields: "instagram_business_account{id,username}", access_token: credentials.accessToken });
   const ig = json.instagram_business_account;
   return ig ? [{ id: ig.id, username: ig.username }] : [];
@@ -207,7 +222,7 @@ export async function listInstagramAccounts(workspaceId: string, pageId: string)
 
 export async function listPixels(workspaceId: string): Promise<{ id: string; name: string }[]> {
   const credentials = await getMetaCredentials(workspaceId);
-  if (!credentials) return MOCK_PIXELS;
+  if (!credentials) return [];
   const json = await graphGet(`/act_${credentials.adAccountId}/adspixels`, { fields: "id,name", access_token: credentials.accessToken });
   return (json.data ?? []).map((p: any) => ({ id: p.id, name: p.name }));
 }

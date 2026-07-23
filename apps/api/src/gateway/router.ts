@@ -42,18 +42,25 @@ import { getAnalyticsSummary, getAudienceSuggestions } from "../modules/analytic
 import { getAdInsights } from "../modules/adInsights/adInsightsService.js";
 import { chatWithStrategist } from "../modules/strategist/strategistService.js";
 import { chatWithCopilot } from "../modules/copilot/copilotService.js";
+import { launchCampaign, pauseVariant, activateVariant, reallocateBudget, applyCreativeMedia } from "../modules/orchestrator/campaignOrchestrator.js";
+import { ingestCampaignMetrics } from "../modules/pipeline/performancePipeline.js";
+import { runOptimizationPass } from "../modules/optimization/optimizationEngine.js";
+import { metaAdapter } from "../modules/adapters/metaAdapter.js";
+import { googleAdapter } from "../modules/adapters/googleAdapter.js";
+import { isValidObjective, listObjectives } from "../modules/adapters/metaObjectives.js";
+import { simulateBudget } from "../modules/adapters/budgetSimulator.js";
 
-// Extracted services (roadmap Phase 2) — routes below are proxied, not handled locally.
-const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL ?? "http://localhost:4001";
-const CAMPAIGN_SERVICE_URL = process.env.CAMPAIGN_SERVICE_URL ?? "http://localhost:4002";
+// scraper-service is the only extracted service that actually runs; its routes are proxied
+// (see scraperProxy below). Auth and campaigns are handled inline in this gateway.
 const SCRAPER_SERVICE_URL = process.env.SCRAPER_SERVICE_URL ?? "http://localhost:4003";
 
-import { listNotifications, markRead, markAllRead, unreadCount, seedDemoNotifications, createNotification } from "../modules/notifications/notificationService.js";
-import { listAssets, createAsset, deleteAsset, updateAssetTags, seedDemoAssets } from "../modules/assets/assetService.js";
-import { listInsights, dismissInsight, generateInsights, seedDemoInsights } from "../modules/insights/insightService.js";
+import { listNotifications, markRead, markAllRead, unreadCount, createNotification } from "../modules/notifications/notificationService.js";
+import { listAssets, createAsset, deleteAsset, updateAssetTags } from "../modules/assets/assetService.js";
+import { listInsights, dismissInsight, generateInsights, recordOptimizationInsights } from "../modules/insights/insightService.js";
 import { getOrCreateIntegrations, connectIntegration, disconnectIntegration, updateIntegrationSettings, getMetaCredentials, sanitizeIntegration, setMetaManualConnection, setGoogleManualConnection } from "../modules/integrations/integrationService.js";
 import { listAdAccounts as listMetaAdAccountsGraph, listPages as listMetaPagesGraph, listInstagramAccounts as listMetaInstagramAccountsGraph, listPixels as listMetaPixelsGraph } from "../modules/integrations/metaOAuth.js";
-import { listAccessibleCustomers as listGoogleCustomersApi, listConversionActions as listGoogleConversionActionsApi } from "../modules/integrations/googleOAuth.js";
+import { confirmPixelLive } from "../modules/integrations/metaPixelHelper.js";
+import { listAccessibleCustomers as listGoogleCustomersApi, listConversionActions as listGoogleConversionActionsApi, getGoogleAdsCredentials } from "../modules/integrations/googleOAuth.js";
 import { getProductCatalog } from "../modules/integrations/productCatalogService.js";
 import { createGenerationJob, getGenerationJob } from "../modules/generation/generationJobService.js";
 import { getCrmWebhookConfig, setCrmWebhookConfig, clearCrmWebhookConfig } from "../modules/crm/crmWebhookService.js";
@@ -62,6 +69,7 @@ import { createResearchJob, getResearchJob as getResearchOrchestratorJob, getRes
 import { toStrategyInput } from "../research/knowledge/toStrategyInput.js";
 import { createCampaignGenerationJob, getCampaignGenerationJob } from "../modules/orchestrator/campaignGenerationService.js";
 import { TOTAL_PIPELINE_UNITS } from "../modules/orchestrator/campaignGenerationPipeline.js";
+import { buildCampaignForSelectedStrategy } from "../modules/orchestrator/strategySelectionService.js";
 import { getProgressSteps } from "../infra/liveProgress.js";
 import { freshnessScore, isStale } from "../research/knowledge/freshness.js";
 import { listDeadLetterEntries } from "../infra/deadLetterQueue.js";
@@ -75,7 +83,7 @@ import {
 import { buildMetaTargetingSpec, fetchMetaReachEstimate, estimateReachHeuristic } from "../modules/adapters/metaTargetingMapper.js";
 import {
   listDrafts, createDraft, updateDraft, publishDraft, deleteDraft, scheduleDraft,
-  listAdSets, createAdSet, listAds, createAd, updateAd, seedDemoDrafts,
+  listAdSets, createAdSet, listAds, createAd, updateAd,
 } from "../modules/drafts/draftsService.js";
 import { listSupportTickets, createSupportTicket } from "../modules/support/supportTicketService.js";
 import { getNotificationPreferences, setNotificationPreferences } from "../modules/notifications/notificationPreferenceService.js";
@@ -87,44 +95,133 @@ import {
 import { getPaymentMethod, setPaymentMethod, validatePaymentMethodInput } from "../modules/billing/paymentMethodService.js";
 import { listAutomationRules, createAutomationRule, deleteAutomationRule } from "../modules/automation/automationRuleService.js";
 import { getOptimizationGoal, setOptimizationGoal } from "../modules/optimization/optimizationGoalService.js";
+import { ACTIVE_NETWORKS, isCatalogSourceEnabled, CATALOG_COMING_SOON_MESSAGE } from "../config/platforms.js";
 
 export const router = Router();
 
 // Register/login/google are mounted unauthenticated, ahead of requireAuth, in index.ts
 // (see authEntryRouter below) — a client has no bearer token yet when calling them, so
 // gating them behind requireAuth would be a chicken-and-egg 401 in production.
+import { authRateLimiter } from "./middleware/rateLimit.js";
+
 export const authEntryRouter = Router();
-const authProxy = proxyTo(AUTH_SERVICE_URL);
-authEntryRouter.post("/auth/register", authProxy);
-authEntryRouter.post("/auth/login", authProxy);
-authEntryRouter.post("/auth/google", authProxy);
+
+import { crmLogin } from "../modules/auth/crmAuthService.js";
+import { rotateRefreshToken, revokeAllForUser } from "../modules/auth/refreshTokenService.js";
+import { issueToken, register, login, googleAuth } from "../modules/auth/authService.js";
+
+// Handled inline against the local authService (auth-service was never built). Each returns
+// { user, token, refreshToken, workspaceId } — the exact shape the web client's AuthResponse
+// expects. Rate-limited like the rest of the unauthenticated entry points.
+authEntryRouter.post("/auth/register", authRateLimiter, asyncHandler(async (req, res) => {
+  const { name, email, password } = req.body ?? {};
+  if (!name || !email || !password) return res.status(400).json({ error: "name, email and password are required" });
+  try {
+    res.json(await register({ name, email, password }));
+  } catch (err: any) {
+    res.status(409).json({ error: err.message || "Registration failed" });
+  }
+}));
+
+authEntryRouter.post("/auth/login", authRateLimiter, asyncHandler(async (req, res) => {
+  const { email, password } = req.body ?? {};
+  if (!email || !password) return res.status(400).json({ error: "email and password are required" });
+  try {
+    res.json(await login(email, password));
+  } catch (err: any) {
+    res.status(401).json({ error: err.message || "Invalid email or password" });
+  }
+}));
+
+authEntryRouter.post("/auth/google", authRateLimiter, asyncHandler(async (req, res) => {
+  const { name, email, googleId } = req.body ?? {};
+  if (!name || !email || !googleId) return res.status(400).json({ error: "name, email and googleId are required" });
+  try {
+    res.json(await googleAuth(name, email, googleId));
+  } catch (err: any) {
+    res.status(401).json({ error: err.message || "Google authentication failed" });
+  }
+}));
+
+authEntryRouter.post("/auth/crm-login", authRateLimiter, asyncHandler(async (req, res) => {
+  const { token } = req.body;
+  if (!token || typeof token !== "string") return res.status(400).json({ error: "Missing token" });
+  try {
+    const result = await crmLogin(token);
+    res.json(result);
+  } catch (err: any) {
+    res.status(401).json({ error: err.message || "CRM authentication failed" });
+  }
+}));
+
+authEntryRouter.post("/auth/refresh", asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken || typeof refreshToken !== "string") return res.status(400).json({ error: "Missing refreshToken" });
+  try {
+    const { newPlaintext, userId, family } = await rotateRefreshToken(refreshToken);
+    const member = await prisma.workspaceMember.findFirst({ where: { userId }, orderBy: { joinedAt: "asc" } });
+    const accessToken = issueToken(userId, member?.workspaceId);
+    res.json({ accessToken, refreshToken: newPlaintext });
+  } catch (err: any) {
+    res.status(401).json({ error: err.message || "Refresh failed" });
+  }
+}));
 
 /* ═══════════════════════════════════════════════
-   AUTH
+   AUTH — handled inline in this gateway
    ═══════════════════════════════════════════════ */
 
-router.get("/auth/me", authProxy);
-router.patch("/auth/me", authProxy);
+router.post("/auth/logout", asyncHandler(async (req: AuthedRequest, res) => {
+  await revokeAllForUser(req.userId!);
+  res.json({ ok: true });
+}));
+
+router.get("/auth/me", asyncHandler(async (req: AuthedRequest, res) => {
+  const user = await prisma.user.findUnique({ where: { id: req.userId! } });
+  if (!user) return res.status(404).json({ error: "User not found" });
+  res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar ?? undefined, createdAt: user.createdAt.toISOString() });
+}));
+
+router.patch("/auth/me", asyncHandler(async (req: AuthedRequest, res) => {
+  const user = await prisma.user.update({ where: { id: req.userId! }, data: req.body });
+  res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar ?? undefined, createdAt: user.createdAt.toISOString() });
+}));
 
 /* ═══════════════════════════════════════════════
-   WORKSPACES — extracted to auth-service (roadmap Phase 2). Workspace-scoped
-   sub-resources below this block (notifications/assets/insights/integrations/
-   drafts) stay gateway-side; only account/membership CRUD moved.
+   WORKSPACES — handled inline in this gateway
    ═══════════════════════════════════════════════ */
 
-router.get("/workspaces/:id", authProxy);
-router.patch("/workspaces/:id", authProxy);
-router.get("/workspaces/:id/members", authProxy);
-router.post("/workspaces/:id/members/invite", authProxy);
-router.patch("/workspaces/members/:memberId/role", authProxy);
-router.delete("/workspaces/members/:memberId", authProxy);
+router.get("/workspaces/:id", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
+  const ws = await prisma.workspace.findUnique({ where: { id: req.params.id } });
+  if (!ws) return res.status(404).json({ error: "Workspace not found" });
+  res.json({ id: ws.id, name: ws.name, ownerId: ws.ownerId, plan: ws.plan, logoUrl: ws.logoUrl, timezone: ws.timezone, createdAt: ws.createdAt.toISOString() });
+}));
+
+router.patch("/workspaces/:id", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
+  const ws = await prisma.workspace.update({ where: { id: req.params.id }, data: req.body });
+  res.json({ id: ws.id, name: ws.name, ownerId: ws.ownerId, plan: ws.plan, logoUrl: ws.logoUrl, timezone: ws.timezone, createdAt: ws.createdAt.toISOString() });
+}));
+
+router.get("/workspaces/:id/members", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
+  const members = await prisma.workspaceMember.findMany({ where: { workspaceId: req.params.id }, include: { workspace: false } });
+  res.json(members);
+}));
+
+router.post("/workspaces/:id/members/invite", requireWorkspaceMember("params", "id"), asyncHandler(async (_req, res) => {
+  res.status(501).json({ error: "Auth service not running" });
+}));
+router.patch("/workspaces/members/:memberId/role", asyncHandler(async (_req, res) => {
+  res.status(501).json({ error: "Auth service not running" });
+}));
+router.delete("/workspaces/members/:memberId", asyncHandler(async (_req, res) => {
+  res.status(501).json({ error: "Auth service not running" });
+}));
 
 /* ═══════════════════════════════════════════════
    NOTIFICATIONS
    ═══════════════════════════════════════════════ */
 
 router.get("/workspaces/:id/notifications", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
-  await seedDemoNotifications(req.params.id);
   res.json(await listNotifications(req.params.id));
 }));
 
@@ -147,7 +244,6 @@ router.post("/workspaces/:id/notifications/read-all", requireWorkspaceMember("pa
    ═══════════════════════════════════════════════ */
 
 router.get("/workspaces/:id/assets", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
-  await seedDemoAssets(req.params.id);
   const type = req.query.type as string | undefined;
   res.json(await listAssets(req.params.id, type as any));
 }));
@@ -223,8 +319,14 @@ router.post("/workspaces/:id/assets/upload", requireWorkspaceMember("params", "i
    ═══════════════════════════════════════════════ */
 
 router.get("/workspaces/:workspaceId/insights", requireWorkspaceMember("params", "workspaceId"), asyncHandler(async (req, res) => {
-  await seedDemoInsights(req.params.workspaceId);
-  res.json(await listInsights(req.params.workspaceId));
+  let results = await listInsights(req.params.workspaceId);
+  if (results.length === 0) {
+    const { businessId } = req.query as { businessId?: string };
+    if (businessId) {
+      results = await generateInsights(req.params.workspaceId, businessId);
+    }
+  }
+  res.json(results);
 }));
 
 router.post("/workspaces/:workspaceId/insights/generate", requireWorkspaceMember("params", "workspaceId"), asyncHandler(async (req, res) => {
@@ -329,6 +431,14 @@ router.get("/workspaces/:id/integrations/meta/pages/:pageId/instagram-accounts",
 router.get("/workspaces/:id/integrations/meta/pixels", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   try { res.json(await listMetaPixelsGraph(req.params.id)); }
   catch (err) { sendError(res, err, 502, "Failed to list Meta pixels"); }
+}));
+
+// Backs the campaign-builder "confirm pixel is live" gate: checks the live Graph API for whether
+// the pixel is available AND firing recent events, so the UI can enable generation only once the
+// pixel is confirmed. Same enforcement runs server-side in POST /campaigns/generate below.
+router.get("/workspaces/:id/integrations/meta/pixels/:pixelId/confirm", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
+  try { res.json(await confirmPixelLive(req.params.id, req.params.pixelId)); }
+  catch (err) { sendError(res, err, 502, "Failed to confirm Meta pixel status"); }
 }));
 
 router.get("/workspaces/:id/integrations/google/customers", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
@@ -490,6 +600,14 @@ const catalogSourceSchema = z.enum(["all", "shopify", "facebook", "google", "woo
 router.get("/workspaces/:id/products", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
   const parsed = catalogSourceSchema.safeParse(req.query.source ?? "all");
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  // MVP guardrail: all store/catalog sync sources are deferred ("coming soon"). Reject any
+  // explicit source here so a hand-crafted request can't import from a store even if the UI is
+  // bypassed. "all" is allowed through and returns an empty set below (no source is enabled), so
+  // the picker degrades to an empty state rather than erroring on its default load. See
+  // config/platforms.ts (ACTIVE_CATALOG_SOURCES) to re-enable a source.
+  if (parsed.data !== "all" && !isCatalogSourceEnabled(parsed.data)) {
+    return res.status(501).json({ error: CATALOG_COMING_SOON_MESSAGE, code: "CATALOG_COMING_SOON" });
+  }
   res.json(await getProductCatalog(req.params.id, parsed.data));
 }));
 
@@ -498,7 +616,6 @@ router.get("/workspaces/:id/products", requireWorkspaceMember("params", "id"), a
    ═══════════════════════════════════════════════ */
 
 router.get("/workspaces/:id/drafts", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
-  await seedDemoDrafts(req.params.id);
   res.json(await listDrafts(req.params.id));
 }));
 
@@ -846,28 +963,281 @@ router.post("/creatives/variations", asyncHandler(async (req, res) => {
   catch (err) { sendError(res, err, 502, "Variation generation failed"); }
 }));
 
-// Campaigns — extracted to campaign-service (roadmap Phase 2). /campaigns/:id/trend
-// stays gateway-side since it's an analytics read (analyticsService.getCampaignTrend),
-// not core campaign CRUD/orchestration.
-const campaignProxy = proxyTo(CAMPAIGN_SERVICE_URL);
-router.post("/campaigns", campaignProxy);
-router.post("/campaigns/from-suggestions", campaignProxy);
-router.get("/businesses/:id/campaigns", requireBusinessAccess("params", "id"), campaignProxy);
-router.get("/campaigns/:id", campaignProxy);
-router.patch("/campaigns/:id", campaignProxy);
-router.post("/campaigns/:id/launch", campaignProxy);
-router.post("/campaigns/:id/variants/:variantId/pause", campaignProxy);
-router.post("/campaigns/:id/variants/:variantId/activate", campaignProxy);
-router.post("/campaigns/:id/apply-creative-media", campaignProxy);
-router.post("/campaigns/:id/ingest", campaignProxy);
-router.get("/campaigns/:id/performance", campaignProxy);
-router.get("/campaigns/:id/live-insights", campaignProxy);
-router.get("/campaigns/:id/trend", requireCampaignAccess, asyncHandler(async (req, res) => res.json(await getCampaignTrend(req.params.id))));
-router.post("/campaigns/:id/optimize", campaignProxy);
+// Campaigns — handled inline in this gateway
+router.post("/campaigns", asyncHandler(async (req: AuthedRequest, res) => {
+  const campaign = await prisma.campaign.create({ data: { id: randomUUID(), businessId: req.body.businessId, workspaceId: req.body.workspaceId, data: req.body } });
+  res.json({ id: campaign.id, ...campaign.data as object });
+}));
+router.post("/campaigns/from-suggestions", asyncHandler(async (req: AuthedRequest, res) => {
+  const campaign = await prisma.campaign.create({ data: { id: randomUUID(), businessId: req.body.businessId, workspaceId: req.body.workspaceId, data: req.body } });
+  res.json({ id: campaign.id, ...campaign.data as object });
+}));
+router.get("/businesses/:id/campaigns", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
+  const campaigns = await prisma.campaign.findMany({ where: { businessId: req.params.id } });
+  res.json(campaigns.map(c => ({ id: c.id, ...c.data as object })));
+}));
+// Static /campaigns/* routes MUST be declared before the /campaigns/:id param route below,
+// or Express matches them as an :id. Objective picker + budget simulator for the generation flow.
+router.get("/campaigns/objectives", asyncHandler(async (_req, res) => res.json({ objectives: listObjectives() })));
+router.post("/campaigns/simulate", asyncHandler(async (req, res) => {
+  const dailyBudgetCents = Number(req.body?.dailyBudgetCents);
+  if (!Number.isFinite(dailyBudgetCents) || dailyBudgetCents <= 0) {
+    return res.status(400).json({ error: "dailyBudgetCents (positive number) is required" });
+  }
+  res.json(simulateBudget({ objective: req.body?.objective, dailyBudgetCents, platforms: req.body?.platforms, countries: req.body?.countries }));
+}));
+router.get("/campaigns/:id", asyncHandler(async (req, res) => {
+  const campaign = await prisma.campaign.findUnique({ where: { id: req.params.id } });
+  if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+  res.json({ id: campaign.id, ...campaign.data as object });
+}));
+router.patch("/campaigns/:id", asyncHandler(async (req, res) => {
+  const existing = await prisma.campaign.findUnique({ where: { id: req.params.id } });
+  if (!existing) return res.status(404).json({ error: "Campaign not found" });
+  const updated = await prisma.campaign.update({ where: { id: req.params.id }, data: { data: { ...(existing.data as object), ...req.body } } });
+  res.json({ id: updated.id, ...updated.data as object });
+}));
+router.post("/campaigns/:id/launch", asyncHandler(async (req, res) => {
+  const workspaceId = req.body.workspaceId ?? "demo-workspace";
+  const campaign = await prisma.campaign.findUnique({ where: { id: req.params.id } });
+  if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+  const data = campaign.data as any;
+  const hasMetaVariants = (data.variants ?? []).some((v: any) => v.network === "meta");
+  if (hasMetaVariants) {
+    const metaCreds = await getMetaCredentials(workspaceId);
+    if (!metaCreds) {
+      return res.status(422).json({ error: "No Meta ad account connected. Connect your Meta Business account in Settings before launching.", code: "META_NOT_CONNECTED" });
+    }
+  }
+  // Symmetric pre-flight for Google — without this, a Google variant with no connection would
+  // silently fail inside launchGoogleHierarchy (variant marked "failed") instead of prompting
+  // the user to connect. Mirrors the Meta check above.
+  const hasGoogleVariants = (data.variants ?? []).some((v: any) => v.network === "google");
+  if (hasGoogleVariants) {
+    const googleCreds = await getGoogleAdsCredentials(workspaceId);
+    if (!googleCreds) {
+      return res.status(422).json({ error: "No Google Ads account connected. Connect your Google Ads account in Settings before launching.", code: "GOOGLE_NOT_CONNECTED" });
+    }
+  }
+  try {
+    const launched = await launchCampaign(req.params.id, workspaceId);
+    res.json(launched);
+  } catch (err: any) {
+    if (err.message?.includes("not found")) return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message ?? "Campaign launch failed" });
+  }
+}));
+router.post("/campaigns/:id/variants/:variantId/pause", asyncHandler(async (req, res) => {
+  try {
+    const result = await pauseVariant(req.params.id, req.params.variantId);
+    res.json(result);
+  } catch (err: any) {
+    const status = err.message?.includes("not found") || err.message?.includes("not launched") ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
+}));
+router.post("/campaigns/:id/variants/:variantId/activate", asyncHandler(async (req, res) => {
+  try {
+    const result = await activateVariant(req.params.id, req.params.variantId);
+    res.json(result);
+  } catch (err: any) {
+    const status = err.message?.includes("not found") || err.message?.includes("not launched") ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
+}));
+router.post("/campaigns/:id/apply-creative-media", asyncHandler(async (req, res) => {
+  try {
+    const result = await applyCreativeMedia(req.params.id, req.body);
+    res.json(result);
+  } catch (err: any) {
+    if (err.message?.includes("not found")) return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+}));
+router.post("/campaigns/:id/variants/:variantId/budget", asyncHandler(async (req, res) => {
+  const dailyBudgetCents = Number(req.body.dailyBudgetCents);
+  if (!dailyBudgetCents || dailyBudgetCents <= 0 || dailyBudgetCents > MAX_BUDGET_CENTS) {
+    return res.status(400).json({ error: "Invalid budget amount" });
+  }
+  try {
+    const result = await reallocateBudget(req.params.id, req.params.variantId, dailyBudgetCents);
+    res.json(result);
+  } catch (err: any) {
+    const status = err.message?.includes("not found") || err.message?.includes("not launched") ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
+}));
+router.post("/campaigns/:id/ingest", asyncHandler(async (req, res) => {
+  // On-demand metrics pull so the UI can populate a just-launched campaign immediately
+  // instead of waiting for the next 15-min metrics-ingestion worker tick.
+  try {
+    const metrics = await ingestCampaignMetrics(req.params.id);
+    res.json({ ok: true, ingested: metrics.length });
+  } catch (err: any) {
+    if (err.message?.includes("not found")) return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message ?? "Metrics ingestion failed" });
+  }
+}));
+router.get("/campaigns/:id/performance", asyncHandler(async (req, res) => {
+  const snapshots = await prisma.campaignPerformanceSnapshot.findMany({ where: { campaignId: req.params.id }, orderBy: { capturedAt: "desc" }, take: 30 });
+  res.json(snapshots);
+}));
+router.get("/campaigns/:id/live-insights", asyncHandler(async (req, res) => {
+  const campaign = await prisma.campaign.findUnique({ where: { id: req.params.id } });
+  if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+  const data = campaign.data as any;
+  const variants: any[] = data.variants ?? [];
+  const liveVariants = variants.filter((v: any) => v.externalId && (v.status === "active" || v.status === "paused"));
 
-// Billing — extracted to campaign-service (roadmap Phase 2).
-router.post("/businesses/:id/invoices", requireBusinessAccess("params", "id"), campaignProxy);
-router.get("/businesses/:id/invoices", requireBusinessAccess("params", "id"), campaignProxy);
+  const emptyFunnel = { addToCart: 0, addPaymentInfo: 0, purchases: 0, purchaseValueCents: 0 };
+  if (liveVariants.length === 0) {
+    return res.json({ campaignId: req.params.id, isLive: false, impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0, ctr: 0, cpcCents: null, cpmCents: null, roas: null, funnel: emptyFunnel, costPerAddToCartCents: null, costPerAddPaymentInfoCents: null, costPerPurchaseCents: null, addToCartRate: null, purchaseRate: null, byNetwork: {} });
+  }
+
+  const workspaceId = data.workspaceId ?? campaign.workspaceId ?? "demo-workspace";
+  // Resolve each network's credentials once (not per-variant) — a campaign can hold both Meta and
+  // Google variants, and each adapter needs its own account creds.
+  const metaCredentials = (await getMetaCredentials(workspaceId)) ?? undefined;
+  const googleCredentials = (await getGoogleAdsCredentials(workspaceId)) ?? undefined;
+  // Optional date_preset from the Ads Manager range picker (last_7d/last_14d/…); falls back to
+  // today's date, which the adapters treat as "no preset → default window".
+  const datePreset = typeof req.query.range === "string" && req.query.range ? req.query.range : new Date().toISOString().slice(0, 10);
+
+  // Accumulate metrics PER NETWORK so a dual-network campaign can be split into a Meta slice and a
+  // Google slice in the Ads Manager (one row per campaign×network) — the counts come genuinely
+  // per-variant from each ad network, so this split is accurate, not an estimate.
+  type NetAccum = { impressions: number; reach: number; clicks: number; conversions: number; spendCents: number; revenueCents: number; liveVariantCount: number; funnel: { addToCart: number; addPaymentInfo: number; purchases: number; purchaseValueCents: number } };
+  const newAccum = (): NetAccum => ({ impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0, liveVariantCount: 0, funnel: { addToCart: 0, addPaymentInfo: 0, purchases: 0, purchaseValueCents: 0 } });
+  const perNetwork: Record<string, NetAccum> = {};
+
+  for (const v of liveVariants) {
+    const net = v.network === "google" ? "google" : "meta";
+    const acc = (perNetwork[net] ??= newAccum());
+    acc.liveVariantCount++;
+    try {
+      // Route each variant to its own network's adapter — a Google variant queried via the Meta
+      // adapter (the old hardcoded behavior) returned nothing, so the Google tab showed no data.
+      const stats = net === "google"
+        ? await googleAdapter.fetchInsights(v.externalId, datePreset, googleCredentials)
+        : await metaAdapter.fetchInsights(v.externalId, datePreset, metaCredentials);
+      acc.impressions += stats.impressions;
+      acc.reach += stats.reach;
+      acc.clicks += stats.clicks;
+      acc.conversions += stats.conversions;
+      acc.spendCents += stats.spendCents;
+      acc.revenueCents += stats.revenueCents ?? 0;
+      if (stats.funnel) {
+        acc.funnel.addToCart += stats.funnel.addToCart;
+        acc.funnel.addPaymentInfo += stats.funnel.addPaymentInfo;
+        acc.funnel.purchases += stats.funnel.purchases;
+        acc.funnel.purchaseValueCents += stats.funnel.purchaseValueCents;
+      }
+    } catch { /* variant may have been deleted on the ad network */ }
+  }
+
+  // Split the campaign's single daily budget across networks proportionally to each network's live
+  // variant count, so the per-network rows' budgets sum back to the campaign total (no double-count).
+  const totalLiveVariants = liveVariants.length || 1;
+  const buildSlice = (acc: NetAccum) => {
+    const { liveVariantCount, funnel, ...m } = acc;
+    return {
+      ...m,
+      funnel,
+      dailyBudgetCents: 0, // set by the caller after proportional split
+      ctr: m.impressions > 0 ? m.clicks / m.impressions : 0,
+      cpcCents: m.clicks > 0 ? Math.round(m.spendCents / m.clicks) : null,
+      cpmCents: m.impressions > 0 ? Math.round((m.spendCents / m.impressions) * 1000) : null,
+      roas: m.spendCents > 0 && m.revenueCents > 0 ? m.revenueCents / m.spendCents : null,
+      costPerAddToCartCents: funnel.addToCart > 0 ? Math.round(m.spendCents / funnel.addToCart) : null,
+      costPerAddPaymentInfoCents: funnel.addPaymentInfo > 0 ? Math.round(m.spendCents / funnel.addPaymentInfo) : null,
+      costPerPurchaseCents: funnel.purchases > 0 ? Math.round(m.spendCents / funnel.purchases) : null,
+      addToCartRate: m.clicks > 0 ? funnel.addToCart / m.clicks : null,
+      purchaseRate: m.clicks > 0 ? funnel.purchases / m.clicks : null,
+      liveVariantCount,
+    };
+  };
+  const campaignDailyBudgetCents = Number((data.dailyBudgetCents ?? 0));
+  const byNetwork: Record<string, any> = {};
+  for (const [net, acc] of Object.entries(perNetwork)) {
+    const slice = buildSlice(acc);
+    slice.dailyBudgetCents = Math.round(campaignDailyBudgetCents * (acc.liveVariantCount / totalLiveVariants));
+    byNetwork[net] = slice;
+  }
+
+  // Campaign-wide aggregate (unchanged shape) — sum across networks for the "all" / dual-network view.
+  const agg = Object.values(perNetwork).reduce((a, acc) => {
+    a.impressions += acc.impressions; a.reach += acc.reach; a.clicks += acc.clicks;
+    a.conversions += acc.conversions; a.spendCents += acc.spendCents; a.revenueCents += acc.revenueCents;
+    a.funnel.addToCart += acc.funnel.addToCart; a.funnel.addPaymentInfo += acc.funnel.addPaymentInfo;
+    a.funnel.purchases += acc.funnel.purchases; a.funnel.purchaseValueCents += acc.funnel.purchaseValueCents;
+    return a;
+  }, newAccum());
+  const { funnel } = agg;
+
+  res.json({
+    campaignId: req.params.id,
+    isLive: true,
+    impressions: agg.impressions,
+    reach: agg.reach,
+    clicks: agg.clicks,
+    conversions: agg.conversions,
+    spendCents: agg.spendCents,
+    revenueCents: agg.revenueCents,
+    ctr: agg.impressions > 0 ? agg.clicks / agg.impressions : 0,
+    cpcCents: agg.clicks > 0 ? Math.round(agg.spendCents / agg.clicks) : null,
+    cpmCents: agg.impressions > 0 ? Math.round((agg.spendCents / agg.impressions) * 1000) : null,
+    // True ROAS: real reported revenue / spend.
+    roas: agg.spendCents > 0 && agg.revenueCents > 0 ? agg.revenueCents / agg.spendCents : null,
+    funnel,
+    // Cost-per-step: total spend divided by that step's count. Null (not 0) when the step has no
+    // events, so the UI shows "—" rather than an infinite/meaningless cost.
+    costPerAddToCartCents: funnel.addToCart > 0 ? Math.round(agg.spendCents / funnel.addToCart) : null,
+    costPerAddPaymentInfoCents: funnel.addPaymentInfo > 0 ? Math.round(agg.spendCents / funnel.addPaymentInfo) : null,
+    costPerPurchaseCents: funnel.purchases > 0 ? Math.round(agg.spendCents / funnel.purchases) : null,
+    // Step CVR relative to clicks (top of the paid funnel). Null when there are no clicks.
+    addToCartRate: agg.clicks > 0 ? funnel.addToCart / agg.clicks : null,
+    purchaseRate: agg.clicks > 0 ? funnel.purchases / agg.clicks : null,
+    // Per-network slices so the Ads Manager can render one row per campaign×network.
+    byNetwork,
+  });
+}));
+router.get("/campaigns/:id/trend", requireCampaignAccess, asyncHandler(async (req, res) => res.json(await getCampaignTrend(req.params.id))));
+router.post("/campaigns/:id/optimize", asyncHandler(async (req, res) => {
+  // Manual "optimize now" — runs the same optimization pass the metrics worker runs on a
+  // schedule, and persists the resulting decisions to the workspace's AI-insights feed.
+  const campaign = await prisma.campaign.findUnique({ where: { id: req.params.id } });
+  if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+  try {
+    const decisions = await runOptimizationPass(req.params.id);
+    const workspaceId = (campaign.data as any)?.workspaceId ?? campaign.workspaceId;
+    if (workspaceId && decisions.length) await recordOptimizationInsights(workspaceId, decisions);
+    res.json({ ok: true, decisions });
+  } catch (err: any) {
+    if (err.message?.includes("not found")) return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message ?? "Optimization failed" });
+  }
+}));
+// Persistent 24/7 auto-optimize toggle. Stored on the campaign's data blob (no schema column);
+// the scheduled metrics-ingestion worker reads this flag and skips the optimization pass when
+// it's explicitly false, so the user can turn autonomous budget/pause moves off per campaign.
+router.post("/campaigns/:id/auto-optimize", asyncHandler(async (req, res) => {
+  const enabled = req.body?.enabled;
+  if (typeof enabled !== "boolean") return res.status(400).json({ error: "enabled (boolean) is required" });
+  const existing = await prisma.campaign.findUnique({ where: { id: req.params.id } });
+  if (!existing) return res.status(404).json({ error: "Campaign not found" });
+  const updated = await prisma.campaign.update({
+    where: { id: req.params.id },
+    data: { data: { ...(existing.data as object), autoOptimize: enabled } },
+  });
+  res.json({ id: updated.id, autoOptimize: enabled });
+}));
+
+// Billing — handled inline in this gateway
+router.post("/businesses/:id/invoices", requireBusinessAccess("params", "id"), asyncHandler(async (_req, res) => res.json([])));
+router.get("/businesses/:id/invoices", requireBusinessAccess("params", "id"), asyncHandler(async (req, res) => {
+  const invoices = await prisma.invoice.findMany({ where: { businessId: req.params.id } }).catch(() => []);
+  res.json(invoices);
+}));
 
 // Onboarding
 const scrapeSchema = z.object({ url: z.string().min(1) });
@@ -1019,7 +1389,7 @@ router.get("/research/:id/status", asyncHandler(async (req: AuthedRequest, res) 
    Coordinator (10 agents) -> Campaign Builder -> Persist -> Return Response. One POST
    kicks off a single async job (campaignGenerationPipeline.ts, driven by
    workers/campaignGenerationWorker.ts) that supersedes nothing existing — every route
-   above and the campaign-service proxy below keep working unchanged.
+   above keeps working unchanged.
    ═══════════════════════════════════════════════ */
 
 const campaignGenerateSchema = z.object({
@@ -1028,29 +1398,101 @@ const campaignGenerateSchema = z.object({
   url: z.string().min(1),
   name: z.string().min(1).optional(),
   dailyBudgetCents: z.number().int().positive().max(MAX_BUDGET_CENTS).optional(),
+  // Only the ACTIVE_NETWORKS (Meta + Google today) are accepted. TikTok/LinkedIn/etc. are
+  // "coming soon" — rejected at the boundary so a channel we can't actually launch can never
+  // enter the pipeline. Driven by the central platform catalog (config/platforms.ts) so the
+  // accepted set widens automatically when a network graduates.
+  channels: z.array(z.enum(ACTIVE_NETWORKS)).optional(),
+  objective: z.string().optional(),
+  countries: z.array(z.string()).optional(),
   // Bypass the research cache and force a fresh 27-provider run for this generation.
   forceRefresh: z.boolean().optional(),
+  // When set, generation is gated on this pixel being confirmed LIVE (available + firing recent
+  // events) — the server re-runs the same confirmPixelLive check the UI gate uses, so a campaign
+  // can't be generated pointing at a dead/uninstalled pixel even if the UI check is bypassed.
+  pixelId: z.string().min(1).optional(),
 });
 
 router.post("/campaigns/generate", requireWorkspaceMember("body", "workspaceId"), asyncHandler(async (req, res) => {
   const parsed = campaignGenerateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const { workspaceId, businessId, url, name, dailyBudgetCents, forceRefresh } = parsed.data;
+  const { workspaceId, businessId, url, name, dailyBudgetCents, objective, forceRefresh, pixelId } = parsed.data;
+  // Only forward a valid post-ODAX Meta objective to the pipeline; anything else is dropped so
+  // launchMetaHierarchy falls back to its default rather than sending junk to the Graph API.
+  const validObjective = objective && isValidObjective(objective) ? objective : undefined;
 
   const business = await getBusiness(businessId);
   if (!business) return res.status(404).json({ error: "Business not found" });
-  // Caller already proved membership of `workspaceId` above — this additionally stops
-  // that real membership from being used to generate a campaign against a DIFFERENT
-  // workspace's business by passing a mismatched businessId.
   if (business.workspaceId !== workspaceId) {
     return res.status(403).json({ error: "This business does not belong to the given workspace" });
   }
 
+  // Live pixel gate: if a pixel was selected for this generation, it must be confirmed live
+  // (available + firing recent events) before we spend the pipeline's LLM budget and, eventually,
+  // ad budget on it. Mirrors the UI's confirm gate so bypassing the UI can't skip the check.
+  if (pixelId) {
+    let confirmation;
+    try {
+      confirmation = await confirmPixelLive(workspaceId, pixelId);
+    } catch (err) {
+      return sendError(res, err, 502, "Failed to confirm Meta pixel status before generation");
+    }
+    if (!confirmation.live) {
+      return res.status(409).json({ error: `Pixel ${pixelId} is not confirmed live — ${confirmation.reason}`, pixelConfirmation: confirmation });
+    }
+  }
+
+  // Return a recent completed job for the same (workspace, business, url) if one exists
+  // and forceRefresh isn't requested — avoids re-running the full pipeline when verified
+  // data is already available. Normalizes URL variants (with/without https://) to match.
+  if (!forceRefresh) {
+    const normalizedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    const bareHost = normalizedUrl.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+    const urlVariants = [url, normalizedUrl, `https://${bareHost}`, `http://${bareHost}`, bareHost];
+    // Pull the recent completed candidates (bounded), keep only those still FRESH within the TTL,
+    // then reuse the HIGHEST-CONFIDENCE one — not merely the most recent. Confidence lives inside
+    // the decisionContext JSON (no column to orderBy), so ranking happens here in code. This is
+    // what makes "show the best data we have, and only if it's fresh" actually hold: previously it
+    // returned newest-within-14-days regardless of confidence, surfacing stale low-confidence runs.
+    const candidates = await prisma.campaignGenerationJob.findMany({
+      where: { workspaceId, businessId, url: { in: urlVariants }, status: "completed", decisionContext: { not: null as any } },
+      orderBy: { completedAt: "desc" },
+      take: 20,
+    });
+    const ttl = CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS;
+    const confidenceOf = (dc: unknown): number => {
+      const c = (dc as { confidence?: unknown } | null)?.confidence;
+      return typeof c === "number" ? c : 0;
+    };
+    const fresh = candidates.filter((c) => {
+      const researchedAt = c.completedAt ?? c.startedAt ?? c.createdAt;
+      return !isStale(researchedAt.toISOString(), ttl);
+    });
+    const existing = fresh.sort((a, b) => confidenceOf(b.decisionContext) - confidenceOf(a.decisionContext))[0];
+    if (existing) {
+      return res.status(200).json({
+        id: existing.id,
+        workspaceId: existing.workspaceId,
+        businessId: existing.businessId,
+        url: existing.url,
+        status: existing.status,
+        researchJobId: existing.researchJobId,
+        strategyId: existing.strategyId,
+        campaignId: existing.campaignId,
+        decisionContext: existing.decisionContext,
+        agentResults: existing.agentResults,
+        error: existing.error,
+        startedAt: existing.startedAt?.toISOString(),
+        completedAt: existing.completedAt?.toISOString(),
+        createdAt: existing.createdAt.toISOString(),
+        updatedAt: existing.updatedAt.toISOString(),
+      });
+    }
+  }
+
   try {
     const job = await createCampaignGenerationJob({ workspaceId, businessId, url, name, dailyBudgetCents });
-    // forceRefresh rides the BullMQ payload only — deliberately NOT persisted on the job
-    // record, so this whole feature needs zero schema migration.
-    await campaignGenerationQueue.add("campaign-generate", { jobId: job.id, forceRefresh: forceRefresh ?? false });
+    await campaignGenerationQueue.add("campaign-generate", { jobId: job.id, forceRefresh: forceRefresh ?? false, objective: validObjective });
     res.status(202).json(job);
   } catch (err) {
     sendError(res, err, 422, "Failed to start campaign generation");
@@ -1066,12 +1508,12 @@ router.get("/campaigns/generate/:id", asyncHandler(async (req: AuthedRequest, re
   res.json(job);
 }));
 
-// How long a completed generation's research is considered fresh before the UI prompts a
-// re-run — reuses the same freshnessScore/isStale math Research Memory's retrieval already
-// applies (research/knowledge/freshness.ts), just with a far shorter horizon: a business's
-// own market/competitor/pricing landscape moves much faster than the 180-day corroboration
-// window that's appropriate for cross-business RAG retrieval.
-const CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+// How long a completed generation's research is considered fresh before a new generate request
+// re-runs the pipeline instead of reusing the cached job. Reuses the same freshnessScore/isStale
+// math Research Memory's retrieval applies (research/knowledge/freshness.ts). Kept deliberately
+// short (5h) — a business's own market/competitor/pricing read goes stale fast, and reusing a
+// day-old cached run is exactly what surfaced 2-day-old low-confidence data in the UI.
+const CAMPAIGN_RESEARCH_FRESHNESS_TTL_MS = 5 * 60 * 60 * 1000;
 
 router.get("/campaigns/generate/:id/status", asyncHandler(async (req: AuthedRequest, res) => {
   const job = await getCampaignGenerationJob(req.params.id);
@@ -1219,6 +1661,26 @@ router.get("/campaigns/generate/:id/recommendations", asyncHandler(async (req: A
     return res.status(403).json({ error: "You do not have access to this campaign generation job" });
   }
   res.json(await getCampaignRecommendations(job.id));
+}));
+
+// Materialize ONE of a job's 3 candidate strategies (Strategy A/B/C) into an editable draft
+// Campaign — powers the results page's "pick one of 3 complete campaign suggestions" flow.
+// Selecting the winning strategy returns the campaign the pipeline already built (no duplicate);
+// selecting another builds a fresh draft on demand from data already computed (no re-research).
+router.post("/campaigns/generate/:id/select-strategy", asyncHandler(async (req: AuthedRequest, res) => {
+  const job = await getCampaignGenerationJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Campaign generation job not found" });
+  if (!(await getMembership(job.workspaceId, req.userId!))) {
+    return res.status(403).json({ error: "You do not have access to this campaign generation job" });
+  }
+  const parsed = z.object({ strategy: z.string().min(1) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const { campaign, reusedWinner } = await buildCampaignForSelectedStrategy(job.id, parsed.data.strategy);
+    res.json({ campaignId: campaign.id, reusedWinner, ...campaign });
+  } catch (err) {
+    sendError(res, err, 422, "Could not build a campaign for that strategy");
+  }
 }));
 
 /* ═══════════════════════════════════════════════

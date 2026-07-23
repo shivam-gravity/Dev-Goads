@@ -2,6 +2,7 @@ import type { NextFunction, Response } from "express";
 import type { AuthedRequest } from "./auth.js";
 import { getMembership } from "../../modules/workspace/workspaceService.js";
 import { getBusiness } from "../../modules/business/businessService.js";
+import { isDevSuperAdmin } from "./devSuperAdmin.js";
 
 type IdSource = "params" | "body" | "query";
 
@@ -15,8 +16,7 @@ function readId(req: AuthedRequest, source: IdSource, key: string): string | und
  * Must run after requireAuth (needs req.userId) and before the route handler. Closes the
  * gap where every workspace-scoped route trusted whatever workspace id it was handed —
  * this actually checks req.userId is a WorkspaceMember of that workspace before letting
- * the request through, the same way apps/auth-service already does for its own routes
- * (see requireUser + getMembership there).
+ * the request through.
  */
 export function requireWorkspaceMember(source: IdSource, key = "id") {
   return async (req: AuthedRequest, res: Response, next: NextFunction) => {
@@ -24,6 +24,7 @@ export function requireWorkspaceMember(source: IdSource, key = "id") {
     if (!workspaceId) return res.status(400).json({ error: `Missing ${key}` });
     if (!req.userId) return res.status(401).json({ error: "Not authenticated" });
 
+    if (await isDevSuperAdmin(req.userId)) return next(); // dev-only bypass; no-op in production
     const membership = await getMembership(workspaceId, req.userId);
     if (!membership) return res.status(403).json({ error: "You do not have access to this workspace" });
     next();
@@ -45,6 +46,8 @@ export function requireBusinessAccess(source: IdSource, key = "id") {
 
     const business = await getBusiness(businessId);
     if (!business) return res.status(404).json({ error: "Business not found" });
+
+    if (await isDevSuperAdmin(req.userId)) return next(); // dev-only bypass; no-op in production
     if (!business.workspaceId) return res.status(403).json({ error: "This business is not assigned to a workspace" });
 
     const membership = await getMembership(business.workspaceId, req.userId);

@@ -1,31 +1,26 @@
 import type { SearchAssignment, SearchProvider } from "./searchRouter.js";
 
 /**
- * Task -> search-provider assignment, same resolution shape as llmTaskConfig.ts
- * (env override -> static registry -> default) but for the 3 search backends that replaced
- * Firecrawl's /search (its account hit its credit limit — see infra/searchRouter.ts).
+ * Task -> search-provider assignment. Since Tavily and Serper were removed, SearXNG is the
+ * only backend, so every task resolves to it. The env-override mechanism is kept (harmless,
+ * and lets a future provider be slotted back in without a code change), but with a single
+ * valid provider it can only ever re-select SearXNG today.
  *
- * Only one task actually needs a non-default assignment today:
- *  - "search-ranking" (SearchRankingProvider) needs genuine Google SERP order to derive a
- *    real `position` field — Serper is the only one of the three that returns actual
- *    Google-ranked results; Tavily/SearXNG apply their own relevance ranking instead.
- * Everything else (the general "web-research" task every webSearchThenStructure-based
- * provider and Intelligence Engine shares, plus SocialMediaProvider/ReviewsProvider's
- * domain-scoped searches) is well served by Tavily's LLM-optimized content extraction —
- * DEFAULT_ASSIGNMENT covers all of it; no per-provider entries needed unless that changes.
+ * `search-ranking` (SearchRankingProvider) previously used Serper for genuine Google SERP
+ * order; SearXNG applies its own relevance ranking, so that provider's `position` field is now
+ * approximate (relevance-ranked) rather than exact Google rank. That trade-off is intentional —
+ * no metered search vendor remains.
  */
-const DEFAULT_ASSIGNMENT: SearchAssignment = { provider: "tavily" };
+const DEFAULT_ASSIGNMENT: SearchAssignment = { provider: "searxng" };
 
-const TASK_SEARCH_REGISTRY: Record<string, SearchAssignment> = {
-  "search-ranking": { provider: "serper" },
-};
+const TASK_SEARCH_REGISTRY: Record<string, SearchAssignment> = {};
 
-const VALID_PROVIDERS = new Set<string>(["tavily", "serper", "searxng"]);
+const VALID_PROVIDERS = new Set<string>(["searxng"]);
 
 /**
  * Resolution order: per-task env override (quick experiments, no code change) → static
  * registry (checked-in, deliberate) → global default. Env var format:
- * `SEARCH_TASK_<TASK_NAME>="provider"`, e.g. `SEARCH_TASK_SEARCH_RANKING="tavily"`.
+ * `SEARCH_TASK_<TASK_NAME>="provider"`, e.g. `SEARCH_TASK_WEB_RESEARCH="searxng"`.
  * A malformed/unrecognized override is ignored rather than thrown — falls through to the
  * static registry/default instead.
  */

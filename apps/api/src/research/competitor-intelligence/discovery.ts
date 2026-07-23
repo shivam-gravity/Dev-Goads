@@ -9,6 +9,10 @@ export interface DiscoveryInput {
   industry?: string;
   workspaceId: string;
   businessId?: string;
+  /** Verified facts from the business's OWN site (fact-first pipeline). Powers a 4th discovery
+   * source that names competitors from the KNOWN product category — the safety net for when the
+   * three search/memory sources come back empty (which left competitors as "none discovered"). */
+  verifiedFacts?: { field: string; value: string; sourceUrl?: string; confidence: number }[];
 }
 
 const NAME_EXTRACTION_TOOL = {
@@ -146,16 +150,64 @@ export function mergeDiscoveredCompetitors(results: SourceResult[]): { competito
  * (no OPENAI_API_KEY, no memory yet, a search that found nothing) just contributes zero
  * candidates rather than failing discovery for the other sources.
  */
+/** Source 4: name competitors from the business's OWN verified facts. The three sources above
+ * all depend on live web search / prior memory; for a niche B2B product those routinely come
+ * back empty (leaving "no competitors discovered"). The facts reveal exactly what the business
+ * SELLS, so the model can name real, well-known direct rivals in that category from general
+ * knowledge — the safety net that turns "none discovered" into a real list. No new web call. */
+async function discoverFromVerifiedFacts(input: DiscoveryInput): Promise<{ name: string }[]> {
+  if (!llm || !input.verifiedFacts?.length) return [];
+  const factsText = input.verifiedFacts.slice(0, 40).map((f) => `- ${f.field}: ${f.value}`).join("\n");
+  const result = await runStructured<{ competitors: { name: string }[] }>({
+    maxTokens: 512,
+    tool: NAME_EXTRACTION_TOOL,
+    messages: [{
+      role: "user",
+      content: `Verified facts from the business's own website:\n${factsText}\n\nFrom these, determine exactly what product this business sells, then name its main DIRECT competitors — real, well-known companies selling a genuinely competing product in the same category (from your knowledge of that category). Do NOT list IT-services firms, consultancies, systems integrators, or agencies.`,
+    }],
+  });
+  return result?.competitors ?? [];
+}
+
 export async function discoverCompetitors(input: DiscoveryInput): Promise<{ competitors: DiscoveredCompetitor[]; sourcesUsed: string[] }> {
-  const sources: { name: string; run: () => Promise<{ name: string; url?: string }[]> }[] = [
-    { name: "direct-search", run: () => discoverFromDirectSearch(input) },
-    { name: "alternatives-search", run: () => discoverFromAlternativesSearch(input) },
-    { name: "research-memory", run: () => discoverFromResearchMemory(input) },
-  ];
+  // Fact-first: when the up-front crawl produced verified facts, discoverFromVerifiedFacts alone
+  // reliably names direct competitors from the model's category knowledge (it knows what the
+  // business sells from its own facts), so we DROP the two live web searches — the flaky
+  // SearXNG+crawl4ai path whose cold-start latency was timing this provider out to 0 (the
+  // competitor=0.05 / "no competitors discovered" failures). Research Memory is kept (local, fast).
+  // With no facts (crawl failed), all four sources run — the prior behavior.
+  const hasFacts = !!input.verifiedFacts?.length;
+  const sources: { name: string; run: () => Promise<{ name: string; url?: string }[]> }[] = hasFacts
+    ? [
+        { name: "verified-facts", run: () => discoverFromVerifiedFacts(input) },
+        { name: "research-memory", run: () => discoverFromResearchMemory(input) },
+      ]
+    : [
+        { name: "direct-search", run: () => discoverFromDirectSearch(input) },
+        { name: "alternatives-search", run: () => discoverFromAlternativesSearch(input) },
+        { name: "research-memory", run: () => discoverFromResearchMemory(input) },
+        { name: "verified-facts", run: () => discoverFromVerifiedFacts(input) },
+      ];
 
   const results = await Promise.all(
     sources.map(async (source) => ({ source: source.name, names: await source.run().catch(() => [] as { name: string; url?: string }[]) }))
   );
 
-  return mergeDiscoveredCompetitors(results);
+  const merged = mergeDiscoveredCompetitors(results);
+
+  // A business is never its own competitor. Ungrounded sources (and the business-name-seeded
+  // search queries above) routinely echo the business's own name back — e.g. workspace
+  // "Master's Business" surfacing "Master's" as a discovered competitor, which then poisons the
+  // whole "compare Master's vs. Polluxa" positioning. Drop any candidate whose name matches the
+  // business's own name or domain host.
+  const selfTokens = [input.businessName, hostnameOf(input.url)]
+    .filter(Boolean)
+    .map((n) => String(n).toLowerCase().replace(/[^a-z0-9]/g, ""))
+    .filter((n) => n.length >= 3);
+  if (selfTokens.length === 0) return merged;
+  const isSelf = (name: string): boolean => {
+    const norm = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return selfTokens.some((self) => norm === self || norm.includes(self) || self.includes(norm));
+  };
+  return { competitors: merged.competitors.filter((c) => !isSelf(c.name)), sourcesUsed: merged.sourcesUsed };
 }

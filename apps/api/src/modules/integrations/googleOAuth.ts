@@ -153,11 +153,38 @@ async function googleAdsSearch(customerId: string, accessToken: string, develope
 // Mock lists returned when there's no real Google OAuth connection — same "(mock)" naming
 // convention as mockConnectGoogle above, so the campaign builder always has something to
 // show in local/demo mode.
-const MOCK_CUSTOMERS = [{ id: "1234567890", name: "Polluxa Google Ads MCC (mock)" }];
-const MOCK_CONVERSION_ACTIONS = [
-  { id: "1000000001", name: "Purchase (mock)", category: "PURCHASE" },
-  { id: "1000000002", name: "Lead Form Submission (mock)", category: "SUBMIT_LEAD_FORM" },
-];
+// No mock account/conversion pickers: without a real Google Ads connection these are empty, so the
+// connect UI prompts a real connection instead of offering fabricated "(mock)" accounts to select.
+
+// Matches campaignOrchestrator.isAuthError — a Google Ads 401 surfaces as one of these tokens.
+const isGoogleAuthError = (err: unknown) =>
+  /\b401\b|UNAUTHENTICATED|invalid authentication/i.test(String((err as Error)?.message ?? err));
+
+/**
+ * Runs a read against the workspace's Google Ads credentials, recovering from a stale access
+ * token the same way the mutate path (campaignOrchestrator.launchGoogleHierarchy) does. The CRM
+ * SSO manual-connect stores an OPTIMISTIC tokenExpiresAt (now + 1hr), so getGoogleAdsCredentials'
+ * normal expiry gate reports "still valid" and hands back the pasted token WITHOUT refreshing —
+ * even though it may already be dead. That yields a 401 on the very first dropdown read after SSO.
+ * On an auth error we force a genuine refresh (bypassing the expiry gate) and retry ONCE; reads
+ * are idempotent so a clean retry has no side effects. Returns [] when never connected.
+ */
+async function withGoogleAdsCredentials<T>(
+  workspaceId: string,
+  fn: (credentials: GoogleAdsCredentials) => Promise<T>,
+  fallback: T,
+): Promise<T> {
+  let credentials = await getGoogleAdsCredentials(workspaceId);
+  if (!credentials) return fallback;
+  try {
+    return await fn(credentials);
+  } catch (err) {
+    if (!isGoogleAuthError(err)) throw err;
+    const refreshed = await getGoogleAdsCredentials(workspaceId, { forceRefresh: true });
+    if (!refreshed) throw err;
+    return await fn(refreshed);
+  }
+}
 
 /**
  * Full list of Google Ads accounts the connected user can access — distinct from the single
@@ -165,31 +192,31 @@ const MOCK_CONVERSION_ACTIONS = [
  * picker is a follow-up there too, same as Meta's ad-account selection).
  */
 export async function listAccessibleCustomers(workspaceId: string): Promise<{ id: string; name: string }[]> {
-  const credentials = await getGoogleAdsCredentials(workspaceId);
-  if (!credentials) return MOCK_CUSTOMERS;
-  const res = await fetch(`https://googleads.googleapis.com/${ADS_API_VERSION}/customers:listAccessibleCustomers`, {
-    headers: { Authorization: `Bearer ${credentials.accessToken}`, "developer-token": credentials.developerToken },
-  });
-  const json = (await res.json()) as any;
-  if (!res.ok) throw new Error(`Failed to list accessible Google Ads customers: ${JSON.stringify(json)}`);
-  const ids = ((json.resourceNames ?? []) as string[]).map((rn) => rn.replace("customers/", ""));
-  return ids.map((id) => ({ id, name: `Google Ads Account ${id}` }));
+  return withGoogleAdsCredentials(workspaceId, async (credentials) => {
+    const res = await fetch(`https://googleads.googleapis.com/${ADS_API_VERSION}/customers:listAccessibleCustomers`, {
+      headers: { Authorization: `Bearer ${credentials.accessToken}`, "developer-token": credentials.developerToken },
+    });
+    const json = (await res.json()) as any;
+    if (!res.ok) throw new Error(`Failed to list accessible Google Ads customers: ${JSON.stringify(json)}`);
+    const ids = ((json.resourceNames ?? []) as string[]).map((rn) => rn.replace("customers/", ""));
+    return ids.map((id) => ({ id, name: `Google Ads Account ${id}` }));
+  }, []);
 }
 
 export async function listConversionActions(workspaceId: string): Promise<{ id: string; name: string; category: string }[]> {
-  const credentials = await getGoogleAdsCredentials(workspaceId);
-  if (!credentials) return MOCK_CONVERSION_ACTIONS;
-  const json = await googleAdsSearch(
-    credentials.customerId,
-    credentials.accessToken,
-    credentials.developerToken,
-    `SELECT conversion_action.id, conversion_action.name, conversion_action.category FROM conversion_action WHERE conversion_action.status = 'ENABLED'`
-  );
-  return ((json.results ?? []) as any[]).map((r) => ({
-    id: String(r.conversionAction.id),
-    name: r.conversionAction.name,
-    category: r.conversionAction.category,
-  }));
+  return withGoogleAdsCredentials(workspaceId, async (credentials) => {
+    const json = await googleAdsSearch(
+      credentials.customerId,
+      credentials.accessToken,
+      credentials.developerToken,
+      `SELECT conversion_action.id, conversion_action.name, conversion_action.category FROM conversion_action WHERE conversion_action.status = 'ENABLED'`
+    );
+    return ((json.results ?? []) as any[]).map((r) => ({
+      id: String(r.conversionAction.id),
+      name: r.conversionAction.name,
+      category: r.conversionAction.category,
+    }));
+  }, []);
 }
 
 export interface GoogleAdsCredentials {
@@ -208,7 +235,10 @@ export interface GoogleAdsCredentials {
  * The developer token prefers a per-workspace one from a manual connect, falling back to
  * the global GOOGLE_ADS_DEVELOPER_TOKEN env var used by the OAuth-connect path.
  */
-export async function getGoogleAdsCredentials(workspaceId: string): Promise<GoogleAdsCredentials | null> {
+export async function getGoogleAdsCredentials(
+  workspaceId: string,
+  opts: { forceRefresh?: boolean } = {},
+): Promise<GoogleAdsCredentials | null> {
   const raw = await getRawGoogleTokenData(workspaceId);
   if (!raw) return null;
 
@@ -219,8 +249,14 @@ export async function getGoogleAdsCredentials(workspaceId: string): Promise<Goog
     return { accessToken: raw.accessToken, customerId: raw.customerId, developerToken };
   }
 
+  // forceRefresh bypasses the expiry gate. A stored token can be dead while tokenExpiresAt still
+  // reads "in the future" — e.g. the CRM manual-connect path records an optimistic expiry but the
+  // underlying access token was already revoked/expired at the source. In that case the normal
+  // gate below never refreshes and every call 401s. The Google adapter passes forceRefresh after a
+  // 401 to recover by minting a genuinely fresh token from the refresh token. See adsMutate.
   const expiresAt = new Date(raw.tokenExpiresAt).getTime();
-  if (Number.isFinite(expiresAt) && expiresAt - Date.now() > REFRESH_SKEW_MS) {
+  const stillValid = Number.isFinite(expiresAt) && expiresAt - Date.now() > REFRESH_SKEW_MS;
+  if (!opts.forceRefresh && stillValid) {
     return { accessToken: raw.accessToken, customerId: raw.customerId, developerToken };
   }
 

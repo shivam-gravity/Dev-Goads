@@ -6,8 +6,6 @@
   "workspaces": [
     "apps/api",
     "apps/web",
-    "apps/auth-service",
-    "apps/campaign-service",
     "apps/scraper-service"
   ],
   "scripts": {
@@ -16,17 +14,14 @@
     "stop:all": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/stop-all.ps1",
     "dev:api": "npm run dev --workspace apps/api",
     "dev:web": "npm run dev --workspace apps/web",
-    "dev:auth-service": "npm run dev --workspace apps/auth-service",
-    "dev:campaign-service": "npm run dev --workspace apps/campaign-service",
     "dev:scraper-service": "npm run dev --workspace apps/scraper-service",
     "build": "npm run build --workspace apps/api && npm run build --workspace apps/web",
     "build:api": "npm run build --workspace apps/api",
     "build:web": "npm run build --workspace apps/web",
-    "build:auth-service": "npm run build --workspace apps/auth-service",
-    "build:campaign-service": "npm run build --workspace apps/campaign-service",
     "build:scraper-service": "npm run build --workspace apps/scraper-service"
   },
   "devDependencies": {
+    "concurrently": "^9.2.4",
     "prisma": "^6.19.3"
   }
 }

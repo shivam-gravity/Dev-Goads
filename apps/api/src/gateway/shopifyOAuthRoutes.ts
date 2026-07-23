@@ -2,6 +2,7 @@ import { Router } from "express";
 import { getShopifyInstallUrl, isValidCallbackHmac, handleShopifyOAuthCallback, hasLiveShopifyAppCredentials } from "../modules/integrations/shopifyOAuth.js";
 import { signOAuthState, verifyOAuthState } from "../modules/integrations/oauthState.js";
 import { logger } from "../modules/logger/logger.js";
+import { isCatalogSourceEnabled, CATALOG_COMING_SOON_MESSAGE } from "../config/platforms.js";
 
 /**
  * Unauthenticated by design, same reasoning as metaOAuthRoutes.ts/tiktokOAuthRoutes.ts —
@@ -18,6 +19,12 @@ export const shopifyOAuthRoutes = Router();
  * `shop` domain must already be known before a redirect URL can even be built. No
  * mock-connect fallback (see shopifyOAuth.ts's own doc comment for why). */
 shopifyOAuthRoutes.get("/install", (req, res) => {
+  // MVP guardrail: Shopify store connection is deferred ("coming soon"). Refuse to start the
+  // install flow so a store can't be linked even if this URL is hit directly (no UI leads here).
+  // See config/platforms.ts (ACTIVE_CATALOG_SOURCES) to re-enable.
+  if (!isCatalogSourceEnabled("shopify")) {
+    return res.status(501).json({ error: CATALOG_COMING_SOON_MESSAGE, code: "CATALOG_COMING_SOON" });
+  }
   const workspaceId = typeof req.query.workspaceId === "string" ? req.query.workspaceId : undefined;
   const shop = typeof req.query.shop === "string" ? req.query.shop : undefined;
   if (!workspaceId || !shop) return res.status(400).json({ error: "workspaceId and shop query params are required" });
@@ -29,6 +36,11 @@ shopifyOAuthRoutes.get("/install", (req, res) => {
 });
 
 shopifyOAuthRoutes.get("/callback", async (req, res) => {
+  // Defense-in-depth: even if a stale install redirect fires, don't complete a connection while
+  // Shopify is deferred. Bounces back to the connection page with the coming-soon error.
+  if (!isCatalogSourceEnabled("shopify")) {
+    return res.redirect(`${WEB_APP_URL}/profile/ad-platform-connection?error=shopify_coming_soon`);
+  }
   const shop = typeof req.query.shop === "string" ? req.query.shop : undefined;
   const code = typeof req.query.code === "string" ? req.query.code : undefined;
   const state = typeof req.query.state === "string" ? req.query.state : undefined;

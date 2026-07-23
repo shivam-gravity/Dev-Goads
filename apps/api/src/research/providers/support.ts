@@ -19,6 +19,14 @@ interface ProviderOutcome<T> {
   citations?: Citation[];
   evidence?: ResearchEvidenceItem[];
   error?: string;
+  /** Optional pre-computed confidence that OVERRIDES runProviderStep's citation-based
+   * computeConfidence. The default scorer keys off web-search citation count/relevance, which
+   * under-scores the fact-first providers (market/audience/competitor intelligence): those now
+   * reason from the business's OWN verified facts and deliberately skip web search, so they have
+   * few/no citations yet are strongly grounded. Those engines compute their own fact-aware
+   * confidence (with a high floor when factGrounded) and pass it through here so the aggregate
+   * reflects real grounding instead of docking correct data to ~0.3 for lacking citations. */
+  confidence?: number;
 }
 
 // Excluded from the word-level fallback in isRelevantCitation below — generic enough (legal
@@ -129,11 +137,20 @@ function computeConfidence(
   const citations = (outcome.citations?.length ? outcome.citations : outcome.evidence ?? []) as { url?: string; title?: string }[];
   const relevantCount = citations.filter((c) => isRelevantCitation(c, target)).length;
 
+  // A "success" whose ONLY citations are off-target (a search that returned unrelated pages —
+  // e.g. FundingProvider surfacing a random academic's "Publications" page for a business that
+  // has no funding coverage) is functionally ungrounded: it produced an LLM answer with no real
+  // source behind it. Treat it as heavily as the labeled-fallback case (−0.35) rather than the
+  // old soft −0.25, so it scores like a bare partial (~0.25) instead of a deceptive 0.4. This
+  // is the honest signal — those providers legitimately found nothing about THIS business.
   if (!isFallback && citations.length > 0 && relevantCount === 0) {
-    score -= 0.25;
+    score -= 0.35;
   }
 
-  score += Math.min(relevantCount * 0.06 + (citations.length - relevantCount) * 0.01, 0.3);
+  // Evidence bonus is earned ONLY by RELEVANT citations now. Irrelevant citations previously
+  // still paid +0.01 each, which let a pile of off-target junk nudge the score up — exactly the
+  // wrong incentive. Quality over quantity: relevant sources lift the score, noise earns zero.
+  score += Math.min(relevantCount * 0.08, 0.3);
 
   if (outcome.attempt > 1) score -= 0.1;
 
@@ -168,7 +185,7 @@ export async function runProviderStep<T>(
         durationMs: Date.now() - start,
         attempt,
         error: outcome.error,
-        confidence: computeConfidence({ status: outcome.status, data: outcome.data, citations: outcome.citations, evidence: outcome.evidence, attempt }, target),
+        confidence: outcome.confidence ?? computeConfidence({ status: outcome.status, data: outcome.data, citations: outcome.citations, evidence: outcome.evidence, attempt }, target),
       };
     } catch (err) {
       return {
@@ -291,6 +308,130 @@ function stripUnverifiedUrls<T>(result: T, citations: Citation[], policy: "drop-
   return output as T;
 }
 
+export interface VerifiedFactInput {
+  field: string;
+  value: string;
+  sourceUrl?: string;
+  confidence: number;
+}
+
+// Fact-grounded confidence: the shared floor a fact-first result earns, plus a bonus that
+// scales with the QUALITY of the fact base backing it. This is the one place the fact-first
+// providers (company + the market/audience/competitor engines) agree on how much verified
+// facts are worth, so raising grounding quality moves the score the same way everywhere.
+export const FACT_GROUNDED_FLOOR = 0.8;
+export const FACT_GROUNDED_CAP = 0.92;
+
+/**
+ * Scores how strongly a fact-first result is grounded, in [FACT_GROUNDED_FLOOR, FACT_GROUNDED_CAP].
+ *
+ * Before this existed, fact-grounded providers were PINNED at the flat 0.8 floor: their score
+ * added `citationCount * 0.03`, but the fact-first path deliberately skips web search, so
+ * citationCount was always 0 — the fact base itself (however rich) never moved the number. That
+ * was the real ceiling keeping overall confidence at ~0.78. This replaces that inert term with a
+ * genuine measure of the grounding actually present, so a business whose own site yields many
+ * high-confidence, independently-sourced facts scores higher than one that yielded two thin ones
+ * — which is honest (more verified first-party evidence = more confidence), not inflation.
+ *
+ * Three quality signals, each a real proxy for grounding strength:
+ *   - VOLUME: more distinct verified facts = more of the business actually pinned down. Ramps to
+ *     full credit around 12 facts (a well-covered site), diminishing so a fact dump can't run away.
+ *   - CONFIDENCE: the mean per-fact extraction confidence — facts the extractor was sure of.
+ *   - SOURCE SPREAD: facts drawn from several distinct pages corroborate each other better than
+ *     many facts off one page, so distinct sourceUrls are rewarded.
+ * A result with no facts returns the bare floor (it's still fact-"grounded" only nominally).
+ */
+export function factGroundingScore(facts: VerifiedFactInput[]): number {
+  if (!facts || facts.length === 0) return FACT_GROUNDED_FLOOR;
+
+  // VOLUME — diminishing ramp to ~1.0 at 12 facts (sqrt keeps early facts worth more).
+  const volume = Math.min(1, Math.sqrt(facts.length / 12));
+
+  // CONFIDENCE — mean of the (clamped) per-fact extraction confidences.
+  const meanConfidence = facts.reduce((s, f) => s + Math.max(0, Math.min(1, f.confidence)), 0) / facts.length;
+
+  // SOURCE SPREAD — distinct source pages / a target of 4; more corroborating pages = stronger.
+  const distinctSources = new Set(facts.map((f) => f.sourceUrl).filter(Boolean)).size;
+  const spread = Math.min(1, distinctSources / 4);
+
+  // Weighted blend of the three signals → the headroom above the floor, up to the cap.
+  const quality = 0.5 * volume + 0.3 * meanConfidence + 0.2 * spread;
+  const score = FACT_GROUNDED_FLOOR + (FACT_GROUNDED_CAP - FACT_GROUNDED_FLOOR) * quality;
+  return Math.round(Math.min(FACT_GROUNDED_CAP, score) * 100) / 100;
+}
+
+/**
+ * Renders the up-front-extracted fact table into a compact, source-attributed block for a
+ * reasoning prompt. Highest-confidence first, capped so the prompt stays bounded.
+ */
+function factsBlock(facts: VerifiedFactInput[], max = 40): string {
+  const top = [...facts].sort((a, b) => b.confidence - a.confidence).slice(0, max);
+  return top.map((f) => `- ${f.field}: ${f.value}${f.sourceUrl ? ` [source: ${f.sourceUrl}]` : ""}`).join("\n");
+}
+
+/**
+ * Fact-first structuring: shape a provider's schema from the ALREADY-EXTRACTED verified facts
+ * (+ the site excerpt) in ONE structured LLM call, with NO web search. This is the core of the
+ * fact-first pipeline — the ~17 business-identity providers used to each run their own
+ * runWebSearch + runStructured (2 calls apiece, hammering the free tier); now they share the
+ * single up-front fact extraction and each spend just this one reasoning call. Grounding is
+ * higher, not lower: every input fact is pinned to a real crawled URL, so the output describes
+ * the actual business instead of confabulating from noisy search snippets.
+ *
+ * Returns null-data → the caller falls back to its webSearchThenStructure path (used when no
+ * facts were extracted, e.g. the up-front crawl failed). The facts themselves become the
+ * result's evidence/citations, so confidence scoring credits the real grounding.
+ */
+export async function structureFromFacts<T extends { dataSource?: string }>(opts: {
+  facts: VerifiedFactInput[];
+  websiteExcerpt?: string;
+  structurePrompt: (factsText: string) => string;
+  tool: JsonSchemaTool;
+  maxTokens: number;
+  /** The target business URL — used to guarantee at least one RELEVANT (same-host) citation on
+   * a fact-grounded result. Without it, when the fact extractor didn't populate per-fact
+   * sourceUrls, the result had zero citations and the scorer wrongly treated genuinely
+   * fact-grounded output as ungrounded (docking it to ~0.25 despite correct content). */
+  targetUrl?: string;
+}): Promise<{ status: ResearchProviderStatus; data: T; citations: Citation[]; confidence: number } | null> {
+  if (!llm || opts.facts.length === 0) return null;
+
+  const taskName = currentProviderName.getStore() ?? "unknown-provider";
+  const assignment = resolveTaskModel(taskName);
+
+  const grounding = opts.websiteExcerpt
+    ? `AUTHORITATIVE SOURCE — the actual content of the business's own website. This is the primary ground truth:\n"""\n${opts.websiteExcerpt}\n"""\n\n`
+    : "";
+  const facts = factsBlock(opts.facts);
+
+  const { data: result, source } = await llmRouter.runStructured<T>(assignment, {
+    maxTokens: opts.maxTokens,
+    tool: opts.tool,
+    messages: [{ role: "user", content: `${grounding}Verified facts extracted from the business's own website (each pinned to its source page):\n${facts}\n\n${opts.structurePrompt(facts)}` }],
+  });
+  if (!result) return null;
+
+  // The facts ARE the evidence — surface their source pages as citations so confidence scoring
+  // credits this as genuinely grounded (not a fabricated-URL risk: these came from the crawl).
+  const citations: Citation[] = opts.facts
+    .filter((f) => f.sourceUrl)
+    .slice(0, 20)
+    .map((f) => ({ url: f.sourceUrl as string, title: f.field }));
+  // Guarantee at least one same-host (relevant) citation: a result built from N verified facts
+  // pulled from the business's own site IS grounded, even if the extractor left per-fact URLs
+  // blank. Without this the scorer saw zero citations and docked correct, fact-grounded output
+  // to ~0.25. The target's own URL is unimpeachably relevant (isRelevantCitation: same host).
+  if (citations.length === 0 && opts.targetUrl) {
+    citations.push({ url: opts.targetUrl, title: `Verified from ${opts.targetUrl}` });
+  }
+
+  const dataSource = `Grounded in ${opts.facts.length} verified facts from the site${source === "bedrock" ? "" : ` (structured via ${source}:${assignment.model})`}`;
+  // Score by the QUALITY of the fact base, not by citation count — a fact-first result deliberately
+  // has no web citations, so the default citation scorer stalled it at ~0.6-0.76 (the CompanyProvider
+  // bug). factGroundingScore gives the shared 0.8 floor + a quality bonus, same as the sibling engines.
+  return { status: "success", data: { ...result, dataSource }, citations, confidence: factGroundingScore(opts.facts) };
+}
+
 /**
  * The "live web research, then shape it into a structured schema" composition every
  * OpenAI-backed provider below needs — built on top of the existing runWebSearch/
@@ -310,15 +451,20 @@ export async function webSearchThenStructure<T extends { dataSource?: string }>(
    * (e.g. CompetitorProvider — a competitor's name/notes are worth keeping even without a
    * verified URL). */
   unverifiedUrlPolicy?: "drop-item" | "null-field";
+  /** The real crawled content of the business's OWN site (ResearchProviderInput.websiteExcerpt).
+   * When present it's injected as the AUTHORITATIVE, primary grounding block ahead of the web-
+   * search narrative — so the model describes the actual business the user entered rather than
+   * confabulating from an ambiguous name + noisy search snippets. Web search then only
+   * SUPPLEMENTS (competitors, funding, third-party facts). Omit for providers where the site's
+   * own text isn't the relevant ground truth. */
+  websiteExcerpt?: string;
 }): Promise<{ status: ResearchProviderStatus; data: T; citations: Citation[] }> {
-  // runWebSearch itself has no non-OpenAI equivalent (it's OpenAI's hosted server-side
-  // search, not a model capability) and stays OpenAI-only regardless of task assignment —
-  // only the structuring step below is routed per-task. Without OPENAI_API_KEY (or on any
-  // transient search failure) this degrades to an empty narrative/no citations rather than
-  // skipping structuring altogether — the routed structuring call still runs on Ollama/
-  // Gemini and reasons from general category knowledge, same as the "no live web research
-  // available" prompt fallback below already anticipated, just previously unreachable
-  // whenever OpenAI wasn't configured.
+  // runWebSearch is backed by SearXNG + crawl4ai (see infra/llmClient.ts), gated by the same
+  // `llm` (Bedrock-configured) check as the structuring step. On no key (or any transient
+  // search failure) this degrades to an empty narrative/no citations rather than skipping
+  // structuring altogether — the structuring call still runs on Bedrock and reasons from
+  // general category knowledge, same as the "no live web research available" prompt fallback
+  // below already anticipated.
   const research = llm
     ? await runWebSearch(opts.searchPrompt).catch(() => ({ narrative: "", citations: [] as Citation[], searchesUsed: 0 }))
     : { narrative: "", citations: [] as Citation[], searchesUsed: 0 };
@@ -334,10 +480,19 @@ export async function webSearchThenStructure<T extends { dataSource?: string }>(
     ? `\n\nVerified sources — for any url/sourceUrl field, ONLY use a URL from this exact list; if none of these genuinely matches a specific item, leave that item's url/sourceUrl out entirely rather than inventing one:\n${research.citations.map((c) => `- ${c.title}: ${c.url}`).join("\n")}`
     : `\n\n(No verified sources were found for this search — do not include any url/sourceUrl field in your response, since there is nothing real to point to.)`;
 
+  // The business's OWN site content is the source of truth about what the business is. Put it
+  // FIRST and mark it authoritative, so the model anchors on the real site rather than the
+  // (often ambiguous, noisy) web-search narrative — which is what let it confabulate a
+  // completely different company from just a business name. When absent (up-front crawl failed),
+  // this is empty and behavior is exactly as before.
+  const groundingBlock = opts.websiteExcerpt
+    ? `AUTHORITATIVE SOURCE — the actual content of the business's own website. Treat this as the primary ground truth about what the business does, its products, and positioning. If the web-search findings below conflict with this, THIS wins:\n"""\n${opts.websiteExcerpt}\n"""\n\n`
+    : "";
+
   const { data: result, source } = await llmRouter.runStructured<T>(assignment, {
     maxTokens: opts.maxTokens,
     tool: opts.tool,
-    messages: [{ role: "user", content: opts.structurePrompt(research.narrative || "(no live web research available — reason from general category knowledge)") + citationsBlock }],
+    messages: [{ role: "user", content: groundingBlock + opts.structurePrompt(research.narrative || "(no live web research available — reason from general category knowledge)") + citationsBlock }],
   });
   if (!result) {
     return { status: "partial", data: { ...opts.fallback(), dataSource: NO_SEARCH_DATA_SOURCE }, citations: [] };
@@ -347,8 +502,8 @@ export async function webSearchThenStructure<T extends { dataSource?: string }>(
 
   const citationLabel = research.citations.length > 0 ? research.citations.map((c) => c.title).join(" + ") : NO_CITATIONS_DATA_SOURCE;
   // Only annotate the label when a non-default provider actually served the structuring
-  // step — keeps the default (llm) path's dataSource string byte-for-byte identical to
-  // today's, so nothing that asserts on it needs to change unless a task is reassigned.
-  const dataSource = source === "groq" ? citationLabel : `${citationLabel} (structured via ${source}:${assignment.model})`;
+  // step — keeps the default (bedrock) path's dataSource string identical to the bare
+  // citation label, so nothing that asserts on it needs to change unless a task is reassigned.
+  const dataSource = source === "bedrock" ? citationLabel : `${citationLabel} (structured via ${source}:${assignment.model})`;
   return { status: "success", data: { ...verifiedResult, dataSource }, citations: research.citations };
 }

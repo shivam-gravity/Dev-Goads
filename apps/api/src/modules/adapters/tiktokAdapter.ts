@@ -74,7 +74,7 @@ export const tiktokAdapter: AdAdapter = {
     }
   },
 
-  async pauseVariant(externalId: string): Promise<void> {
+  async pauseVariant(externalId: string, _credentials?: unknown): Promise<void> {
     logger.info(`Initializing pauseVariant on TikTok for resource: ${externalId}`);
     if (!hasLiveCredentials) {
       logger.info("Offline mode. Mock pausing TikTok ad variant.");
@@ -98,7 +98,7 @@ export const tiktokAdapter: AdAdapter = {
     }
   },
 
-  async activateVariant(externalId: string): Promise<void> {
+  async activateVariant(externalId: string, _credentials?: unknown): Promise<void> {
     logger.info(`Initializing activateVariant on TikTok for resource: ${externalId}`);
     if (!hasLiveCredentials) {
       logger.info("Offline mode. Mock activating TikTok ad variant.");
@@ -122,7 +122,7 @@ export const tiktokAdapter: AdAdapter = {
     }
   },
 
-  async setBudget(input: SetBudgetInput): Promise<void> {
+  async setBudget(input: SetBudgetInput, _credentials?: unknown): Promise<void> {
     logger.info(`Updating daily budget for TikTok Ads resource: ${input.externalId} to ${input.dailyBudgetCents} cents`);
     if (!hasLiveCredentials) {
       logger.info("Offline mode. Mock budget change complete.");
@@ -146,17 +146,14 @@ export const tiktokAdapter: AdAdapter = {
     }
   },
 
-  async fetchInsights(externalId: string) {
+  async fetchInsights(externalId: string, _date?: string, _credentials?: unknown) {
     logger.info(`Fetching performance insights for TikTok Ads resource: ${externalId}`);
 
     if (!hasLiveCredentials) {
-      const impressions = Math.floor(1800 + Math.random() * 9500);
-      const reach = Math.floor(impressions * (0.55 + Math.random() * 0.3));
-      const clicks = Math.floor(impressions * (0.02 + Math.random() * 0.04));
-      const conversions = Math.floor(clicks * (0.02 + Math.random() * 0.06));
-      const spendCents = Math.floor(clicks * (25 + Math.random() * 65));
-      logger.info(`Offline mode. Generated mock insights metrics for ${externalId}`);
-      return { impressions, reach, clicks, conversions, spendCents };
+      // No connected TikTok account → NO fabricated metrics. Return real zeros for an honest
+      // "no data yet" state instead of Math.random()-invented performance shown as real.
+      logger.info(`No TikTok credentials for ${externalId} — returning zero metrics (no fabricated data).`);
+      return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0 };
     }
 
     try {
@@ -170,7 +167,8 @@ export const tiktokAdapter: AdAdapter = {
         body: JSON.stringify({
           advertiser_id: TIKTOK_ADVERTISER_ID,
           dimensions: ["ad_id"],
-          metrics: ["impressions", "reach", "clicks", "conversions", "spend"],
+          // total_complete_payment = real purchase revenue value (account currency) for ROAS.
+          metrics: ["impressions", "reach", "clicks", "conversions", "spend", "total_complete_payment"],
           filters: [{ field_name: "ad_id", filter_type: "IN", filter_value: JSON.stringify([externalId]) }],
         }),
       });
@@ -180,7 +178,7 @@ export const tiktokAdapter: AdAdapter = {
 
       if (!row) {
         logger.warn(`No metrics returned for TikTok Ads resource: ${externalId}. Returning zero metrics.`);
-        return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0 };
+        return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0 };
       }
 
       const stats = {
@@ -189,6 +187,7 @@ export const tiktokAdapter: AdAdapter = {
         clicks: Number(row.clicks ?? 0),
         conversions: Number(row.conversions ?? 0),
         spendCents: Math.round(Number(row.spend ?? 0) * 100),
+        revenueCents: Math.round(Number(row.total_complete_payment ?? 0) * 100),
       };
       logger.info(`TikTok Ads insights fetched: Clicks: ${stats.clicks}, Spend: ${stats.spendCents} cents`);
       return stats;

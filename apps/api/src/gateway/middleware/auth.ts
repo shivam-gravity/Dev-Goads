@@ -4,14 +4,14 @@ import { JWT_SECRET } from "../../infra/env.js";
 
 export interface AuthedRequest extends Request {
   userId?: string;
+  workspaceId?: string;
+  businessId?: string;
 }
 
 // Seeded in apps/api/prisma/seed.ts as a real WorkspaceMember (owner) of demo-workspace
 // and demo-business's workspace — using the real seeded id (not a bare "demo" sentinel)
 // means the dev bypass passes the SAME workspace-membership checks as a real user,
-// instead of needing a special case carved out of every ownership check. Mirrors
-// apps/auth-service/src/requireUser.ts's DEMO_USER_ID exactly, since both middlewares
-// stand in for the same missing login flow.
+// instead of needing a special case carved out of every ownership check.
 const DEMO_USER_ID = "demo-user";
 
 /**
@@ -30,8 +30,10 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
 
   const token = header.replace(/^Bearer\s+/i, "");
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { sub: string };
+    const decoded = jwt.verify(token, JWT_SECRET) as { sub: string; workspaceId?: string; businessId?: string };
     req.userId = decoded.sub;
+    if (decoded.workspaceId) req.workspaceId = decoded.workspaceId;
+    if (decoded.businessId) req.businessId = decoded.businessId;
     next();
   } catch {
     res.status(401).json({ error: "Invalid or expired token" });

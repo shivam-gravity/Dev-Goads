@@ -24,30 +24,12 @@ export interface Insight {
   createdAt: string;
 }
 
-const DEMO_INSIGHTS: Omit<Insight, "id" | "workspaceId" | "dismissed" | "createdAt" | "source">[] = [
-  { type: "anomaly", category: "creative", title: "CTR dropped 23% in last 24h", description: "Your Meta campaign 'Brand Awareness Q3' experienced a significant click-through rate decline. This often signals creative fatigue — your audience has seen the same ad too many times.", metric: "CTR", change: -23, severity: "high", actionLabel: "Refresh Creatives", actionUrl: "/creatives" },
-  { type: "opportunity", category: "audience", title: "High-intent audience underserved", description: "AI detected a 'Tech professionals 28-35' segment converting at 3.2× your baseline but receiving only 8% of your budget allocation. Shifting budget could yield significant ROAS improvement.", metric: "ROAS", change: 220, severity: "high", actionLabel: "Adjust Audiences", actionUrl: "/audiences" },
-  { type: "recommendation", category: "budget", title: "Increase Google budget by 15%", description: "Google Ads is delivering $4.2 ROAS vs Meta's $2.1. Your daily cap is limiting impressions during peak hours (7-9pm). A 15% budget increase could unlock an estimated 34% more conversions.", metric: "Budget", change: 15, severity: "medium", actionLabel: "Adjust Budget", actionUrl: "/campaigns" },
-  { type: "opportunity", category: "placement", title: "Audience Network placement underperforming", description: "Ads shown on Meta's Audience Network (off-platform partner sites) have 3× the CPA of your Feed and Stories placements combined. Excluding this placement would reallocate spend to your stronger channels.", metric: "CPA", change: -60, severity: "medium", actionLabel: "Review Placements", actionUrl: "/campaigns" },
-  { type: "recommendation", category: "budget", title: "3 variants ready to pause", description: "Based on 500+ impressions each, 3 ad variants have CTR below 0.5% and CPA 3× your target. Pausing them would free up budget for your top 2 performers.", metric: "CPA", change: -35, severity: "medium", actionLabel: "Review Variants", actionUrl: "/campaigns" },
-  { type: "opportunity", category: "audience", title: "Competitor analysis: gap in search", description: "AI detected low competition for 5 high-intent keywords in your category. These keywords have avg CPC 40% below your current spend with similar conversion intent.", metric: "CPC", change: -40, severity: "low", actionLabel: "View Keywords", actionUrl: "/campaigns" },
-];
-
 async function save(i: Insight): Promise<void> {
   await prisma.insight.upsert({
     where: { id: i.id },
     create: { id: i.id, workspaceId: i.workspaceId, data: i as any, createdAt: new Date(i.createdAt) },
     update: { data: i as any },
   });
-}
-
-export async function seedDemoInsights(workspaceId: string): Promise<void> {
-  const existing = await listInsights(workspaceId);
-  if (existing.length > 0) return;
-  for (const d of DEMO_INSIGHTS) {
-    const i: Insight = { id: randomUUID(), workspaceId, source: "ai_generated", dismissed: false, createdAt: new Date().toISOString(), ...d };
-    await save(i);
-  }
 }
 
 export async function listInsights(workspaceId: string): Promise<Insight[]> {
@@ -145,20 +127,29 @@ const INSIGHT_TOOL = {
 export async function generateInsights(workspaceId: string, businessId: string): Promise<Insight[]> {
   await clearGeneratedInsights(workspaceId);
 
-  if (!llm) {
-    await seedDemoInsights(workspaceId);
-    return listInsights(workspaceId);
-  }
+  // No live model → NO fabricated insights. Return whatever real (optimizer-written) insights
+  // exist; the AIInsights feed shows its "no insights yet — connect a model / run a campaign"
+  // empty state rather than hardcoded demo insights ("CTR dropped 23%", fake "Brand Awareness Q3").
+  if (!llm) return listInsights(workspaceId);
 
   const campaigns = await listCampaignsForBusiness(businessId);
   const perfData = (await Promise.all(campaigns.map((c) => normalizePerformance(c.id)))).flat();
 
+  const campaignSummary = campaigns.map((c) => ({
+    name: c.name, networks: c.networks, dailyBudgetCents: c.dailyBudgetCents, variantCount: c.variants.length,
+    audiences: [...new Set(c.variants.map((v) => v.audienceName).filter(Boolean))],
+    platforms: [...new Set(c.variants.map((v) => v.network))],
+  }));
+
+  const dataToAnalyze = perfData.length > 0 ? perfData : campaignSummary;
+
   const result = await runStructured<{ insights: Omit<Insight, "id" | "workspaceId" | "dismissed" | "createdAt" | "source">[] }>({
     maxTokens: 1024,
     tool: INSIGHT_TOOL,
-    messages: [{ role: "user", content: `Analyze this campaign performance data and generate actionable insights:\n${JSON.stringify(perfData, null, 2)}\n\nCover a mix of categories where the data supports it: budget (spend/allocation), audience (targeting/segments), creative (ad copy/asset fatigue), and placement (which networks/surfaces are under- or over-performing) — don't default every insight to budget.` }],
+    messages: [{ role: "user", content: `Analyze this campaign data and generate actionable insights and recommendations:\n${JSON.stringify(dataToAnalyze, null, 2)}\n\nCover a mix of categories where the data supports it: budget (spend/allocation), audience (targeting/segments), creative (ad copy/asset fatigue), and placement (which networks/surfaces are under- or over-performing) — don't default every insight to budget. If no performance metrics exist yet, base insights on campaign structure, budget allocation, audience diversity, and network coverage.` }],
   });
-  if (!result) { await seedDemoInsights(workspaceId); return listInsights(workspaceId); }
+  // Model produced nothing usable → return real insights only, no fabricated fallback.
+  if (!result) return listInsights(workspaceId);
 
   for (const d of result.insights) {
     const i: Insight = { id: randomUUID(), workspaceId, source: "ai_generated", dismissed: false, createdAt: new Date().toISOString(), ...d };

@@ -30,7 +30,9 @@ const worker = new Worker(
       },
     });
   },
-  { connection: redisConnection, concurrency: 3 }
+  // Research runs several minutes; BullMQ's 30s default lock would dead-letter a still-running job
+  // ("stalled more than allowable limit"). Lock for 15 min, check stalls every 60s, tolerate 2.
+  { connection: redisConnection, concurrency: 3, lockDuration: 15 * 60 * 1000, stalledInterval: 60 * 1000, maxStalledCount: 2 }
 );
 
 worker.on("completed", (job: Job) => logger.info(`Research orchestrator job completed: ${job.data?.jobId}`));

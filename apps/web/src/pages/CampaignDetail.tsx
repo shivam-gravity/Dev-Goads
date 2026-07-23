@@ -4,11 +4,13 @@ import { api, Campaign, LiveInsights, NormalizedPerformance, OptimizationDecisio
 import StatusBadge, { NetworkBadge } from "../components/StatusBadge.js";
 import SparkChart from "../components/SparkChart.js";
 import Reveal from "../components/Reveal.js";
+import { useRealtimeContext } from "../providers/RealtimeProvider.js";
 
 const LIVE_INSIGHTS_POLL_MS = 30000;
 
 export default function CampaignDetail() {
   const { campaignId } = useParams<{ campaignId: string }>();
+  const { subscribe } = useRealtimeContext();
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [performance, setPerformance] = useState<NormalizedPerformance[]>([]);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
@@ -37,8 +39,19 @@ export default function CampaignDetail() {
     refresh().catch((err) => setError(err.message));
   }, [campaignId]);
 
-  // Live Insights Dashboard: poll while the campaign is actually spending, so the KPI row
-  // reflects the scheduled metricsIngestionWorker's fresh pulls without a manual refresh.
+  // Real-time insights: WebSocket push from metricsIngestionWorker triggers an instant
+  // re-fetch instead of waiting for the next 30s poll tick.
+  useEffect(() => {
+    if (!campaignId || campaign?.status !== "active") return;
+    const unsub = subscribe("insights.update", (_ch, payload: any) => {
+      if (payload?.campaignId === campaignId) {
+        api.getLiveInsights(campaignId).then(setLiveInsights).catch(() => {});
+      }
+    });
+    return unsub;
+  }, [campaignId, campaign?.status, subscribe]);
+
+  // Live Insights Dashboard: poll as fallback (reduced frequency since WS handles most updates).
   useEffect(() => {
     if (!campaignId || campaign?.status !== "active") {
       setLiveInsights(null);

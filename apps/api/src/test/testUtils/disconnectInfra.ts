@@ -7,6 +7,7 @@ import {
   crmWebhookQueue,
   campaignGenerationQueue,
   competitorAdRefreshQueue,
+  vectorAdGenerationQueue,
 } from "../../infra/queue.js";
 import { redisClient } from "../../infra/redisClient.js";
 
@@ -36,6 +37,7 @@ export async function disconnectTestInfra(): Promise<void> {
     crmWebhookQueue.disconnect(),
     campaignGenerationQueue.disconnect(),
     competitorAdRefreshQueue.disconnect(),
+    vectorAdGenerationQueue.disconnect(),
     redisClient.disconnect(),
   ]);
 }

@@ -9,9 +9,13 @@ apps/api/data/*.sqlite-journal
 apps/api/data/*.sqlite-shm
 apps/api/data/*.sqlite-wal
 apps/api/data/objects/
+apps/api/data/objects-test-*/
 apps/api/data/llm-usage.json
 apps/web/tsconfig.tsbuildinfo
 dump.rdb
+# Playwright MCP console dumps + local scratch enqueue scripts (runtime artifacts, not source)
+.playwright-mcp/
+apps/api/_enq.mts
 __pycache__/
 *.pyc
 .DS_Store

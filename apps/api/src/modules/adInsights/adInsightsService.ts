@@ -1,5 +1,5 @@
 import { listCampaignsForBusiness } from "../orchestrator/campaignOrchestrator.js";
-import { normalizePerformance, ESTIMATED_REVENUE_CENTS_PER_CONVERSION } from "../pipeline/performancePipeline.js";
+import { normalizePerformance } from "../pipeline/performancePipeline.js";
 import type {
   AdInsightNetwork,
   AdInsightsResponse,
@@ -31,12 +31,13 @@ async function collectJoinedRows(businessId: string, network: AdInsightNetwork):
 }
 
 function computeTotals(rows: JoinedRow[]): AdInsightsResponse["totals"] {
-  let spendCents = 0, impressions = 0, clicks = 0, conversions = 0;
+  let spendCents = 0, impressions = 0, clicks = 0, conversions = 0, revenueCents = 0;
   for (const { perf } of rows) {
     spendCents += perf.spendCents;
     impressions += perf.impressions;
     clicks += perf.clicks;
     conversions += perf.conversions;
+    revenueCents += perf.revenueCents;
   }
   return {
     spendCents,
@@ -44,7 +45,8 @@ function computeTotals(rows: JoinedRow[]): AdInsightsResponse["totals"] {
     clicks,
     conversions,
     cpaCents: conversions > 0 ? Math.round(spendCents / conversions) : null,
-    roas: spendCents > 0 && conversions > 0 ? (conversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / spendCents : null,
+    // True ROAS: real reported revenue / spend.
+    roas: spendCents > 0 && revenueCents > 0 ? revenueCents / spendCents : null,
   };
 }
 
@@ -141,67 +143,30 @@ function buildRealInsights(rows: JoinedRow[], network: AdInsightNetwork): AdInsi
   };
 }
 
-const PLACEHOLDER_IMAGE = (seed: string) => `https://placehold.co/600x400/7033f5/ffffff?text=${encodeURIComponent(seed)}`;
-
-function buildDemoInsights(network: AdInsightNetwork): AdInsightsResponse {
-  const demoSpendCents = 158038;
-  const demoConversions = 27;
+/**
+ * Honest EMPTY insights — returned when there is no real ad-performance data for this business/
+ * network yet (no connected Meta/Google account has reported metrics). Replaces the former
+ * buildDemoInsights (hardcoded "High-Intent Shoppers"/example.com fabrications) and the
+ * Math.random()-synthesized buildInsightsFromCampaignData: the Ads Manager must never show
+ * invented spend/conversion/ROAS numbers. `isDemo: true` signals the UI to render a "no data yet —
+ * connect an account" empty state rather than these zeros as if they were real performance.
+ */
+function buildEmptyInsights(network: AdInsightNetwork): AdInsightsResponse {
   return {
     network,
     isDemo: true,
-    totals: {
-      spendCents: demoSpendCents,
-      impressions: 420_000,
-      clicks: 9800,
-      conversions: demoConversions,
-      cpaCents: Math.round(demoSpendCents / demoConversions),
-      roas: (demoConversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / demoSpendCents,
-    },
-    audience: {
-      distribution: [
-        { label: "High-Intent Shoppers", sharePct: 42 },
-        { label: "Retargeting Visitors", sharePct: 27 },
-        { label: "Lookalike Audience", sharePct: 18 },
-        { label: "Others", sharePct: 13 },
-      ],
-      top: [
-        { name: "High-Intent Shoppers", tags: ["In-market", "Comparison shoppers", "Deal seekers"], cpaCents: 280, spendCents: 45500, campaignCount: 11 },
-        { name: "Retargeting Visitors", tags: ["Cart abandoners", "Site visitors 30d", "Email subscribers"], cpaCents: 150, spendCents: 28200, campaignCount: 8 },
-        { name: "Lookalike Audience", tags: ["1% lookalike", "Customer match", "Similar interests"], cpaCents: 220, spendCents: 10100, campaignCount: 9 },
-      ],
-    },
-    pages: {
-      distribution: [
-        { label: "example.com/", sharePct: 62 },
-        { label: "example.com/pricing", sharePct: 38 },
-      ],
-      top: [
-        { url: "example.com/", cvr: 1.72, spendCents: 67500, campaignCount: 2 },
-        { url: "example.com/pricing", cvr: 2.41, spendCents: 32000, campaignCount: 3 },
-      ],
-    },
-    creative: {
-      scatter: [
-        { id: "c1", ctr: 1.0, cpaCents: 280 },
-        { id: "c2", ctr: 2.4, cpaCents: 780 },
-        { id: "c3", ctr: 3.1, cpaCents: 260 },
-        { id: "c4", ctr: 3.3, cpaCents: 250 },
-        { id: "c5", ctr: 6.0, cpaCents: 560 },
-        { id: "c6", ctr: 6.95, cpaCents: 370 },
-        { id: "c7", ctr: 7.0, cpaCents: 300 },
-        { id: "c8", ctr: 7.1, cpaCents: 210 },
-      ],
-      topAds: [
-        { id: "c2", headline: "Discover What Makes Us Different", body: "Enjoy a personalized experience crafted around what matters most to you.", imageUrl: PLACEHOLDER_IMAGE("Ad Creative 1"), ctr: 2.38, cpaCents: 780, campaignCount: 12 },
-        { id: "c6", headline: "Limited Time Offer Inside", body: "Craving something new? Discover our top-rated picks near you.", imageUrl: PLACEHOLDER_IMAGE("Ad Creative 2"), ctr: 6.95, cpaCents: 370, campaignCount: 10 },
-        { id: "c5", headline: "Join Thousands of Happy Customers", body: "See why our community keeps coming back for more.", imageUrl: PLACEHOLDER_IMAGE("Ad Creative 3"), ctr: 6.12, cpaCents: 560, campaignCount: 7 },
-      ],
-    },
+    totals: { spendCents: 0, impressions: 0, clicks: 0, conversions: 0, cpaCents: null, roas: null },
+    audience: { distribution: [], top: [] },
+    pages: { distribution: [], top: [] },
+    creative: { scatter: [], topAds: [] },
   };
 }
 
 export async function getAdInsights(businessId: string, network: AdInsightNetwork): Promise<AdInsightsResponse> {
   const rows = await collectJoinedRows(businessId, network);
-  if (rows.length === 0) return buildDemoInsights(network);
-  return buildRealInsights(rows, network);
+  // ONLY real, reported ad-performance rows produce insights. When there are none, return an honest
+  // empty state — never fabricated demo numbers or budget-synthesized estimates (both removed): the
+  // Ads Manager must show real Meta/Google performance or nothing, not invented data.
+  if (rows.length > 0) return buildRealInsights(rows, network);
+  return buildEmptyInsights(network);
 }

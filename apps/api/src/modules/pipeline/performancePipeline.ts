@@ -2,16 +2,8 @@ import { randomUUID } from "node:crypto";
 import { analyticsStore } from "../../infra/analyticsStore.js";
 import { adapters } from "../orchestrator/campaignOrchestrator.js";
 import { getCampaign } from "../orchestrator/campaignOrchestrator.js";
+import { getMetaCredentials } from "../integrations/integrationService.js";
 import type { NormalizedPerformance, PerformanceMetric } from "../../types/index.js";
-
-/**
- * No real revenue-per-conversion tracking exists anywhere in this app (that requires a
- * pixel-fired purchase-value event, which the current mock/demo integrations don't carry) —
- * ROAS everywhere in the app is an estimate off this single assumed average order value.
- * Centralized here so analyticsService.ts's business-level ROAS and this module's
- * per-campaign ROAS never drift into two different hardcoded numbers.
- */
-export const ESTIMATED_REVENUE_CENTS_PER_CONVERSION = 5000;
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
@@ -24,11 +16,15 @@ export async function ingestCampaignMetrics(campaignId: string): Promise<Perform
 
   const date = todayISO();
   const results: PerformanceMetric[] = [];
+  const metaCredentials = (await getMetaCredentials(campaign.workspaceId ?? "demo")) ?? undefined;
 
   for (const variant of campaign.variants) {
     if (!variant.externalId) continue;
     const adapter = adapters[variant.network];
-    const raw = await adapter.fetchInsights(variant.externalId, date);
+    const credentials = variant.network === "meta" ? metaCredentials : undefined;
+    // `funnel` is a real-time UI-only breakdown (see AdInsightStats) — the persisted daily
+    // PerformanceMetric doesn't carry it, so drop it before spreading into the stored record.
+    const { funnel: _funnel, ...raw } = await adapter.fetchInsights(variant.externalId, date, credentials);
 
     const metric: PerformanceMetric = {
       id: randomUUID(),
@@ -67,6 +63,7 @@ export async function normalizePerformance(campaignId: string): Promise<Normaliz
     const clicks = metrics.reduce((s, m) => s + m.clicks, 0);
     const conversions = metrics.reduce((s, m) => s + m.conversions, 0);
     const spendCents = metrics.reduce((s, m) => s + m.spendCents, 0);
+    const revenueCents = metrics.reduce((s, m) => s + (m.revenueCents ?? 0), 0);
 
     normalized.push({
       campaignId,
@@ -77,11 +74,13 @@ export async function normalizePerformance(campaignId: string): Promise<Normaliz
       clicks,
       conversions,
       spendCents,
+      revenueCents,
       ctr: impressions > 0 ? clicks / impressions : 0,
       cpaCents: conversions > 0 ? Math.round(spendCents / conversions) : null,
       cpmCents: impressions > 0 ? Math.round((spendCents / impressions) * 1000) : null,
       cpcCents: clicks > 0 ? Math.round(spendCents / clicks) : null,
-      roas: spendCents > 0 && conversions > 0 ? (conversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / spendCents : null,
+      // True ROAS: real network-reported conversion value / spend. Null until real revenue exists.
+      roas: spendCents > 0 && revenueCents > 0 ? revenueCents / spendCents : null,
       conversionRate: clicks > 0 ? conversions / clicks : 0,
     });
   }
@@ -97,6 +96,7 @@ export interface LiveInsights {
   clicks: number;
   conversions: number;
   spendCents: number;
+  revenueCents: number;
   ctr: number;
   cpcCents: number | null;
   cpmCents: number | null;
@@ -119,6 +119,7 @@ export async function getLiveInsights(campaignId: string): Promise<LiveInsights>
   const clicks = perVariant.reduce((s, p) => s + p.clicks, 0);
   const conversions = perVariant.reduce((s, p) => s + p.conversions, 0);
   const spendCents = perVariant.reduce((s, p) => s + p.spendCents, 0);
+  const revenueCents = perVariant.reduce((s, p) => s + p.revenueCents, 0);
 
   return {
     campaignId,
@@ -128,9 +129,10 @@ export async function getLiveInsights(campaignId: string): Promise<LiveInsights>
     clicks,
     conversions,
     spendCents,
+    revenueCents,
     ctr: impressions > 0 ? clicks / impressions : 0,
     cpcCents: clicks > 0 ? Math.round(spendCents / clicks) : null,
     cpmCents: impressions > 0 ? Math.round((spendCents / impressions) * 1000) : null,
-    roas: spendCents > 0 && conversions > 0 ? (conversions * ESTIMATED_REVENUE_CENTS_PER_CONVERSION) / spendCents : null,
+    roas: spendCents > 0 && revenueCents > 0 ? revenueCents / spendCents : null,
   };
 }

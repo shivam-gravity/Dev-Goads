@@ -134,3 +134,48 @@ test("AgentCoordinator - runs BOTH reviewer agents (critic-agent, compliance-age
   assert.deepStrictEqual(Object.keys(pipeline.results).sort(), ["a", "b", "compliance-agent", "critic-agent"]);
   assert.deepStrictEqual(pipeline.order.slice(-2).sort(), ["compliance-agent", "critic-agent"], "both reviewers must run after all producers");
 });
+
+test("AgentCoordinator - explodes a composite producer's bundled result into legacy per-agent keys", async () => {
+  // strategy-agent is a composite: its `data` bundle must fan out into the 4 legacy keys the
+  // rest of the pipeline reads, each carrying its own sub-part of the bundle.
+  const strategy = fakeAgent("strategy-agent", () =>
+    successResult("strategy-agent", {
+      campaign: { summary: "camp" },
+      audience: { primaryAudience: "aud", personas: [{ name: "P1" }] },
+      keyword: { primaryKeywords: ["k"] },
+      budget: { recommendedDailyBudgetCents: 4200 },
+    })
+  );
+
+  const pipeline = await runAgentCoordinator(fixtureContext(), { agents: [strategy] });
+
+  assert.deepStrictEqual(Object.keys(pipeline.results).sort(), ["audience-agent", "budget-agent", "campaign-agent", "keyword-agent"]);
+  assert.deepStrictEqual((pipeline.results["campaign-agent"].data as { summary: string }).summary, "camp");
+  assert.deepStrictEqual((pipeline.results["budget-agent"].data as { recommendedDailyBudgetCents: number }).recommendedDailyBudgetCents, 4200);
+  // Each exploded result re-labels agent/promptId to the legacy name (not the composite's).
+  assert.strictEqual(pipeline.results["audience-agent"].agent, "audience-agent");
+  assert.strictEqual(pipeline.results["audience-agent"].promptId, "audience-agent");
+});
+
+test("AgentCoordinator - composite reviewer-agent explodes into critic-agent + compliance-agent and sees exploded producer proposals", async () => {
+  const strategy = fakeAgent("strategy-agent", () =>
+    successResult("strategy-agent", { campaign: {}, audience: {}, keyword: {}, budget: {} })
+  );
+  let reviewerSaw: string[] | undefined;
+  const reviewer: AIAgent<unknown> = {
+    name: "reviewer-agent",
+    promptId: "reviewer-agent",
+    async execute(_context, input) {
+      reviewerSaw = Object.keys(input?.priorResults ?? {}).sort();
+      return successResult("reviewer-agent", { critic: { overallScore: 70 }, compliance: { overallRisk: "low" } });
+    },
+  };
+
+  const pipeline = await runAgentCoordinator(fixtureContext(), { agents: [strategy, reviewer] });
+
+  // The reviewer must review the EXPLODED producer proposals, not the opaque composite bundle.
+  assert.deepStrictEqual(reviewerSaw, ["audience-agent", "budget-agent", "campaign-agent", "keyword-agent"]);
+  assert.ok("critic-agent" in pipeline.results && "compliance-agent" in pipeline.results, "reviewer bundle must explode into both reviewers");
+  assert.strictEqual((pipeline.results["critic-agent"].data as { overallScore: number }).overallScore, 70);
+  assert.strictEqual((pipeline.results["compliance-agent"].data as { overallRisk: string }).overallRisk, "low");
+});

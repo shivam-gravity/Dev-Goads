@@ -26,7 +26,7 @@ const STRATEGY_TOOL = {
           properties: {
             label: { type: "string", enum: ["Strategy A", "Strategy B", "Strategy C"] },
             targetAudience: { type: "string" },
-            platforms: { type: "array", items: { type: "string", enum: ["meta", "google", "tiktok", "linkedin", "other"] }, minItems: 1, maxItems: 3 },
+            platforms: { type: "array", items: { type: "string", enum: ["meta", "google"] }, minItems: 1, maxItems: 2 },
             objective: { type: "string" },
             creativeDirection: { type: "string" },
             messaging: { type: "string" },
@@ -176,7 +176,11 @@ export async function generateStrategies(context: ResearchContext, recommendatio
 
   const structured = await callDecisionModel<{ strategies: StrategyFields[] }>({
     taskName: "strategy-synthesis",
-    maxTokens: 2048,
+    // 4096: returns 3 FULL strategies (A/B/C) — each with target audience, platforms, objective,
+    // budget, KPI, creative direction, messaging — and falls back ENTIRELY unless exactly 3 come
+    // back. At 2048 a rich 3-strategy bundle risks truncating past the "=== 3" guard → generic
+    // fallback strategies. These are the demo's centerpiece cards, so give headroom.
+    maxTokens: 4096,
     tool: STRATEGY_TOOL,
     messages: [
       {
@@ -191,13 +195,24 @@ export async function generateStrategies(context: ResearchContext, recommendatio
 
   const confidence = computeStrategyConfidence(context, topRecommendations);
 
+  // Constrain every strategy to networks we can actually PUBLISH to. Only Meta + Google are live
+  // (TikTok/LinkedIn are not), but the model would otherwise recommend linkedin/tiktok as the
+  // winning channels — an unlaunchable strategy the user can't act on. Filter to the publishable
+  // set, defaulting to meta+google if a strategy comes back with none. (When TikTok/LinkedIn go
+  // live, widen PUBLISHABLE_PLATFORMS + the STRATEGY_TOOL enum together.)
+  const PUBLISHABLE_PLATFORMS: Platform[] = ["meta", "google"];
+  const constrainPlatforms = (platforms: Platform[]): Platform[] => {
+    const kept = (platforms ?? []).filter((p) => PUBLISHABLE_PLATFORMS.includes(p));
+    return kept.length > 0 ? kept : [...PUBLISHABLE_PLATFORMS];
+  };
+
   return fields.map((f, index) => ({
     id: `strategy-${String.fromCharCode(97 + index)}`,
     label: f.label,
     targetAudience: f.targetAudience,
-    platforms: f.platforms,
+    platforms: constrainPlatforms(f.platforms),
     objective: f.objective,
-    budgetDailyCents: computeStrategyDailyBudgetCents(context, f.platforms, f.objective),
+    budgetDailyCents: computeStrategyDailyBudgetCents(context, constrainPlatforms(f.platforms), f.objective),
     creativeDirection: f.creativeDirection,
     messaging: f.messaging,
     offer: f.offer,

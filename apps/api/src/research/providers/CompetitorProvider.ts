@@ -3,7 +3,7 @@ import { logger } from "../../modules/logger/logger.js";
 import { readMemory, writeMemory } from "../memory/MemoryCoordinator.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
 import type { CompetitorData, ProviderResult, ResearchProviderInput } from "../types/index.js";
-import { citationsToEvidence, hostnameOf, runProviderStep, webSearchThenStructure } from "./support.js";
+import { citationsToEvidence, hostnameOf, runProviderStep, structureFromFacts, webSearchThenStructure } from "./support.js";
 
 // Similarity floor for treating a Research Memory match as real signal worth injecting
 // into the prompt. Calibrated empirically, not guessed: a live verification run against
@@ -105,14 +105,37 @@ export class CompetitorProvider implements ResearchProvider<CompetitorData> {
       // of this provider when there's no live search either.
       const memoryContext = llm ? await retrieveCompetitorMemoryContext(input, industry) : "";
 
+      // Fact-first: the competitor search often returns nothing usable for a niche B2B product
+      // (this run scored 0.05 — "no usable results"), yet the verified facts reveal exactly what
+      // the business SELLS, so the model can name real direct competitors from that + general
+      // knowledge (e.g. a CRM's rivals are Salesforce/HubSpot, not "other providers"). Try this
+      // first when facts exist; only fall through to search if it yields nothing.
+      if (input.verifiedFacts && input.verifiedFacts.length > 0) {
+        const factResult = await structureFromFacts<CompetitorData>({
+          facts: input.verifiedFacts,
+          targetUrl: input.url,
+          websiteExcerpt: input.websiteExcerpt,
+          maxTokens: 1024,
+          tool: COMPETITOR_TOOL,
+          structurePrompt: () => `From the verified facts above, determine exactly what product this business sells, then name its main DIRECT competitors — companies selling a genuinely competing product in the same category (name real, well-known companies from your knowledge of that category). Do NOT list IT-services firms, consultancies, or agencies. Give each competitor's name and how ${input.businessName ?? "this business"} could differentiate. Omit a competitor's url unless you are certain of it.${memoryContext}`,
+        });
+        // Accept only if it produced named competitors beyond the generic placeholder.
+        const named = (factResult?.data?.competitors ?? []).filter((c) => c?.name && !/other providers/i.test(c.name));
+        if (factResult && named.length > 0) {
+          if (llm) await writeCompetitorMemory(input, industry, factResult.data).catch(() => {});
+          return { ...factResult, data: { ...factResult.data, competitors: named }, evidence: citationsToEvidence(factResult.citations) };
+        }
+      }
+
       const { status, data, citations } = await webSearchThenStructure<CompetitorData>({
         maxTokens: 1024,
         tool: COMPETITOR_TOOL,
         // A fabricated url shouldn't cost us an otherwise-legitimate competitor name/notes —
         // unlike a Reddit thread (which IS its URL), a competitor's identity stands on its own.
         unverifiedUrlPolicy: "null-field",
+        websiteExcerpt: input.websiteExcerpt,
         searchPrompt: `Research the main named competitors of the business at ${input.url}${input.businessName ? ` ("${input.businessName}")` : ""} in ${industry}. Find real competitor names and, where possible, their URLs and what differentiates them.${memoryContext}`,
-        structurePrompt: (narrative) => `Using this web research, list named competitors and how this business could differentiate. Only list companies that sell a directly competing product in the same category — do NOT list IT-services firms, consultancies, systems integrators, or agencies just because their own marketing happens to mention the same keyword/industry phrase (e.g. a literal search for "${industry}" can surface consulting firms with that phrase in their name — those are not real product competitors).\n\nWeb research findings:\n${narrative}\n\nBusiness URL: ${input.url}`,
+        structurePrompt: (narrative) => `List named competitors and how this business could differentiate. Use the authoritative website content above to understand what this business actually sells, then identify companies that sell a DIRECTLY competing product in the same category. Do NOT list IT-services firms, consultancies, systems integrators, or agencies just because their own marketing happens to mention the same keyword/industry phrase (e.g. a literal search for "${industry}" can surface consulting firms with that phrase in their name — those are not real product competitors).\n\nWeb research findings:\n${narrative}\n\nBusiness URL: ${input.url}`,
         fallback: () => ({
           competitors: [{ name: "Other providers in this category" }],
           competitionIntensity: "Unknown — no live research performed",

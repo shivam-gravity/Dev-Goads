@@ -1,7 +1,6 @@
 /**
- * Shared request/response shapes every LLM client (groqClient, mistralClient,
- * ollamaClient, geminiClient) builds against — extracted from openaiClient.ts (now
- * removed) so no client "owns" these types just because OpenAI happened to be first.
+ * Shared request/response shapes the LLM client (bedrockClient) builds against — kept in a
+ * standalone module so no single client "owns" these types.
  */
 
 export interface JsonSchemaTool {

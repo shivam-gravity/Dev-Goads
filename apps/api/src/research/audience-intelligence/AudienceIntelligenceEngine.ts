@@ -1,5 +1,5 @@
 import { llm, runStructured, runWebSearch } from "../../infra/llmClient.js";
-import { hostnameOf } from "../providers/support.js";
+import { factGroundingScore, hostnameOf, type VerifiedFactInput } from "../providers/support.js";
 import { readMemory, writeMemory } from "../memory/MemoryCoordinator.js";
 import { computeLtvProxy, type LtvProxyResult } from "./ltvProxy.js";
 import { getProductCatalog } from "../../modules/integrations/productCatalogService.js";
@@ -28,6 +28,11 @@ export interface AudienceIntelligenceInput {
   /** Optional — competitor names already known (e.g. from runCompetitorIntelligence),
    * folded into the prompt as extra context. Never independently discovered here. */
   competitorNames?: string[];
+  /** Source-attributed facts extracted up-front from the business's OWN site (fact-first
+   * pipeline). Injected as AUTHORITATIVE grounding into the synthesis so the audience profile
+   * is anchored in what the business actually sells — even when the web-search signals below
+   * return off-target junk (the failure mode that scored this engine 0). */
+  verifiedFacts?: { field: string; value: string; sourceUrl?: string; confidence: number }[];
 }
 
 /** One weighted fit criterion — `weight` (0-1) is this criterion's relative importance to
@@ -228,9 +233,16 @@ function fallbackFields(businessName: string): AudienceFields {
  * spirit as CompetitorProvider/Competitor Intelligence's confidence formulas, tuned
  * separately since this is a different kind of synthesis (one profile from 2 searches,
  * not N independently-enriched entities). */
-function computeConfidence(usedFallback: boolean, citationCount: number, hadMemoryCorroboration: boolean): number {
+// factGrounded: synthesis anchored in the business's own verified facts (fact-first pipeline) —
+// stronger than a web citation, so it earns a high floor even with zero web citations rather
+// than being treated as an ungrounded estimate.
+function computeConfidence(usedFallback: boolean, citationCount: number, hadMemoryCorroboration: boolean, facts?: VerifiedFactInput[]): number {
   if (usedFallback) return 0.1;
-  const base = citationCount === 0 ? 0.4 : Math.min(0.55 + citationCount * 0.07, 0.9);
+  // Fact-grounded: score by fact-base QUALITY (shared floor + bonus), not the always-0 citation
+  // count of the fact-first path. Memory corroboration still adds a small independent bump.
+  const base = facts?.length
+    ? factGroundingScore(facts)
+    : (citationCount === 0 ? 0.4 : Math.min(0.55 + citationCount * 0.07, 0.9));
   return Math.round(Math.min(base + (hadMemoryCorroboration ? 0.05 : 0), 1) * 100) / 100;
 }
 
@@ -332,10 +344,19 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
     };
   }
 
+  // Fact-first: when the up-front crawl produced verified facts, the business's own site already
+  // defines who it sells to, so we SKIP the two live web searches entirely. Those searches go
+  // through the self-hosted SearXNG+crawl4ai backend, whose cold-start/concurrency latency is the
+  // single biggest source of provider timeouts (a cold SPA render can blow the provider budget →
+  // score 0). The searches only ever SUPPLEMENTED the facts (which win on conflict anyway), so
+  // dropping them when facts exist trades marginal third-party colour for a fast, reliable,
+  // fact-grounded result. With no facts (crawl failed), we still run them — the prior behavior.
+  const hasFacts = !!input.verifiedFacts?.length;
+  const emptySignal = { narrative: "", citations: [] as Citation[] };
   const memoryQueryText = `${businessLabel} — ${input.industry ?? "its category"}`;
   const [audienceSignal, reviewSignal, priorMatches] = await Promise.all([
-    searchAudienceSignals(input),
-    searchReviewSignals(input),
+    hasFacts ? Promise.resolve(emptySignal) : searchAudienceSignals(input),
+    hasFacts ? Promise.resolve(emptySignal) : searchReviewSignals(input),
     readMemory({ kind: MEMORY_KIND, queryText: memoryQueryText, workspaceId: input.workspaceId, excludeBusinessId: input.businessId, topK: 2 }),
   ]);
 
@@ -344,20 +365,28 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
     : "";
   const competitorContext = input.competitorNames?.length ? `\n\nKnown competitors: ${input.competitorNames.join(", ")}.` : "";
 
+  // Fact-first grounding: the business's OWN verified facts are the authoritative anchor for WHO
+  // its audience is. Placed first and marked as taking precedence, so a junk web-search signal
+  // (unrelated pages SearXNG sometimes returns for a niche query) can't derail the profile.
+  const factsContext = input.verifiedFacts?.length
+    ? `AUTHORITATIVE — verified facts from the business's own website (these define what it sells and to whom; ground the audience in these, and where the web research below conflicts, THESE win):\n${input.verifiedFacts.slice(0, 40).map((f) => `- ${f.field}: ${f.value}`).join("\n")}\n\n`
+    : "";
+
   const structured = await runStructured<AudienceFields>({
-    // Larger than most 1024-token structured-extraction calls elsewhere — this schema is
-    // unusually wide (icp + 6 array fields up to 6 items each, a 3-6-entry `personas` array
-    // with 4 sub-fields per entry, buyingCommittee, and a 3-6-stage customerJourney with
-    // full descriptions). Both 1024 and 1536 were observed live truncating mid-object
-    // (JSON.parse failing on the tool-call arguments, e.g. "Unterminated string") once
-    // `personas` was added — this is the same 2048 budget decision-engine.ts/
-    // strategy-engine.ts/tradeoff-engine.ts already use for comparably wide syntheses.
-    maxTokens: 2048,
+    // 4096: this schema is unusually wide (icp + 6 array fields up to 6 items each, a 3-6-entry
+    // `personas` array with 4 sub-fields per entry, buyingCommittee, and a 3-6-stage
+    // customerJourney with full descriptions). 1024/1536 were already known to truncate; 2048
+    // STILL truncated on a rich fact-grounded synthesis (unterminated tool-call JSON → null →
+    // fallback → the provider scored 0.0 and, with retries, blew the 150s ceiling — the single
+    // biggest research wall-clock sink AND the last provider dragging confidence). Doubling the
+    // budget lets the full profile serialize. Same truncation class as the StrategyAgent 4096→8192
+    // and crawl-fact-extraction 2048→4096 fixes.
+    maxTokens: 4096,
     tool: AUDIENCE_TOOL,
     messages: [
       {
         role: "user",
-        content: `Synthesize an audience-intelligence profile for "${businessLabel}" (${input.industry ?? "its category"}) from this research.\n\nTarget-audience research:\n${audienceSignal.narrative}\n\nReview/complaint research:\n${reviewSignal.narrative}${competitorContext}${memoryContext}`,
+        content: `${factsContext}Synthesize an audience-intelligence profile for "${businessLabel}" (${input.industry ?? "its category"}) grounded in the authoritative facts above.\n\nTarget-audience research:\n${audienceSignal.narrative}\n\nReview/complaint research:\n${reviewSignal.narrative}${competitorContext}${memoryContext}`,
       },
     ],
   });
@@ -371,7 +400,7 @@ export async function runAudienceIntelligence(input: AudienceIntelligenceInput):
     estimatedLtvProxy,
     evidence: citations.map((c) => `${c.title} (${c.url})`),
     citations,
-    confidence: computeConfidence(usedFallback, citations.length, priorMatches.length > 0),
+    confidence: computeConfidence(usedFallback, citations.length, priorMatches.length > 0, input.verifiedFacts),
     generatedAt: new Date().toISOString(),
   };
 

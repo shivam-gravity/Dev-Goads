@@ -31,6 +31,7 @@ test("env - importing with NODE_ENV=production and no JWT_SECRET throws instead 
 
 test("env - importing with NODE_ENV=production and JWT_SECRET set uses the real value", async () => {
   process.env.JWT_SECRET = "a-real-production-secret";
+  process.env.CRM_JWT_SHARED_SECRET = "a-real-crm-secret";
   const original = process.env.NODE_ENV;
   process.env.NODE_ENV = "production";
   try {
@@ -39,5 +40,6 @@ test("env - importing with NODE_ENV=production and JWT_SECRET set uses the real 
   } finally {
     process.env.NODE_ENV = original;
     delete process.env.JWT_SECRET;
+    delete process.env.CRM_JWT_SHARED_SECRET;
   }
 });

@@ -11,7 +11,11 @@ function fakeContext(overrides: Partial<ResearchContext> = {}): ResearchContext 
   };
 }
 
+// "Zero network calls" requires the single LLM backend (Claude via Bedrock, gated on
+// AWS_BEARER_TOKEN_BEDROCK) to be unconfigured. Deleting it before the cache-busted dynamic
+// import below leaves the router with nothing to call.
 delete process.env.OPENAI_API_KEY;
+delete process.env.AWS_BEARER_TOKEN_BEDROCK;
 const t = Date.now();
 const { generateRecommendations, CATEGORY_FIELDS, computeRecommendationConfidence } = await import(`../research/decision/recommendation-engine.js?t=${t}`);
 

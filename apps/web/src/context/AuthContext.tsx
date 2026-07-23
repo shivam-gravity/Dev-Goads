@@ -1,14 +1,9 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { api, User, Workspace } from "../api/client.js";
+import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
+import { api, User, Workspace, getAccessToken, setTokens, clearTokens } from "../api/client.js";
 
-// There is no login flow — every session is the single seeded demo identity
-// (apps/api/prisma/seed.ts). The gateway/auth-service dev-mode bypass resolves any
-// request with no Authorization header to that demo user outside production, so the
-// frontend never needs to obtain or send a token. DEMO_BUSINESS_ID means a fresh browser
-// session lands straight on the dashboard instead of the "set up your business" wizard —
-// onboarding still runs for anyone who explicitly creates a different business.
 const DEMO_WORKSPACE_ID = "demo-workspace";
 const DEMO_BUSINESS_ID = "demo-business";
+const IS_DEV = import.meta.env.DEV;
 
 interface AuthState {
   user: User | null;
@@ -16,9 +11,15 @@ interface AuthState {
   workspaceId: string | null;
   businessId: string | null;
   isLoading: boolean;
+  isAuthenticated: boolean;
+  isCrmUser: boolean;
 }
 
 interface AuthContextValue extends AuthState {
+  login: (email: string, password: string) => Promise<void>;
+  register: (name: string, email: string, password: string) => Promise<void>;
+  loginWithCrmToken: (token: string) => Promise<void>;
+  logout: () => void;
   setBusinessId: (id: string) => void;
   setWorkspace: (ws: Workspace) => void;
   refreshWorkspace: () => Promise<void>;
@@ -29,9 +30,11 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [workspace, setWorkspaceState] = useState<Workspace | null>(null);
-  const [workspaceId, setWorkspaceId] = useState<string | null>(localStorage.getItem("polluxa_workspace_id") ?? DEMO_WORKSPACE_ID);
-  const [businessId, setBusinessIdState] = useState<string | null>(localStorage.getItem("businessId") ?? DEMO_BUSINESS_ID);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(localStorage.getItem("polluxa_workspace_id"));
+  const [businessId, setBusinessIdState] = useState<string | null>(localStorage.getItem("businessId"));
   const [isLoading, setIsLoading] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isCrmUser, setIsCrmUser] = useState(false);
 
   function setBusinessId(id: string) {
     setBusinessIdState(id);
@@ -52,20 +55,100 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch { /* non-fatal */ }
   }
 
-  // Resolve the demo identity on mount instead of restoring a session from a token.
+  const login = useCallback(async (email: string, password: string) => {
+    const result = await api.login(email, password);
+    setTokens(result.token, result.refreshToken);
+    setUser(result.user);
+    setIsAuthenticated(true);
+    setIsCrmUser(false);
+    if (result.workspaceId) {
+      setWorkspaceId(result.workspaceId);
+      localStorage.setItem("polluxa_workspace_id", result.workspaceId);
+      const ws = await api.getWorkspace(result.workspaceId).catch(() => null);
+      if (ws) setWorkspaceState(ws);
+    }
+  }, []);
+
+  const register = useCallback(async (name: string, email: string, password: string) => {
+    const result = await api.register(name, email, password);
+    setTokens(result.token, result.refreshToken);
+    setUser(result.user);
+    setIsAuthenticated(true);
+    setIsCrmUser(false);
+    if (result.workspaceId) {
+      setWorkspaceId(result.workspaceId);
+      localStorage.setItem("polluxa_workspace_id", result.workspaceId);
+    }
+  }, []);
+
+  const loginWithCrmToken = useCallback(async (token: string) => {
+    const result = await api.crmLogin(token);
+    setTokens(result.accessToken, result.refreshToken);
+    setUser(result.user);
+    setIsAuthenticated(true);
+    setIsCrmUser(true);
+    setWorkspaceId(result.workspaceId);
+    setBusinessIdState(result.businessId);
+    localStorage.setItem("polluxa_workspace_id", result.workspaceId);
+    localStorage.setItem("businessId", result.businessId);
+    const ws = await api.getWorkspace(result.workspaceId).catch(() => null);
+    if (ws) setWorkspaceState(ws);
+  }, []);
+
+  const logout = useCallback(() => {
+    api.logout().catch(() => {});
+    clearTokens();
+    setUser(null);
+    setWorkspaceState(null);
+    setWorkspaceId(null);
+    setBusinessIdState(null);
+    setIsAuthenticated(false);
+    setIsCrmUser(false);
+    localStorage.removeItem("polluxa_workspace_id");
+    localStorage.removeItem("businessId");
+    window.location.href = "/login";
+  }, []);
+
   useEffect(() => {
-    if (!localStorage.getItem("polluxa_workspace_id")) {
-      localStorage.setItem("polluxa_workspace_id", DEMO_WORKSPACE_ID);
+    const token = getAccessToken();
+
+    if (!token && IS_DEV) {
+      if (!localStorage.getItem("polluxa_workspace_id")) {
+        localStorage.setItem("polluxa_workspace_id", DEMO_WORKSPACE_ID);
+        setWorkspaceId(DEMO_WORKSPACE_ID);
+      }
+      if (!localStorage.getItem("businessId")) {
+        localStorage.setItem("businessId", DEMO_BUSINESS_ID);
+        setBusinessIdState(DEMO_BUSINESS_ID);
+      }
+      api.me()
+        .then((u) => {
+          setUser(u);
+          setIsAuthenticated(true);
+          const wsId = localStorage.getItem("polluxa_workspace_id") ?? DEMO_WORKSPACE_ID;
+          return api.getWorkspace(wsId).then(setWorkspaceState).catch(() => {});
+        })
+        .catch(() => {})
+        .finally(() => setIsLoading(false));
+      return;
     }
-    if (!localStorage.getItem("businessId")) {
-      localStorage.setItem("businessId", DEMO_BUSINESS_ID);
+
+    if (!token) {
+      setIsLoading(false);
+      return;
     }
+
     api.me()
       .then((u) => {
         setUser(u);
-        return api.getWorkspace(workspaceId ?? DEMO_WORKSPACE_ID).then(setWorkspaceState).catch(() => {});
+        setIsAuthenticated(true);
+        const wsId = localStorage.getItem("polluxa_workspace_id");
+        if (wsId) return api.getWorkspace(wsId).then(setWorkspaceState).catch(() => {});
       })
-      .catch(() => { /* backend unreachable — app still renders, just without user/workspace display data */ })
+      .catch(() => {
+        clearTokens();
+        setIsAuthenticated(false);
+      })
       .finally(() => setIsLoading(false));
   }, []);
 
@@ -76,6 +159,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       workspaceId,
       businessId,
       isLoading,
+      isAuthenticated,
+      isCrmUser,
+      login,
+      register,
+      loginWithCrmToken,
+      logout,
       setBusinessId,
       setWorkspace,
       refreshWorkspace,

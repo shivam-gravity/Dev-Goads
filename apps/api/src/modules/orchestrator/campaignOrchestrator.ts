@@ -5,14 +5,19 @@ import { googleAdapter } from "../adapters/googleAdapter.js";
 import { tiktokAdapter } from "../adapters/tiktokAdapter.js";
 import type { AdAdapter, HierarchyCapableAdapter } from "../adapters/AdAdapter.js";
 import { resolveAudienceTargetingForWorkspace, withAgentInterests } from "../adapters/metaTargetingMapper.js";
+import { isValidObjective } from "../adapters/metaObjectives.js";
 import { resolveGoogleTargetingForWorkspace, buildGoogleCampaignTargetingFromLocations, withAgentKeywords } from "../adapters/googleTargetingMapper.js";
 import { getMetaCredentials } from "../integrations/integrationService.js";
-import { getGoogleAdsCredentials } from "../integrations/googleOAuth.js";
+import { getGoogleAdsCredentials, type GoogleAdsCredentials } from "../integrations/googleOAuth.js";
 import type { AdNetwork, Campaign, CampaignSuggestion, CampaignVariant, CreativeAssetRef } from "../../types/index.js";
 import { getStrategy } from "../strategy/strategyEngine.js";
 import { applyCopyLimitsForNetwork } from "../strategy/platformCopyLimits.js";
 import { getBusiness } from "../business/businessService.js";
 import { eventBus } from "../../infra/eventBus.js";
+import { ensureFuseGuardrails } from "../automation/campaignFuse.js";
+import { syncLaunchedHierarchy } from "../drafts/draftsService.js";
+import { logger } from "../logger/logger.js";
+import { isActiveNetwork } from "../../config/platforms.js";
 
 export interface CampaignLaunchedEvent {
   campaignId: string;
@@ -22,6 +27,13 @@ export interface CampaignLaunchedEvent {
 }
 
 const LANDING_PAGE_SLUGS = ["", "offer", "checkout", "pricing"];
+
+// How many distinct ad creatives a generated campaign should contain PER launchable network.
+// The StrategyAgent emits 8-12 creatives (for variety/selection headroom), but surfacing all of
+// them in the builder is overwhelming and confusing (the sidebar even truncated the list to 8
+// while the count said 14). Cap the creatives actually turned into variants so the user gets a
+// focused, editable set. 4 = enough distinct angles to A/B without noise. Env-tunable.
+const MAX_CREATIVES_PER_CAMPAIGN = Math.max(1, Number(process.env.MAX_CREATIVES_PER_CAMPAIGN ?? 4));
 const DEFAULT_META_OBJECTIVE = "OUTCOME_TRAFFIC";
 
 const adapters: Record<AdNetwork, AdAdapter & Partial<HierarchyCapableAdapter>> = {
@@ -30,7 +42,7 @@ const adapters: Record<AdNetwork, AdAdapter & Partial<HierarchyCapableAdapter>> 
   tiktok: tiktokAdapter,
 };
 
-async function saveCampaign(campaign: Campaign): Promise<void> {
+export async function saveCampaign(campaign: Campaign): Promise<void> {
   await prisma.campaign.upsert({
     where: { id: campaign.id },
     create: { id: campaign.id, businessId: campaign.businessId, workspaceId: campaign.workspaceId, data: campaign as any, updatedAt: new Date(campaign.updatedAt) },
@@ -54,20 +66,31 @@ export async function listActiveCampaigns(): Promise<{ id: string; workspaceId: 
   return rows.map((r) => ({ id: r.id, workspaceId: r.workspaceId ?? "demo" }));
 }
 
-/** Builds a campaign draft from a strategy: one variant per creative x recommended network. */
-export async function buildCampaignFromStrategy(strategyId: string, name: string, dailyBudgetCents: number): Promise<Campaign> {
+/** Builds a campaign draft from a strategy: one variant per creative x recommended network.
+ * `objective` (optional) is the user-chosen Meta objective from the generation flow, stamped
+ * onto the campaign so launchMetaHierarchy uses it instead of the hardcoded default. */
+export async function buildCampaignFromStrategy(strategyId: string, name: string, dailyBudgetCents: number, objective?: string): Promise<Campaign> {
   const strategy = await getStrategy(strategyId);
   if (!strategy) throw new Error(`Strategy ${strategyId} not found`);
   const business = await getBusiness(strategy.businessId);
   const baseUrl = business?.website?.replace(/\/$/, "") ?? "https://example.com";
 
   let variantIndex = 0;
+  // Only build variants for networks we can actually launch on (config/platforms.ts). A strategy's
+  // recommendedNetworks can name a "coming soon" network (e.g. market research recommends TikTok),
+  // and buildCampaignFromStrategy feeds launchCampaign directly — so we drop inactive networks here
+  // rather than let them become dead variants the orchestrator has to skip at launch.
+  const launchableNetworks = strategy.recommendedNetworks.filter(isActiveNetwork);
   // Each creative is shared across every recommended network above — applying each
   // network's real copy limits here (rather than reusing one Meta-shaped 40-char headline
-  // verbatim on Google/TikTok too) is what actually makes the final launched ad respect
+  // verbatim on Google too) is what actually makes the final launched ad respect
   // that network's real format instead of just its generation-time upper bound.
-  const variants: CampaignVariant[] = strategy.creatives.flatMap((creative) =>
-    strategy.recommendedNetworks.map((network) => {
+  // Cap the creatives surfaced as variants (the agent produces 8-12 for headroom; the builder
+  // should show a focused set — see MAX_CREATIVES_PER_CAMPAIGN). Applied here, at the single point
+  // variants are built, so both the count badge and the list agree and no launch fan-out explodes.
+  const cappedCreatives = strategy.creatives.slice(0, MAX_CREATIVES_PER_CAMPAIGN);
+  const variants: CampaignVariant[] = cappedCreatives.flatMap((creative) =>
+    launchableNetworks.map((network) => {
       const audienceName = strategy.audiences[variantIndex % strategy.audiences.length] ?? "General Audience";
       const slug = LANDING_PAGE_SLUGS[variantIndex % LANDING_PAGE_SLUGS.length];
       variantIndex++;
@@ -85,12 +108,19 @@ export async function buildCampaignFromStrategy(strategyId: string, name: string
   const campaign: Campaign = {
     id: randomUUID(),
     businessId: strategy.businessId,
+    // Stamp the owning workspace at BUILD time (from the business), not only at launch. Without
+    // this a generated-but-unlaunched campaign persisted with workspaceId=null and was invisible
+    // to every workspace-scoped query — including the CRM Automated Insights tab, which filters
+    // campaigns by workspaceId. launchCampaign still sets it too (defensive), but stamping here
+    // means the campaign belongs to its workspace the moment it's created.
+    ...(business?.workspaceId ? { workspaceId: business.workspaceId } : {}),
     strategyId,
     name,
     status: "draft",
-    networks: strategy.recommendedNetworks,
+    networks: launchableNetworks,
     dailyBudgetCents,
     variants,
+    ...(objective ? { objective } : {}),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...(strategy.googleKeywords ? { googleKeywords: strategy.googleKeywords } : {}),
@@ -114,7 +144,11 @@ export async function buildCampaignFromSuggestions(strategyId: string, suggestio
   const business = await getBusiness(strategy.businessId);
   const baseUrl = business?.website?.replace(/\/$/, "") ?? "https://example.com";
 
-  const variants: CampaignVariant[] = suggestions.map((suggestion, i) => {
+  // Drop suggestions for networks we can't launch on (config/platforms.ts). A suggestion's
+  // platform comes from research (which can still recommend TikTok), and this builder feeds
+  // launchCampaign directly — so an inactive network would otherwise become a dead variant.
+  const launchableSuggestions = suggestions.filter((s) => isActiveNetwork(s.platform));
+  const variants: CampaignVariant[] = launchableSuggestions.map((suggestion, i) => {
     const audienceName = strategy.audiences[i % strategy.audiences.length] ?? "General Audience";
     const slug = LANDING_PAGE_SLUGS[i % LANDING_PAGE_SLUGS.length];
     return {
@@ -170,12 +204,21 @@ async function launchMetaHierarchy(
     : undefined;
   const accessToken = credentials?.accessToken ?? null;
 
+  // Use the campaign's chosen objective (threaded from the generation flow) when it's a valid
+  // post-ODAX Meta objective; otherwise fall back to the historical default. Guards against a
+  // stale/free-text value reaching the Graph API.
+  const metaObjective = campaign.objective && isValidObjective(campaign.objective) ? campaign.objective : DEFAULT_META_OBJECTIVE;
+
   let campaignExternalId: string;
   try {
-    const container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: DEFAULT_META_OBJECTIVE }, credentials);
+    const container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: metaObjective }, credentials);
     campaignExternalId = container.externalId;
     campaign.externalIds = { ...campaign.externalIds, meta: campaignExternalId };
-  } catch {
+  } catch (err) {
+    // Campaign container is the top of the Meta hierarchy — if it fails, EVERY variant is marked
+    // failed (no ad set/ad can exist without it). Log the real Graph API error; otherwise the whole
+    // campaign shows a silent "Failed" with no way to tell budget/objective/token issues apart.
+    logger.error(`launchMetaHierarchy: campaign container failed for ${campaign.id} (objective=${metaObjective}) — marking all ${variants.length} variants failed`, err);
     variants.forEach((v) => { v.status = "failed"; });
     return;
   }
@@ -196,6 +239,7 @@ async function launchMetaHierarchy(
           campaignExternalId,
           name: `${campaign.name} — ${audienceName}`,
           dailyBudgetCents: perVariantBudgetCents * groupVariants.length,
+          objective: metaObjective,
           targeting,
           promotedObject: campaign.pixelId && campaign.conversionEvent ? { pixelId: campaign.pixelId, customEventType: campaign.conversionEvent } : undefined,
           startTime: campaign.startDate,
@@ -226,11 +270,18 @@ async function launchMetaHierarchy(
           variant.externalId = result.externalId;
           variant.status = result.status;
           variant.adSetExternalId = adSet.externalId;
-        } catch {
+        } catch (err) {
+          // Per-variant failure (creative upload or ad create) — the ad set survived, so only THIS
+          // variant is lost. Log which one and why so a partial failure is diagnosable.
+          logger.error(`launchMetaHierarchy: ad create failed for variant ${variant.id} in "${audienceName}" (campaign ${campaign.id})`, err);
           variant.status = "failed";
         }
       }
-    } catch {
+    } catch (err) {
+      // Ad-set-level failure (targeting resolution or ad set create) fails the whole audience group.
+      // On an INR/non-USD account this is where a below-minimum daily budget gets rejected — log the
+      // Graph API message so the currency-minimum cause is visible instead of a silent group "Failed".
+      logger.error(`launchMetaHierarchy: ad set failed for audience "${audienceName}" (campaign ${campaign.id}, budget ${perVariantBudgetCents * groupVariants.length} cents) — marking ${groupVariants.length} variants failed`, err);
       groupVariants.forEach((v) => { v.status = "failed"; });
     }
   }
@@ -249,15 +300,19 @@ async function launchGoogleHierarchy(
   workspaceId: string,
   perVariantBudgetCents: number
 ): Promise<void> {
-  const workspaceCredentials = (await getGoogleAdsCredentials(workspaceId)) ?? undefined;
-  // Same builder-selection override pattern as launchMetaHierarchy: the campaign builder
-  // lets a user pick a specific Google Ads customer per campaign instead of always using
-  // the workspace's default Integration connection.
-  const credentials = workspaceCredentials
-    ? { ...workspaceCredentials, customerId: campaign.googleCustomerId ?? workspaceCredentials.customerId }
-    : undefined;
-  const accessToken = credentials?.accessToken ?? null;
-  const developerToken = credentials?.developerToken ?? null;
+  // Same builder-selection override pattern as launchMetaHierarchy: the campaign builder lets a
+  // user pick a specific Google Ads customer per campaign instead of always using the workspace's
+  // default Integration connection.
+  const applyCustomerOverride = (c?: GoogleAdsCredentials) =>
+    c ? { ...c, customerId: campaign.googleCustomerId ?? c.customerId } : undefined;
+  let credentials = applyCustomerOverride((await getGoogleAdsCredentials(workspaceId)) ?? undefined);
+
+  // A stored Google access token can be dead while its recorded expiry still reads "in the future"
+  // (e.g. the CRM manual-connect path stores an optimistic tokenExpiresAt) — so the normal refresh
+  // gate never fires and the first live call 401s. Probe the first API call (campaign container),
+  // and on an auth failure force a token refresh from the refresh token and retry ONCE. This runs
+  // before any variant is persisted, so a clean top-of-hierarchy retry has no partial-state risk.
+  const isAuthError = (err: unknown) => /\b401\b|UNAUTHENTICATED|invalid authentication/i.test(String((err as Error)?.message ?? err));
 
   const groups = new Map<string, CampaignVariant[]>();
   for (const variant of variants) {
@@ -266,25 +321,47 @@ async function launchGoogleHierarchy(
     groups.get(key)!.push(variant);
   }
   const [firstAudienceName] = groups.keys();
-  // Locations collected directly in the builder take precedence over the SavedAudience-name
-  // bridge (which strategy-generated variants without builder state still rely on).
-  const campaignLevelGeoTargeting = campaign.locations?.length
-    ? await buildGoogleCampaignTargetingFromLocations(accessToken, developerToken, campaign.locations)
-    : (await resolveGoogleTargetingForWorkspace(workspaceId, firstAudienceName, accessToken, developerToken)).campaign;
 
-  const conversionActionResourceName = credentials && campaign.googleConversionActionId
-    ? `customers/${credentials.customerId}/conversionActions/${campaign.googleConversionActionId}`
-    : undefined;
+  let accessToken = credentials?.accessToken ?? null;
+  let developerToken = credentials?.developerToken ?? null;
 
-  let campaignExternalId: string;
-  try {
-    const container = await googleAdapter.createCampaignContainer!(
+  const buildContainer = async () => {
+    // Locations collected directly in the builder take precedence over the SavedAudience-name
+    // bridge (which strategy-generated variants without builder state still rely on).
+    const campaignLevelGeoTargeting = campaign.locations?.length
+      ? await buildGoogleCampaignTargetingFromLocations(accessToken, developerToken, campaign.locations)
+      : (await resolveGoogleTargetingForWorkspace(workspaceId, firstAudienceName, accessToken, developerToken)).campaign;
+    const conversionActionResourceName = credentials && campaign.googleConversionActionId
+      ? `customers/${credentials.customerId}/conversionActions/${campaign.googleConversionActionId}`
+      : undefined;
+    return googleAdapter.createCampaignContainer!(
       { name: campaign.name, objective: "SEARCH", dailyBudgetCents: campaign.dailyBudgetCents, targeting: campaignLevelGeoTargeting, conversionActionResourceName },
       credentials
     );
+  };
+
+  let campaignExternalId: string;
+  try {
+    let container;
+    try {
+      container = await buildContainer();
+    } catch (err) {
+      // On an auth failure, mint a genuinely fresh token (bypassing the possibly-stale expiry gate)
+      // and retry the container once. If it still fails, fall through to the outer catch.
+      if (!isAuthError(err)) throw err;
+      logger.warn(`launchGoogleHierarchy: auth error on first call for ${workspaceId} — force-refreshing token and retrying once`);
+      credentials = applyCustomerOverride((await getGoogleAdsCredentials(workspaceId, { forceRefresh: true })) ?? undefined);
+      accessToken = credentials?.accessToken ?? null;
+      developerToken = credentials?.developerToken ?? null;
+      container = await buildContainer();
+    }
     campaignExternalId = container.externalId;
     campaign.externalIds = { ...campaign.externalIds, google: campaignExternalId };
-  } catch {
+  } catch (err) {
+    // Top of the Google hierarchy (budget + campaign). Failure here fails EVERY variant — log the
+    // real Ads API error (survives the auth-retry above), so a budget/targeting/token cause isn't
+    // hidden behind a blanket "Failed".
+    logger.error(`launchGoogleHierarchy: campaign container failed for ${campaign.id} — marking all ${variants.length} variants failed`, err);
     variants.forEach((v) => { v.status = "failed"; });
     return;
   }
@@ -316,11 +393,17 @@ async function launchGoogleHierarchy(
           variant.externalId = result.externalId;
           variant.status = result.status;
           variant.adSetExternalId = adGroup.externalId;
-        } catch {
+        } catch (err) {
+          // Per-variant failure (responsive search ad create) — the ad group survived, only THIS
+          // variant is lost. Log which one and why.
+          logger.error(`launchGoogleHierarchy: ad create failed for variant ${variant.id} in "${audienceName}" (campaign ${campaign.id})`, err);
           variant.status = "failed";
         }
       }
-    } catch {
+    } catch (err) {
+      // Ad-group-level failure (targeting or ad group create) fails the whole audience group. Log the
+      // Ads API message instead of a silent group "Failed".
+      logger.error(`launchGoogleHierarchy: ad group failed for audience "${audienceName}" (campaign ${campaign.id}, budget ${perVariantBudgetCents * groupVariants.length} cents) — marking ${groupVariants.length} variants failed`, err);
       groupVariants.forEach((v) => { v.status = "failed"; });
     }
   }
@@ -345,20 +428,15 @@ export async function launchCampaign(campaignId: string, workspaceId = "demo"): 
   const googleVariants = campaign.variants.filter((v) => v.network === "google");
   const otherVariants = campaign.variants.filter((v) => v.network !== "meta" && v.network !== "google");
 
+  // Defense-in-depth: the campaign builders (buildCampaignFromStrategy / buildCampaignFromSuggestions)
+  // already drop non-active networks, and the /campaigns/generate Zod boundary rejects them — so in
+  // normal flow there are NO otherVariants here. This loop stays as a last-resort guard because
+  // launchCampaign is also reachable via POST /campaigns/:id/launch on an arbitrary persisted
+  // campaign (e.g. an older draft built before a network was gated). For any non-active network we
+  // do NOT call its adapter, so it never gets an externalId and never spends; marked "skipped" so it
+  // reads as visibly not-launched rather than silently failing or dragging the campaign to "failed".
   for (const variant of otherVariants) {
-    const adapter = adapters[variant.network];
-    try {
-      const result = await adapter.launchVariant({
-        campaignId: campaign.id,
-        variantId: variant.id,
-        creative: variant.creative,
-        dailyBudgetCents: perVariantBudget,
-      });
-      variant.externalId = result.externalId;
-      variant.status = result.status;
-    } catch (err) {
-      variant.status = "failed";
-    }
+    variant.status = "skipped";
   }
 
   if (metaVariants.length) {
@@ -374,7 +452,10 @@ export async function launchCampaign(campaignId: string, workspaceId = "demo"): 
   // from actual variant outcomes so it never contradicts externalIds or the real launch
   // result, which matters for anything reading this field downstream (the CRM sync in
   // particular — see adsDataRoutes.ts's /ads-data/campaigns).
-  campaign.networks = [...new Set(campaign.variants.filter((v) => v.status !== "failed").map((v) => v.network))];
+  // Excludes both "failed" and "skipped" variants: a skipped (coming-soon) network was never
+  // launched and has no externalId, so reporting it here would reintroduce exactly the drift this
+  // recompute exists to prevent (a network in the list that nothing downstream can act on).
+  campaign.networks = [...new Set(campaign.variants.filter((v) => v.status !== "failed" && v.status !== "skipped").map((v) => v.network))];
 
   campaign.status = campaign.variants.some((v) => v.status === "active")
     ? "active"
@@ -383,6 +464,26 @@ export async function launchCampaign(campaignId: string, workspaceId = "demo"): 
       : "failed";
   campaign.updatedAt = new Date().toISOString();
   await saveCampaign(campaign);
+
+  // Mirror the launched platform hierarchy into the AdSet/Ad tables the Ads Manager reads, so a
+  // published campaign's ads actually show up there (they're otherwise only on the campaign's
+  // variants JSON + the ad network). Best-effort: a mirror failure must not fail the launch.
+  try {
+    await syncLaunchedHierarchy(campaign.id, campaign.workspaceId, campaign.variants as any);
+  } catch (err) {
+    logger.warn(`launchCampaign: failed to mirror launched hierarchy into Ads Manager tables for ${campaign.id}`, err);
+  }
+
+  // Seed the always-on safety guardrails ("fuse") for this workspace the moment a campaign goes
+  // live, so absolute max-CPA / min-ROAS / spend-cap protection is active by default rather than
+  // only when a user hand-creates rules. Idempotent + best-effort: never block or fail a launch on it.
+  if (campaign.status !== "failed" && campaign.workspaceId) {
+    try {
+      await ensureFuseGuardrails(campaign.workspaceId);
+    } catch (err) {
+      logger.warn(`launchCampaign: failed to seed fuse guardrails for ${campaign.workspaceId}`, err);
+    }
+  }
 
   // Fire-and-forget: today's only subscriber just logs (see src/infra/eventHandlers.ts),
   // but this is the exact seam roadmap Phase 3 replaces with a Kafka producer once the
@@ -403,7 +504,8 @@ export async function pauseVariant(campaignId: string, variantId: string): Promi
   const variant = campaign.variants.find((v) => v.id === variantId);
   if (!variant || !variant.externalId) throw new Error(`Variant ${variantId} not launched`);
 
-  await adapters[variant.network].pauseVariant(variant.externalId);
+  const credentials = variant.network === "meta" ? (await getMetaCredentials(campaign.workspaceId ?? "demo")) ?? undefined : undefined;
+  await adapters[variant.network].pauseVariant(variant.externalId, credentials);
   variant.status = "paused";
   campaign.updatedAt = new Date().toISOString();
   await saveCampaign(campaign);
@@ -417,7 +519,8 @@ export async function activateVariant(campaignId: string, variantId: string): Pr
   const variant = campaign.variants.find((v) => v.id === variantId);
   if (!variant || !variant.externalId) throw new Error(`Variant ${variantId} not launched`);
 
-  await adapters[variant.network].activateVariant(variant.externalId);
+  const credentials = variant.network === "meta" ? (await getMetaCredentials(campaign.workspaceId ?? "demo")) ?? undefined : undefined;
+  await adapters[variant.network].activateVariant(variant.externalId, credentials);
   variant.status = "active";
   campaign.updatedAt = new Date().toISOString();
   await saveCampaign(campaign);
@@ -430,9 +533,9 @@ export async function reallocateBudget(campaignId: string, variantId: string, da
   const variant = campaign.variants.find((v) => v.id === variantId);
   if (!variant || !variant.externalId) throw new Error(`Variant ${variantId} not launched`);
 
-  // Budget lives on the Ad Set for hierarchy-launched (Meta) variants, not the leaf ad.
+  const credentials = variant.network === "meta" ? (await getMetaCredentials(campaign.workspaceId ?? "demo")) ?? undefined : undefined;
   const targetExternalId = variant.adSetExternalId ?? variant.externalId;
-  await adapters[variant.network].setBudget({ externalId: targetExternalId, dailyBudgetCents });
+  await adapters[variant.network].setBudget({ externalId: targetExternalId, dailyBudgetCents }, credentials);
   campaign.updatedAt = new Date().toISOString();
   await saveCampaign(campaign);
   return campaign;

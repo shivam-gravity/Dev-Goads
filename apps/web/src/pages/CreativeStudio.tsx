@@ -31,6 +31,12 @@ function formatTimestamp(ts: number) {
   });
 }
 
+const JOBS_STORAGE_KEY = "polluxa_gen_jobs";
+
+function loadStoredJobs(): GenerationJob[] {
+  try { return JSON.parse(localStorage.getItem(JOBS_STORAGE_KEY) || "[]"); } catch { return []; }
+}
+
 export default function CreativeStudio({ businessId }: { businessId: string }) {
   const [selectType, setSelectType] = useState(SELECT_TYPES[0].value);
   const [productUrl, setProductUrl] = useState("");
@@ -40,10 +46,15 @@ export default function CreativeStudio({ businessId }: { businessId: string }) {
   const [fetchedCount, setFetchedCount] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [jobs, setJobs] = useState<GenerationJob[]>([]);
+  const [jobs, setJobs] = useState<GenerationJob[]>(loadStoredJobs);
   const pollHandles = useRef<Record<string, ReturnType<typeof setInterval>>>({});
 
   useEffect(() => {
+    localStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(jobs));
+  }, [jobs]);
+
+  useEffect(() => {
+    jobs.filter((j) => j.status === "queued" || j.status === "running").forEach((j) => pollJob(j.id));
     return () => {
       Object.values(pollHandles.current).forEach(clearInterval);
     };
@@ -127,10 +138,7 @@ export default function CreativeStudio({ businessId }: { businessId: string }) {
       <PolluxaHeader breadcrumb={["Creative Hub", "AI Generate"]} />
 
       <div className="ai-generate-toolbar">
-        <a className="how-to-use-link" href="#" onClick={(e) => e.preventDefault()}>
-          <span className="how-to-use-icon" aria-hidden="true">📖</span>
-          How to use?
-        </a>
+        <span className="ai-generate-toolbar-hint">Enter a product URL or text prompt to generate ad creatives with AI.</span>
       </div>
 
       <div className="ai-generate-layout">

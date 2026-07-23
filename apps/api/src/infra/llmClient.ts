@@ -1,38 +1,36 @@
-import * as groq from "./groqClient.js";
-import * as mistral from "./mistralClient.js";
+import * as bedrock from "./bedrockClient.js";
 import * as llmRouter from "./llmRouter.js";
 import * as searchRouter from "./searchRouter.js";
 import { resolveSearchTask } from "./searchTaskConfig.js";
+import { crawl4aiScrape } from "./crawl4aiClient.js";
+import { refineContent } from "./contentRefiner.js";
 import type { ChatMessage, JsonSchemaTool, WebSearchOutcome } from "./llmTypes.js";
 
 export type { ChatMessage, JsonSchemaTool, WebSearchOutcome };
 
+const BEDROCK_DEFAULT_MODEL = process.env.BEDROCK_MODEL ?? "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+
 /**
  * Compatibility facade for the ~20 call sites (agents/support.ts, several modules/*
  * services, several research/* engines) that predate llmRouter.ts's per-task provider
- * routing and always called OpenAI's chat/text/search/embedding functions directly, with
- * no task-specific model assignment. Rather than migrate every one of those onto
- * llmRouter.ts + llmTaskConfig.ts (a much larger, separately-scoped change), this module
- * is a drop-in replacement for the old infra/openaiClient.ts: same function names/shapes,
- * backed by Groq (the new default text-generation provider — fast, hosted, a genuinely
- * free tier) instead of OpenAI.
+ * routing and always called the chat/text/search/embedding functions directly, with no
+ * task-specific model assignment. Rather than migrate every one of those onto llmRouter.ts +
+ * llmTaskConfig.ts (a much larger, separately-scoped change), this module keeps the same
+ * function names/shapes, backed by Claude via Amazon Bedrock — the single LLM provider the
+ * whole pipeline now depends on.
  *
- * runStructured/runText route through llmRouter.ts with a fixed "groq" assignment rather
- * than calling groqClient directly — every one of these ~20 call sites gets llmRouter's
- * fallback chain (groq -> mistral -> google) for free this way, no call-site changes
- * needed. Before this, a Groq failure here (e.g. its daily token quota exhausted) had
- * nowhere to fall back to at all — see modules/onboarding/analysis.ts's fact-extraction
- * call, which failed outright with a Groq 429 while router-based callers doing the exact
- * same kind of work already degraded gracefully to Mistral.
+ * runStructured/runText route through llmRouter.ts with a "bedrock" assignment so these call
+ * sites share the exact same dispatch (usage boundary, error handling) as the router-based
+ * callers, no call-site changes needed.
  *
- * One capability OpenAI had that neither Groq nor Mistral replace:
- *  - Image generation: gpt-image-1 has no Groq/Mistral equivalent either — see
- *    modules/generation/imageProvider.ts, which now always uses MockImageProvider.
- * Embeddings (Research Memory / RAG) DO have a replacement: Mistral's mistral-embed.
- * Live web search DOES have a replacement now too — see runWebSearch below.
+ * One capability not wired here:
+ *  - Image generation: see modules/generation/imageProvider.ts (Google Imagen / Stability /
+ *    mock) — a separate subsystem, not routed through this facade.
+ * Embeddings (Research Memory / RAG) are backed by Bedrock Titan Text Embeddings V2.
+ * Live web search is backed by SearXNG + crawl4ai — see runWebSearch below.
  */
 
-export const llm = groq.isGroqConfigured();
+export const llm = bedrock.isBedrockConfigured();
 
 export async function runStructured<T>(opts: {
   model?: string;
@@ -41,57 +39,89 @@ export async function runStructured<T>(opts: {
   messages: ChatMessage[];
   tool: JsonSchemaTool;
 }): Promise<T | null> {
-  if (!llm) throw new Error("GROQ_API_KEY is not set");
+  if (!llm) throw new Error("AWS_BEARER_TOKEN_BEDROCK is not set");
   const { model, ...rest } = opts;
-  const result = await llmRouter.runStructured<T>({ provider: "groq", model: model ?? groq.GROQ_DEFAULT_MODEL }, rest);
+  const result = await llmRouter.runStructured<T>({ provider: "bedrock", model: model ?? BEDROCK_DEFAULT_MODEL }, rest);
   return result.data;
 }
 
 /** Plain chat completion, no tools — returns the assistant's text, or null if empty. */
 export async function runText(opts: { model?: string; maxTokens: number; system?: string; messages: ChatMessage[] }): Promise<string | null> {
-  if (!llm) throw new Error("GROQ_API_KEY is not set");
+  if (!llm) throw new Error("AWS_BEARER_TOKEN_BEDROCK is not set");
   const { model, ...rest } = opts;
-  const result = await llmRouter.runText({ provider: "groq", model: model ?? groq.GROQ_DEFAULT_MODEL }, rest);
+  const result = await llmRouter.runText({ provider: "bedrock", model: model ?? BEDROCK_DEFAULT_MODEL }, rest);
   return result.data;
 }
 
 /**
- * Backed by searchRouter.ts's tavily -> serper -> searxng chain (searchTaskConfig.ts
- * assigns this the "web-research" task, resolving to Tavily by default). Previously backed
- * by Firecrawl's /search — replaced after that account hit its credit limit. Groq's
- * compound-beta model (tried live: rejected with an opaque "Request Entity Too Large" on
- * this account/tier) and Gemini's Google Search grounding (tried live: this key's
- * free-tier request quota is 0) were both ruled out earlier in that same search, before
- * Firecrawl itself ran dry too.
+ * SearXNG search (searchTaskConfig.ts assigns this the "web-research" task) followed by a
+ * crawl4ai content-enrichment pass. This two-stage design matters for research QUALITY:
+ * SearXNG returns only a one-line result blurb per hit (a search-engine snippet), which is far
+ * thinner grounding than the paragraph of extracted page text Tavily used to return in this
+ * same field. To restore deep grounding, the top results' URLs are crawled with crawl4ai (self-
+ * hosted, no per-call quota) IN PARALLEL, and each hit's narrative uses the real page content
+ * when the crawl succeeds, falling back to the SearXNG snippet when it doesn't. So a hit's
+ * grounding is: full page markdown (best) -> SearXNG snippet (fine) -> title only (worst).
  *
  * `prompt` here is a full instructional research sentence (e.g. "Research the main named
- * competitors of the business at X..."), not a short keyword query like buildSearchQuery()
- * produces for SearchRankingProvider's dedicated search-ranking task — passed through
- * as-is rather than distilled into a shorter query first, since that would need an extra
- * LLM call per search just to shorten a prompt that's already only one or two sentences.
- * Tavily in particular is built to handle natural-language queries well, so this matters
- * less here than it would for a bare keyword-search engine.
+ * competitors of the business at X..."), passed to SearXNG as-is rather than distilled into a
+ * shorter query first (that would cost an extra LLM call per search on an already-short prompt).
  *
- * Degrades to the same empty result on any outage (no vendor configured, every tier in the
- * chain failed/empty) that the old permanent no-op always returned — every existing
- * caller's fallback path (support.ts's webSearchThenStructure, the Intelligence Engines'
- * own runWebSearch calls) already handles that shape and needs no changes.
+ * Degrades to the same empty result on any outage (SearXNG unreachable / no results) the old
+ * no-op returned; enrichment failing (crawl4ai down) never blocks the search — every caller's
+ * fallback path (support.ts's webSearchThenStructure, the Intelligence Engines' own
+ * runWebSearch calls) already handles the empty shape and needs no changes.
  */
+// Crawl this many of the top hits for full content — balances grounding depth against latency.
+// 3 (was 4): each enriched hit is a full crawl4ai page render (up to page_timeout), and several
+// providers each call runWebSearch, so this count multiplies across the whole research fan-out.
+// Dropping the 4th hit cuts ~25% of enrichment crawls for marginal signal loss (the top 3 SearXNG
+// hits carry most of it; the rest still contribute their snippet). Env-tunable.
+const ENRICH_TOP_N = Math.max(1, Number(process.env.WEB_SEARCH_ENRICH_TOP_N ?? 3));
+const REFINED_CHARS_PER_HIT = 1800; // post-refine per-hit budget: dense, de-noised text, not a whole page dump
+
 export async function runWebSearch(prompt: string): Promise<WebSearchOutcome> {
   const assignment = resolveSearchTask("web-research");
   const { results, searchesUsed } = await searchRouter.runSearch(assignment, prompt, { maxResults: 5 });
   if (results.length === 0) return { narrative: "", citations: [], searchesUsed: 0 };
 
-  const narrative = results.map((r) => `${r.title}\n${r.snippet}`).join("\n\n");
+  // Enrich the top hits with full page content, all concurrently, then REFINE each crawl down
+  // to only the query-relevant, boilerplate-stripped passages (contentRefiner — no LLM, pure
+  // string work). This is the token-cost lever: a raw crawl is mostly nav/footer/cookie/link
+  // noise; refining sends the reasoning model dense signal instead of a whole rendered page,
+  // which keeps per-call token cost down on metered Bedrock. Each enrichment failing (crawl4ai
+  // down, page blocked, timeout) resolves to null and
+  // falls back to the SearXNG snippet — the search result is never lost because a crawl missed.
+  const toEnrich = results.slice(0, ENRICH_TOP_N);
+  const enriched = await Promise.all(
+    toEnrich.map(async (r) => {
+      try {
+        const { data } = await crawl4aiScrape(r.url, ["markdown"]);
+        const md = data?.markdown?.trim();
+        if (!md) return null;
+        const refined = refineContent(md, prompt, { maxChars: REFINED_CHARS_PER_HIT });
+        return refined || null;
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  const narrative = results
+    .map((r, i) => {
+      const body = (i < enriched.length && enriched[i]) || r.snippet || "";
+      return `${r.title}\n${body}`;
+    })
+    .join("\n\n");
   const citations = results.map((r) => ({ url: r.url, title: r.title }));
   return { narrative, citations, searchesUsed };
 }
 
-/** mistral-embed when MISTRAL_API_KEY is configured, else throws — same "not configured"
- * contract openaiClient.ts's createEmbedding had, so MemoryCoordinator.ts's existing
- * try/catch around this call needs no changes. */
+/** Bedrock Titan Text Embeddings V2 when AWS_BEARER_TOKEN_BEDROCK is configured, else throws —
+ * same "not configured → throw" contract as before, so MemoryCoordinator.ts's existing try/catch
+ * around this call needs no changes. */
 export async function createEmbedding(text: string): Promise<number[]> {
-  const embedding = await mistral.createEmbedding(text);
-  if (!embedding) throw new Error("MISTRAL_API_KEY is not set (or Mistral returned no embedding)");
+  const embedding = await bedrock.createEmbedding(text);
+  if (!embedding) throw new Error("AWS_BEARER_TOKEN_BEDROCK is not set (or Bedrock returned no embedding)");
   return embedding;
 }

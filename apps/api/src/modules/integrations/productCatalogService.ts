@@ -21,35 +21,6 @@ const CATALOG_ADAPTERS: Partial<Record<ProductCatalogSource, ProductCatalogAdapt
   woocommerce: wooCommerceCatalogAdapter,
 };
 
-const PLACEHOLDER_IMAGE = (seed: string) => `https://placehold.co/300x300/7033f5/ffffff?text=${encodeURIComponent(seed)}`;
-
-const MOCK_CATALOGS: Record<ProductCatalogSource, Omit<ProductCatalogItem, "id" | "source">[]> = {
-  shopify: [
-    { name: "Aurora Wireless Earbuds", category: "Electronics", priceCents: 7999, imageUrl: PLACEHOLDER_IMAGE("Earbuds"), url: "https://store.example.com/products/aurora-earbuds" },
-    { name: "Nimbus Weekender Bag", category: "Bags", priceCents: 12900, imageUrl: PLACEHOLDER_IMAGE("Weekender"), url: "https://store.example.com/products/nimbus-bag" },
-    { name: "Solstice Stainless Bottle", category: "Home & Living", priceCents: 2400, imageUrl: PLACEHOLDER_IMAGE("Bottle"), url: "https://store.example.com/products/solstice-bottle" },
-    { name: "Drift Comfort Sneakers", category: "Footwear", priceCents: 8900, imageUrl: PLACEHOLDER_IMAGE("Sneakers"), url: "https://store.example.com/products/drift-sneakers" },
-    { name: "Halo Skincare Set", category: "Beauty", priceCents: 5400, imageUrl: PLACEHOLDER_IMAGE("Skincare"), url: "https://store.example.com/products/halo-skincare" },
-  ],
-  facebook: [
-    { name: "Everyday Tote", category: "Bags", priceCents: 5900, imageUrl: PLACEHOLDER_IMAGE("Tote"), url: "https://facebook.com/commerce/tote" },
-    { name: "Fitness Resistance Bands Set", category: "Fitness", priceCents: 1999, imageUrl: PLACEHOLDER_IMAGE("Bands"), url: "https://facebook.com/commerce/bands" },
-    { name: "Minimal Desk Lamp", category: "Home & Living", priceCents: 3400, imageUrl: PLACEHOLDER_IMAGE("Lamp"), url: "https://facebook.com/commerce/lamp" },
-    { name: "Organic Cotton Tee", category: "Apparel", priceCents: 2200, imageUrl: PLACEHOLDER_IMAGE("Tee"), url: "https://facebook.com/commerce/tee" },
-  ],
-  google: [
-    { name: "Portable Espresso Maker", category: "Kitchen", priceCents: 6500, imageUrl: PLACEHOLDER_IMAGE("Espresso"), url: "https://merchant.example.com/products/espresso-maker" },
-    { name: "Adjustable Laptop Stand", category: "Office", priceCents: 4200, imageUrl: PLACEHOLDER_IMAGE("Stand"), url: "https://merchant.example.com/products/laptop-stand" },
-    { name: "Noise-Isolating Headphones", category: "Electronics", priceCents: 9900, imageUrl: PLACEHOLDER_IMAGE("Headphones"), url: "https://merchant.example.com/products/headphones" },
-    { name: "Insulated Lunch Box", category: "Kitchen", priceCents: 1800, imageUrl: PLACEHOLDER_IMAGE("Lunchbox"), url: "https://merchant.example.com/products/lunch-box" },
-  ],
-  woocommerce: [
-    { name: "Canvas Utility Apron", category: "Home & Living", priceCents: 3200, imageUrl: PLACEHOLDER_IMAGE("Apron"), url: "https://store.example.com/product/canvas-apron" },
-    { name: "Ceramic Pour-Over Set", category: "Kitchen", priceCents: 4800, imageUrl: PLACEHOLDER_IMAGE("Pour-Over"), url: "https://store.example.com/product/pour-over-set" },
-    { name: "Wool Throw Blanket", category: "Home & Living", priceCents: 6900, imageUrl: PLACEHOLDER_IMAGE("Blanket"), url: "https://store.example.com/product/wool-throw" },
-  ],
-};
-
 export interface CatalogSourceResult {
   source: ProductCatalogSource;
   connected: boolean;
@@ -67,17 +38,26 @@ export interface CatalogSourceResult {
  */
 async function fetchItems(workspaceId: string, source: ProductCatalogSource, connected: boolean): Promise<Omit<ProductCatalogItem, "id" | "source">[]> {
   const adapter = CATALOG_ADAPTERS[source];
-  if (!adapter || (!adapter.hasLiveCredentials && !connected)) return MOCK_CATALOGS[source];
+  // No real catalog adapter/credentials (e.g. facebook/google, which have no live adapter yet) →
+  // return NO products rather than a fabricated demo catalog ("Aurora Wireless Earbuds"). The
+  // picker shows an empty/"connect a store" state for that source instead of fake items.
+  if (!adapter || (!adapter.hasLiveCredentials && !connected)) return [];
 
   try {
     return await adapter.fetchCatalog(workspaceId);
   } catch (err) {
-    logger.error(`Falling back to mock catalog for ${source} after live fetch failed`, err);
-    return MOCK_CATALOGS[source];
+    logger.error(`Live catalog fetch failed for ${source} — returning no products (no mock fallback)`, err);
+    return [];
   }
 }
 
 async function catalogForSource(workspaceId: string, source: ProductCatalogSource): Promise<CatalogSourceResult> {
+  // NOTE: the "coming soon" MVP guardrail lives at the user-facing boundaries — the Shopify OAuth
+  // routes (can't link a new store) and the /products picker endpoint (router.ts returns 501 for
+  // an explicit source). It is deliberately NOT enforced here: this shared read is also used by
+  // internal analytics (AudienceIntelligenceEngine's LTV proxy), which should still read a catalog
+  // that is already connected. In practice nothing can connect a store while the OAuth route is
+  // gated, so this returns empty for real workspaces anyway.
   const platform = SOURCE_TO_PLATFORM[source];
   const integrations = await getOrCreateIntegrations(workspaceId);
   const integration = integrations.find((i) => i.platform === platform);

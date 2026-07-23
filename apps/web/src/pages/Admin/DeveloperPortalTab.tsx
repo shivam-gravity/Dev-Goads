@@ -180,21 +180,10 @@ export default function DeveloperPortalTab() {
       <section className="card">
         <h2>API Rate Limiting</h2>
         <p className="muted-text mt-1">Workspace rate limits are dynamically applied based on your subscription tier.</p>
-        
-        <div className="mt-4 flex items-center gap-4">
-          <div style={{ flex: 1 }}>
-            <div className="flex justify-between font-size-12 mb-1" style={{ fontWeight: 600 }}>
-              <span>Request Quota</span>
-              <span>420 / 1,000 requests (minute window)</span>
-            </div>
-            <div style={{ height: "8px", background: "#f3f4f6", borderRadius: "4px", overflow: "hidden" }}>
-              <div style={{ width: "42%", height: "100%", background: "#7033f5" }} />
-            </div>
-          </div>
-          <div className="status status-active" style={{ background: "rgba(16, 185, 129, 0.08)", color: "#10b981", fontWeight: 700 }}>
-            42% Usage
-          </div>
-        </div>
+
+        {/* No fabricated usage numbers: there's no live rate-limit-usage feed yet, so show the honest
+            "not available" state rather than a hardcoded "420 / 1,000 · 42%" bar that looks real. */}
+        <p className="muted-text mt-4 font-size-12">Live request-quota usage is not available yet.</p>
       </section>
     </div>
   );

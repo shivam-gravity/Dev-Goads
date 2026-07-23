@@ -80,15 +80,44 @@ export { RedditProvider } from "./RedditProvider.js";
  * research/types/index.ts), following the exact same webSearchThenStructure pattern as
  * every original provider.
  *
- * The 7 providers below LegalRegulatoryProvider are the Firecrawl-backed crawler batch
- * (Product, Navigation, Search-ranking, Ad Library, Autocomplete, Google SERP features,
- * Reddit) — see infra/firecrawlClient.ts for the shared client + monthly credit budget
- * guard every one of them calls through. WebsiteProvider, ReviewsProvider, and
- * SocialMediaProvider (above) were also upgraded in this batch to try a real Firecrawl
- * crawl first, same field/shape, falling back to their original behavior unchanged.
+ * The 7 providers below LegalRegulatoryProvider are the crawler batch (Product, Navigation,
+ * Search-ranking, Ad Library, Autocomplete, Google SERP features, Reddit). Their scrape/map/
+ * crawl needs go through infra/scrapeFallback.ts, which runs the in-house Playwright scraper
+ * (scraper-service) and the self-hosted crawl4ai service concurrently and merges the results —
+ * no metered vendor, no credit budget (Firecrawl was removed). WebsiteProvider, ReviewsProvider,
+ * and SocialMediaProvider (above) draw on the same crawl layer.
  */
+/**
+ * The subset of provider names whose output a Meta ad actually consumes — the "essential"
+ * set used when META_ADS_ESSENTIAL_ONLY is on (the default). This is a deliberate scope cut:
+ * the platform currently runs ads on Meta only, and the campaign it builds needs product
+ * positioning, audience/interest data, competitors+budget, market/location+channel, and a
+ * creative reference — nothing else. The ~17 dropped providers (news, social-media, reviews,
+ * funding, hiring-signals, content-marketing, backlink-authority, app-store, video-presence,
+ * local-presence, partnerships, legal-regulatory, technology, navigation, search-ranking,
+ * serp-features, reddit) are honestly empty for most private/B2B businesses — they scored ~0.3
+ * and both dragged overall confidence down AND competed for the free-tier LLM rate budget,
+ * turning a focused Meta run into a 22-minute, 27-source crawl. Trimming to the essentials makes
+ * the run faster (fewer calls -> under the per-minute limit) and lifts confidence onto data that
+ * matters. Set META_ADS_ESSENTIAL_ONLY=false to restore the full research sweep.
+ */
+const META_ESSENTIAL_PROVIDERS = new Set<string>([
+  "website", // product positioning + on-site facts (also feeds the fact-first pipeline)
+  "search", // general web grounding shared by the reasoning providers
+  "company", // brand/company identity behind the ad
+  "market", // MarketIntelligenceProvider — market trends + region/location + channel
+  "competitor", // CompetitorIntelligenceProvider — competitors + differentiation for budget
+  "audience", // AudienceIntelligenceProvider — audience profile + interest targeting
+  "seo", // keyword/search-intent signal that seeds Meta interest mining
+  "product", // pricing tiers + feature comparison for offer/creative
+  "autocomplete", // audience-intent keyword expansion for interest mining
+  "ad-library", // competitor Meta/Google ad creative reference
+]);
+
+const META_ADS_ESSENTIAL_ONLY = process.env.META_ADS_ESSENTIAL_ONLY !== "false";
+
 export function createResearchProviders(): ResearchProvider<unknown>[] {
-  return [
+  const all = [
     new WebsiteProvider(),
     new SearchProvider(),
     new CompanyProvider(),
@@ -117,4 +146,7 @@ export function createResearchProviders(): ResearchProvider<unknown>[] {
     new GoogleSerpFeaturesProvider(),
     new RedditProvider(),
   ] as ResearchProvider<unknown>[];
+
+  if (!META_ADS_ESSENTIAL_ONLY) return all;
+  return all.filter((p) => META_ESSENTIAL_PROVIDERS.has(p.name));
 }

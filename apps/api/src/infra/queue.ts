@@ -166,3 +166,25 @@ export const competitorAdRefreshQueue = new Queue(COMPETITOR_AD_REFRESH_QUEUE, {
     removeOnFail: { age: 7 * 24 * 60 * 60 },
   },
 });
+
+/**
+ * Vector (SVG) ad-image generation via Claude on Amazon Bedrock — enqueued best-effort at the tail
+ * of the campaign-generation pipeline (campaignGenerationPipeline.ts) so the campaign returns fast
+ * and the grounded ad-image SET lands asynchronously and attaches to the campaign's creativeAssets.
+ * A SEPARATE queue from campaign-generation on purpose: it must not block or fail the campaign build,
+ * its retry granularity is independent, and it's the only stage that depends on the Bedrock bearer
+ * token (so a Bedrock outage retries here without re-running the whole 27-provider/20-agent pipeline).
+ * attempts: 2 — a failed image burst is cheap to retry (one Bedrock call per variant), unlike
+ * campaign-generation which double-spends a whole research pipeline on retry.
+ */
+export const VECTOR_AD_GENERATION_QUEUE = "vector-ad-generation";
+
+export const vectorAdGenerationQueue = new Queue(VECTOR_AD_GENERATION_QUEUE, {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: { type: "exponential", delay: 5000 },
+    removeOnComplete: { age: 24 * 60 * 60 },
+    removeOnFail: { age: 7 * 24 * 60 * 60 },
+  },
+});

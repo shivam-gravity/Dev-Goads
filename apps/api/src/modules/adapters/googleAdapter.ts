@@ -16,6 +16,16 @@ import { logger } from "../logger/logger.js";
 const ADS_API_VERSION = "v24";
 const ADS_API_BASE = `https://googleads.googleapis.com/${ADS_API_VERSION}`;
 
+// Maps the Ads Manager range picker's Meta-style presets to GAQL predefined date ranges. Google
+// has no built-in 14/90-day range, so last_14d falls back to LAST_30_DAYS and last_90d/maximum
+// omit the clause entirely (account default). Presets not listed here disable the DURING clause.
+const GOOGLE_DATE_RANGES: Record<string, string> = {
+  today: "TODAY",
+  last_7d: "LAST_7_DAYS",
+  last_14d: "LAST_30_DAYS",
+  last_30d: "LAST_30_DAYS",
+};
+
 const ENV_GOOGLE_ADS_DEVELOPER_TOKEN = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
 const ENV_GOOGLE_ADS_CUSTOMER_ID = process.env.GOOGLE_ADS_CUSTOMER_ID;
 const ENV_GOOGLE_ADS_ACCESS_TOKEN = process.env.GOOGLE_ADS_ACCESS_TOKEN;
@@ -82,46 +92,97 @@ async function cleanupOrphanedBudget(customerId: string, developerToken: string,
 
 const RSA_HEADLINE_MAX_CHARS = 30;
 const RSA_DESCRIPTION_MAX_CHARS = 90;
+// Google rejects an RSA with fewer than 3 headlines or 2 descriptions.
+const RSA_MIN_HEADLINES = 3;
+const RSA_MIN_DESCRIPTIONS = 2;
+// Google's hard per-ad ceilings.
+const RSA_MAX_HEADLINES = 15;
+const RSA_MAX_DESCRIPTIONS = 4;
 
 function truncate(text: string, maxChars: number): string {
   return text.length <= maxChars ? text : text.slice(0, maxChars - 1).trimEnd() + "…";
 }
 
+function dedupeAssets(values: string[], maxChars: number, cap: number): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of values) {
+    const text = truncate((raw ?? "").trim(), maxChars);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
 /**
- * Google requires at least 3 headlines and 2 descriptions for a Responsive Search Ad —
- * a single-headline/single-body creative (all this app generates today) would be
- * rejected outright. Synthesizes the minimum from the headline/body/CTA already on
- * hand rather than failing; a real improvement would have the AI generation pipeline
- * produce multiple variants directly.
+ * Builds the RSA headline/description assets Google actually publishes, from the creative's
+ * multi-asset pools (`headlines` — up to 5 — and `descriptions` — up to 4 — populated by the AI
+ * copy pipeline; see strategyEngine.withCreativeVariants). Each asset is truncated to Google's
+ * per-asset limit (≤30 headline, ≤90 description) and de-duplicated.
+ *
+ * Google rejects an RSA with fewer than 3 headlines / 2 descriptions. If the pools are thin (e.g.
+ * a creative built without a CreativeAgent result, or a legacy single-pair creative), we synthesize
+ * the shortfall from the headline/body/CTA on hand rather than letting the API reject the ad — this
+ * is the last safety net; the AI pipeline is expected to supply the full 5×4 set directly.
  */
-function buildResponsiveSearchAdAssets(creative: { headline: string; body: string; callToAction: string }) {
-  const headlineCandidates = [creative.headline, creative.callToAction, `${creative.headline} — ${creative.callToAction}`];
-  const descriptionCandidates = [creative.body, `${creative.body} ${creative.callToAction}.`];
+export function buildResponsiveSearchAdAssets(creative: { headline: string; body: string; callToAction: string; headlines?: string[]; descriptions?: string[] }) {
+  const headlines = dedupeAssets(
+    creative.headlines?.length ? creative.headlines : [creative.headline],
+    RSA_HEADLINE_MAX_CHARS,
+    RSA_MAX_HEADLINES,
+  );
+  const descriptions = dedupeAssets(
+    creative.descriptions?.length ? creative.descriptions : [creative.body],
+    RSA_DESCRIPTION_MAX_CHARS,
+    RSA_MAX_DESCRIPTIONS,
+  );
+
+  // Synthesize up to the required minimum only if the real pool fell short.
+  const headlineFallbacks = [creative.callToAction, `${creative.headline} — ${creative.callToAction}`, creative.headline];
+  for (const candidate of headlineFallbacks) {
+    if (headlines.length >= RSA_MIN_HEADLINES) break;
+    const text = truncate((candidate ?? "").trim(), RSA_HEADLINE_MAX_CHARS);
+    if (text && !headlines.includes(text)) headlines.push(text);
+  }
+  const descriptionFallbacks = [`${creative.body} ${creative.callToAction}.`, creative.body];
+  for (const candidate of descriptionFallbacks) {
+    if (descriptions.length >= RSA_MIN_DESCRIPTIONS) break;
+    const text = truncate((candidate ?? "").trim(), RSA_DESCRIPTION_MAX_CHARS);
+    if (text && !descriptions.includes(text)) descriptions.push(text);
+  }
+
   return {
-    headlines: headlineCandidates.map((text) => ({ text: truncate(text, RSA_HEADLINE_MAX_CHARS) })),
-    descriptions: descriptionCandidates.map((text) => ({ text: truncate(text, RSA_DESCRIPTION_MAX_CHARS) })),
+    headlines: headlines.map((text) => ({ text })),
+    descriptions: descriptions.map((text) => ({ text })),
   };
 }
 
 export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
   network: "google",
 
-  async launchVariant(input: LaunchVariantInput): Promise<LaunchVariantResult> {
+  async launchVariant(input: LaunchVariantInput, credentials?: unknown): Promise<LaunchVariantResult> {
     logger.info(`Initializing launchVariant on Google Ads network for campaign: ${input.campaignId}`);
 
-    if (!hasLiveCredentials) {
+    // Resolve per-workspace credentials FIRST (explicit > global env > null). Never read the
+    // global env tokens without checking the explicit workspace credentials — otherwise a caller
+    // that doesn't thread creds through would publish into whatever global customer the env vars
+    // happen to point at, cross-tenant.
+    const creds = resolveCredentials(credentials as GoogleAdsCredentials | undefined);
+    if (!creds) {
       logger.info("Credentials absent. Falling back to Google Ads mock ad placement.");
       return { externalId: mockId("gads_ad"), status: "active" };
     }
 
     try {
-      const url = `https://googleads.googleapis.com/v24/customers/${ENV_GOOGLE_ADS_CUSTOMER_ID}/adGroupAds:mutate`;
+      const url = `https://googleads.googleapis.com/v24/customers/${creds.customerId}/adGroupAds:mutate`;
       const res = await fetchWithRetry(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${ENV_GOOGLE_ADS_ACCESS_TOKEN}`,
-          "developer-token": ENV_GOOGLE_ADS_DEVELOPER_TOKEN!,
+          Authorization: `Bearer ${creds.accessToken}`,
+          "developer-token": creds.developerToken,
         },
         body: JSON.stringify({
           operations: [
@@ -130,9 +191,10 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
                 status: "ENABLED",
                 ad: {
                   finalUrls: ["https://example.com"],
-                  responsiveSearchAd: {
-                    headlines: [{ text: input.creative.headline }]
-                  }
+                  // Full multi-asset RSA (up to 5 headlines / 4 descriptions from the creative's
+                  // pools), not a single headline — Google rejects an RSA below 3 headlines / 2
+                  // descriptions, which the previous single-headline payload would have hit.
+                  responsiveSearchAd: buildResponsiveSearchAdAssets(input.creative),
                 },
               },
             },
@@ -156,7 +218,7 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
     }
   },
 
-  async pauseVariant(externalId: string): Promise<void> {
+  async pauseVariant(externalId: string, _credentials?: unknown): Promise<void> {
     logger.info(`Initializing pauseVariant on Google Ads for resource: ${externalId}`);
     if (!hasLiveCredentials) {
       logger.info("Offline mode. Mock pausing Google Ads variant.");
@@ -183,7 +245,7 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
     }
   },
 
-  async activateVariant(externalId: string): Promise<void> {
+  async activateVariant(externalId: string, _credentials?: unknown): Promise<void> {
     logger.info(`Initializing activateVariant on Google Ads for resource: ${externalId}`);
     if (!hasLiveCredentials) {
       logger.info("Offline mode. Mock activating Google Ads variant.");
@@ -210,7 +272,7 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
     }
   },
 
-  async setBudget(input: SetBudgetInput): Promise<void> {
+  async setBudget(input: SetBudgetInput, _credentials?: unknown): Promise<void> {
     logger.info(`Updating daily budget for Google Ads resource: ${input.externalId} to ${input.dailyBudgetCents} cents`);
     if (!hasLiveCredentials) {
       logger.info("Offline mode. Mock budget change complete.");
@@ -242,46 +304,69 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
     }
   },
 
-  async fetchInsights(externalId: string) {
+  async fetchInsights(externalId: string, dateOrPreset?: string, explicit?: GoogleAdsCredentials) {
     logger.info(`Fetching performance insights for Google Ads resource: ${externalId}`);
+    const creds = resolveCredentials(explicit);
 
-    if (!hasLiveCredentials) {
-      const impressions = Math.floor(1500 + Math.random() * 9000);
-      // Google Search campaigns don't report a native unique-reach metric (that's a
-      // Display/Video concept) — estimated the same plausible-fraction way as the mock
-      // branch above, not queried, even once real credentials exist (see below).
-      const reach = Math.floor(impressions * (0.5 + Math.random() * 0.3));
-      const clicks = Math.floor(impressions * (0.015 + Math.random() * 0.035));
-      const conversions = Math.floor(clicks * (0.03 + Math.random() * 0.07));
-      const spendCents = Math.floor(clicks * (40 + Math.random() * 80));
-      logger.info(`Offline mode. Generated mock insights metrics for ${externalId}`);
-      return { impressions, reach, clicks, conversions, spendCents };
+    if (!creds) {
+      // No connected Google Ads account → NO fabricated metrics. Return real zeros for an honest
+      // "no data yet" state instead of Math.random()-invented performance shown as real.
+      logger.info(`No Google credentials for ${externalId} — returning zero metrics (no fabricated data).`);
+      return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0 };
     }
 
+    // Map the Ads Manager range picker's Meta-style presets to GAQL predefined date ranges. Google
+    // has no >30-day preset, so last_90d/maximum omit the DURING clause (account default window).
+    const duringClause = GOOGLE_DATE_RANGES[dateOrPreset ?? ""] ? ` DURING ${GOOGLE_DATE_RANGES[dateOrPreset ?? ""]}` : "";
+    const url = `${ADS_API_BASE}/customers/${creds.customerId}/googleAds:search`;
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${creds.accessToken}`,
+      "developer-token": creds.developerToken,
+    };
+
     try {
-      const query = `SELECT metrics.impressions, metrics.clicks, metrics.conversions, metrics.cost_micros
-                     FROM ad_group_ad WHERE ad_group_ad.resource_name = '${externalId}'`;
-      const url = `https://googleads.googleapis.com/v24/customers/${ENV_GOOGLE_ADS_CUSTOMER_ID}/googleAds:search`;
-      const res = await fetchWithRetry(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${ENV_GOOGLE_ADS_ACCESS_TOKEN}`,
-          "developer-token": ENV_GOOGLE_ADS_DEVELOPER_TOKEN!,
-        },
-        body: JSON.stringify({ query }),
-      });
+      // metrics.conversions_value is the real revenue Google attributes to the ad's conversions
+      // (in the account currency, as a decimal) — needed for true ROAS (revenue / spend).
+      // Unsegmented so impressions/clicks/cost aren't duplicated across rows.
+      const query = `SELECT metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value, metrics.cost_micros
+                     FROM ad_group_ad WHERE ad_group_ad.resource_name = '${externalId}'${duringClause}`;
+      const res = await fetchWithRetry(url, { method: "POST", headers, body: JSON.stringify({ query }) });
 
       const json = (await res.json()) as any;
 
       // Response validation
       if (!json || !json.results || !json.results[0]) {
         logger.warn(`No search results returned for Google Ads resource: ${externalId}. Returning zero metrics.`);
-        return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0 };
+        return { impressions: 0, reach: 0, clicks: 0, conversions: 0, spendCents: 0, revenueCents: 0 };
       }
 
       const metrics = json.results[0].metrics || {};
       const impressions = Number(metrics.impressions ?? 0);
+
+      // Funnel breakout: segment conversions by conversion_action_category in a SEPARATE query so the
+      // repeated core metrics (impressions/clicks/cost) from segmentation don't inflate the totals
+      // above. Google's ecommerce categories map onto our Meta-shaped funnel: ADD_TO_CART → addToCart,
+      // BEGIN_CHECKOUT → addPaymentInfo (closest analog; Google has no add_payment_info), PURCHASE →
+      // purchases. Best-effort — a failure here must not drop the core metrics, so it's caught.
+      const funnel = { addToCart: 0, addPaymentInfo: 0, purchases: 0, purchaseValueCents: 0 };
+      try {
+        const funnelQuery = `SELECT segments.conversion_action_category, metrics.conversions, metrics.conversions_value
+                             FROM ad_group_ad WHERE ad_group_ad.resource_name = '${externalId}'${duringClause}`;
+        const fRes = await fetchWithRetry(url, { method: "POST", headers, body: JSON.stringify({ query: funnelQuery }) });
+        const fJson = (await fRes.json()) as any;
+        for (const row of fJson?.results ?? []) {
+          const category = row?.segments?.conversionActionCategory;
+          const count = Number(row?.metrics?.conversions ?? 0);
+          const valueCents = Math.round(Number(row?.metrics?.conversionsValue ?? 0) * 100);
+          if (category === "ADD_TO_CART") funnel.addToCart += count;
+          else if (category === "BEGIN_CHECKOUT") funnel.addPaymentInfo += count;
+          else if (category === "PURCHASE") { funnel.purchases += count; funnel.purchaseValueCents += valueCents; }
+        }
+      } catch (err) {
+        logger.warn(`Google funnel breakdown query failed for ${externalId} — returning core metrics without funnel.`, err);
+      }
+
       const stats = {
         impressions,
         // No ad_group_ad-level reach field exists in the Google Ads API for Search — same
@@ -290,6 +375,9 @@ export const googleAdapter: AdAdapter & HierarchyCapableAdapter = {
         clicks: Number(metrics.clicks ?? 0),
         conversions: Number(metrics.conversions ?? 0),
         spendCents: Math.round(Number(metrics.costMicros ?? 0) / 10000),
+        // conversionsValue is a decimal currency amount (e.g. 129.99) → cents.
+        revenueCents: Math.round(Number(metrics.conversionsValue ?? 0) * 100),
+        funnel,
       };
       logger.info(`Google Ads insights metrics fetched: Clicks: ${stats.clicks}, Spend: ${stats.spendCents} cents`);
       return stats;

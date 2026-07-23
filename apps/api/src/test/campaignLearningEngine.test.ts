@@ -20,6 +20,7 @@ function fakeMetric(campaignId: string, overrides: Partial<PerformanceMetric> = 
     clicks: 40,
     conversions: 6,
     spendCents: 2000,
+    revenueCents: 12000,
     ...overrides,
   };
 }

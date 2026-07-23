@@ -128,20 +128,51 @@ test("findReusableResearch - one business's completed job is never returned for 
   }
 });
 
-test("findReusableResearch - returns the most-recently-completed row when several are valid", async () => {
+test("findReusableResearch - ties on confidence break toward the most-recently-completed row", async () => {
   const ws = randomUUID(), biz = randomUUID(), url = `https://order-${randomUUID()}.example.com`;
   try {
+    // Both healthy and equal-confidence (default 0.9) → newest wins the tie.
     const older = await seedResearchJob({ workspaceId: ws, businessId: biz, url, ageMs: HOUR / 2 }); // 30m ago
     const newer = await seedResearchJob({ workspaceId: ws, businessId: biz, url, ageMs: 60_000 });   // 1m ago
     const hit = await findReusableResearch(ws, biz, url, HOUR, DEFAULT_MIN_CONFIDENCE);
-    assert.strictEqual(hit?.researchJobId, newer, "must return the newest completed research job");
+    assert.strictEqual(hit?.researchJobId, newer, "on equal confidence, return the newest completed research job");
     assert.notStrictEqual(hit?.researchJobId, older);
   } finally {
     await prisma.researchJob.deleteMany({ where: { workspaceId: ws } });
   }
 });
 
-// ── Quality-gate predicate (isReusableContext) — pure logic, no DB, no Groq ──
+test("findReusableResearch - serves the HIGHEST-confidence row, even if an older run beats a newer one", async () => {
+  const ws = randomUUID(), biz = randomUUID(), url = `https://conf-${randomUUID()}.example.com`;
+  try {
+    // The higher-confidence run is OLDER; a later, WORSE run must NOT downgrade what's served.
+    const betterOlder = await seedResearchJob({ workspaceId: ws, businessId: biz, url, ageMs: HOUR / 2, overallConfidence: 0.88 });
+    const worseNewer = await seedResearchJob({ workspaceId: ws, businessId: biz, url, ageMs: 60_000, overallConfidence: 0.70 });
+    const hit = await findReusableResearch(ws, biz, url, HOUR, DEFAULT_MIN_CONFIDENCE);
+    assert.strictEqual(hit?.researchJobId, betterOlder, "the highest-confidence run wins regardless of recency");
+    assert.notStrictEqual(hit?.researchJobId, worseNewer);
+  } finally {
+    await prisma.researchJob.deleteMany({ where: { workspaceId: ws } });
+  }
+});
+
+test("findReusableResearch - a new higher-confidence run supersedes a previously-served lower one", async () => {
+  const ws = randomUUID(), biz = randomUUID(), url = `https://supersede-${randomUUID()}.example.com`;
+  try {
+    // First only a modest run exists → it's served.
+    const modest = await seedResearchJob({ workspaceId: ws, businessId: biz, url, ageMs: HOUR / 2, overallConfidence: 0.68 });
+    const first = await findReusableResearch(ws, biz, url, HOUR, DEFAULT_MIN_CONFIDENCE);
+    assert.strictEqual(first?.researchJobId, modest, "the only eligible run is served");
+    // A new, higher-confidence run lands → it now supersedes the modest one.
+    const better = await seedResearchJob({ workspaceId: ws, businessId: biz, url, ageMs: 30_000, overallConfidence: 0.85 });
+    const second = await findReusableResearch(ws, biz, url, HOUR, DEFAULT_MIN_CONFIDENCE);
+    assert.strictEqual(second?.researchJobId, better, "the new higher-confidence run is now served");
+  } finally {
+    await prisma.researchJob.deleteMany({ where: { workspaceId: ws } });
+  }
+});
+
+// ── Quality-gate predicate (isReusableContext) — pure logic, no DB, no LLM ──
 
 test("isReusableContext - rejects a null company identity anchor even at high confidence", () => {
   // The hard invariant: no company identity → reject regardless of how high overallConfidence is

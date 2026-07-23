@@ -1,5 +1,6 @@
 import { normalizePerformance, getRawMetrics } from "../pipeline/performancePipeline.js";
 import { getCampaign, pauseVariant, reallocateBudget } from "../orchestrator/campaignOrchestrator.js";
+import { tuneAudiences } from "./audienceTuning.js";
 import { computeFatigueScore } from "./creativeFatigueDetector.js";
 import { createGenerationJob, hasRecentFatigueRefresh } from "../generation/generationJobService.js";
 import { creativeGenerationQueue } from "../../infra/queue.js";
@@ -129,6 +130,12 @@ export async function runOptimizationPass(campaignId: string): Promise<Optimizat
       decisions.push({ campaignId, chosenVariantId: variant.id, action: "hold", reason: "Accumulating data before reallocating", decidedAt });
     }
   }
+
+  // Audience-level tuning runs after the per-variant pass: the variant loop optimizes individual
+  // ads, this prunes a whole audience segment that's structurally unprofitable (targeting is
+  // otherwise frozen at launch). Uses the same stats snapshot so it doesn't double-count spend.
+  const audienceDecisions = await tuneAudiences(campaign, stats);
+  decisions.push(...audienceDecisions);
 
   return decisions;
 }

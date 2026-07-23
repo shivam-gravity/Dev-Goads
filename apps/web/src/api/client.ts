@@ -1,13 +1,5 @@
 const BASE_URL = "/api";
 
-// There is no login flow, so no bearer token is ever attached — every request relies on
-// the gateway/auth-service's dev-mode bypass (see apps/auth-service/src/requireUser.ts),
-// which resolves an unauthenticated request to the seeded demo user outside production.
-
-// Defense-in-depth: the backend should never send internals in an error message
-// (see docs/architecture-roadmap.md and the 2026-07-06 QA report), but if it ever
-// does — a misconfigured environment, a new endpoint that forgot the pattern —
-// this stops a raw stack trace from ending up on someone's screen.
 const LOOKS_INTERNAL = /prisma|stacktrace|\.(ts|js):\d+|at\s+\w+\s*\(/i;
 const GENERIC_ERROR = "Something went wrong. Please try again.";
 
@@ -26,14 +18,73 @@ function extractErrorMessage(error: unknown): string {
   return GENERIC_ERROR;
 }
 
+export function getAccessToken(): string | null {
+  return localStorage.getItem("polluxa_access_token");
+}
+
+export function getRefreshToken(): string | null {
+  return localStorage.getItem("polluxa_refresh_token");
+}
+
+export function setTokens(accessToken: string, refreshToken: string): void {
+  localStorage.setItem("polluxa_access_token", accessToken);
+  localStorage.setItem("polluxa_refresh_token", refreshToken);
+}
+
+export function clearTokens(): void {
+  localStorage.removeItem("polluxa_access_token");
+  localStorage.removeItem("polluxa_refresh_token");
+}
+
+let refreshPromise: Promise<string | null> | null = null;
+
+async function attemptTokenRefresh(): Promise<string | null> {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    const rt = getRefreshToken();
+    if (!rt) return null;
+    try {
+      const res = await fetch(`${BASE_URL}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: rt }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      setTokens(data.accessToken, data.refreshToken);
+      return data.accessToken as string;
+    } catch {
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string> | undefined),
+  };
+  const token = getAccessToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  let res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+
+  if (res.status === 401 && token) {
+    const newToken = await attemptTokenRefresh();
+    if (newToken) {
+      headers["Authorization"] = `Bearer ${newToken}`;
+      res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+    } else {
+      clearTokens();
+      if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+        window.location.href = "/login";
+      }
+      throw new Error("Session expired");
+    }
+  }
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -55,6 +106,7 @@ export interface CreativeAssetRef { id: string; url: string; type: "image" | "vi
 export interface Campaign {
   id: string; businessId: string; workspaceId?: string; strategyId: string; name: string; status: string;
   networks: ("meta" | "google")[]; dailyBudgetCents: number; variants: CampaignVariant[];
+  objective?: string; autoOptimize?: boolean;
   createdAt: string; updatedAt: string;
   conversionEvent?: string; finalUrl?: string; startDate?: string; endDate?: string;
   locations?: string[]; advantagePlus?: boolean;
@@ -81,10 +133,26 @@ export interface NormalizedPerformance {
   impressions: number; reach: number; clicks: number; conversions: number; spendCents: number;
   ctr: number; cpaCents: number | null; cpmCents: number | null; cpcCents: number | null; roas: number | null; conversionRate: number;
 }
+export interface FunnelMetrics { addToCart: number; addPaymentInfo: number; purchases: number; purchaseValueCents: number; }
+/** Per-network slice of a campaign's live metrics — one entry per network the campaign runs on,
+ * so a dual-network campaign can be shown as separate Meta and Google rows. dailyBudgetCents is the
+ * campaign's budget split proportionally by that network's live-variant count. */
+export interface NetworkSlice {
+  impressions: number; reach: number; clicks: number; conversions: number; spendCents: number; revenueCents: number;
+  dailyBudgetCents: number; liveVariantCount: number;
+  ctr: number; cpcCents: number | null; cpmCents: number | null; roas: number | null;
+  funnel: FunnelMetrics;
+  costPerAddToCartCents: number | null; costPerAddPaymentInfoCents: number | null; costPerPurchaseCents: number | null;
+  addToCartRate: number | null; purchaseRate: number | null;
+}
 export interface LiveInsights {
   campaignId: string; isLive: boolean;
   impressions: number; reach: number; clicks: number; conversions: number; spendCents: number;
   ctr: number; cpcCents: number | null; cpmCents: number | null; roas: number | null;
+  funnel?: FunnelMetrics;
+  costPerAddToCartCents?: number | null; costPerAddPaymentInfoCents?: number | null; costPerPurchaseCents?: number | null;
+  addToCartRate?: number | null; purchaseRate?: number | null;
+  byNetwork?: Partial<Record<"meta" | "google", NetworkSlice>>;
 }
 export interface OptimizationDecision { campaignId: string; chosenVariantId: string; action: string; reason: string; decidedAt: string; }
 export interface Invoice { id: string; businessId: string; periodStart: string; periodEnd: string; adSpendCents: number; platformFeeCents: number; totalCents: number; createdAt: string; }
@@ -110,6 +178,15 @@ export interface AudienceAnalysis {
   consumerCharacteristics?: string; interestTags?: string[]; recommendedObjective?: string; recommendedPerformanceGoal?: string; dataSource?: string;
 }
 export interface DeepResearchResult { site: ScrapedSite; product: ProductAnalysis; audience: AudienceAnalysis; }
+export interface CompanyProfileData {
+  overview: string; products: string[]; services: string[]; features: string[];
+  pricing: string; industries: string[]; targetAudience: string;
+  icp: { summary: string; segments: { name: string; description: string }[] };
+  personas: { name: string; description: string }[];
+  technology: string[]; positioning: string; messaging: string[];
+  socialProof: string[]; faqs: { question: string; answer: string }[];
+}
+export interface CompanyProfileRecord { businessId: string; businessName: string; domain: string | null; data: CompanyProfileData; updatedAt: string; }
 
 export interface Citation { url: string; title: string; }
 export interface DeepResearchBlock<T = unknown> { key: string; label: string; citations: Citation[]; data: T; }
@@ -167,6 +244,16 @@ export interface DecisionContext {
 }
 export type CampaignGenerationPipelineStatus = "pending" | "researching" | "aggregating" | "running_agents" | "building_campaign" | "completed" | "failed";
 
+/** The subset of the backend ResearchContext the campaign UI streams in mid-run. All optional —
+ * a field is null until its provider settles, so the preview fills in progressively. */
+export interface ResearchContextLite {
+  company?: { name?: string; summary?: string } | null;
+  market?: { marketSummary?: string; opportunityScore?: number; recommendedRegion?: string } | null;
+  audience?: { primaryAudience?: string; painPoints?: string[] } | null;
+  competitors?: { competitors?: { name: string }[] } | null;
+  metadata?: { overallConfidence?: number };
+}
+
 export interface CampaignGenerationJobStatus {
   id: string; status: CampaignGenerationPipelineStatus; researchJobId?: string; strategyId?: string;
   campaignId?: string; decisionContext: DecisionContext | null;
@@ -202,6 +289,20 @@ export interface CampaignGenerationFacts {
 export interface CampaignGenerationProgress {
   completedSteps: string[];
   total: number;
+}
+
+export interface CampaignObjectiveOption {
+  value: string;
+  label: string;
+  description: string;
+}
+
+export interface BudgetSimulation {
+  estImpressionsPerDay: number;
+  estClicks: number;
+  estConversions: number;
+  estRoas: number;
+  source: "heuristic";
 }
 
 export interface CompetitorAdEntry {
@@ -276,10 +377,21 @@ export interface AdInsightsResponse {
   creative: { scatter: { id: string; ctr: number; cpaCents: number }[]; topAds: CreativeInsightItem[] };
 }
 
+export interface AuthResponse { user: User; token: string; refreshToken: string; workspaceId?: string; }
+export interface CrmAuthResponse { user: User; accessToken: string; refreshToken: string; workspaceId: string; businessId: string; }
+
 // ── API methods ───────────────────────────────────────────────────────────────
 export const api = {
-  // Auth — no login/register/googleAuth: there is no login flow, every session resolves
-  // to the seeded demo user via the backend's dev-mode auth bypass.
+  // Auth
+  login: (email: string, password: string) =>
+    request<AuthResponse>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  register: (name: string, email: string, password: string) =>
+    request<AuthResponse>("/auth/register", { method: "POST", body: JSON.stringify({ name, email, password }) }),
+  googleAuth: (name: string, email: string, googleId: string) =>
+    request<AuthResponse>("/auth/google", { method: "POST", body: JSON.stringify({ name, email, googleId }) }),
+  crmLogin: (token: string) =>
+    request<CrmAuthResponse>("/auth/crm-login", { method: "POST", body: JSON.stringify({ token }) }),
+  logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
   me: () => request<User>("/auth/me"),
   updateMe: (patch: { name?: string; avatar?: string }) =>
     request<User>("/auth/me", { method: "PATCH", body: JSON.stringify(patch) }),
@@ -313,7 +425,8 @@ export const api = {
     request<Asset>(`/assets/${id}/tags`, { method: "PATCH", body: JSON.stringify({ tags }) }),
 
   // AI Insights
-  listInsights: (workspaceId: string) => request<Insight[]>(`/workspaces/${workspaceId}/insights`),
+  listInsights: (workspaceId: string, businessId?: string) =>
+    request<Insight[]>(`/workspaces/${workspaceId}/insights${businessId ? `?businessId=${businessId}` : ""}`),
   generateInsights: (workspaceId: string, businessId: string) =>
     request<Insight[]>(`/workspaces/${workspaceId}/insights/generate?businessId=${businessId}`, { method: "POST" }),
   dismissInsight: (id: string) => request<Insight>(`/insights/${id}/dismiss`, { method: "PATCH" }),
@@ -391,23 +504,37 @@ export const api = {
   createResearchSession: (workspaceId: string, url: string, businessId?: string, force?: boolean) =>
     request<ResearchSession>(`/workspaces/${workspaceId}/research-sessions${force ? "?force=true" : ""}`, { method: "POST", body: JSON.stringify({ url, businessId }) }),
   getResearchSession: (id: string) => request<ResearchSession>(`/research-sessions/${id}`),
+  // Full ResearchJob (incl. its aggregated ResearchContext). Used to stream the researched output
+  // — company summary, market, audience, competitors — into the campaign UI DURING the run, since
+  // research completes (~halfway) well before the decision engine produces the final strategy.
+  getResearchJob: (id: string) => request<{ id: string; status: string; context: ResearchContextLite | null }>(`/research/${id}`),
 
   // Decision Intelligence campaign generation (Research Orchestrator -> Decision Engine
   // + AI Agent Coordinator -> Campaign Builder, all in one pipeline run — see
   // modules/orchestrator/campaignGenerationPipeline.ts)
-  generateCampaign: (input: { workspaceId: string; businessId: string; url: string; name?: string; dailyBudgetCents?: number }) =>
+  generateCampaign: (input: { workspaceId: string; businessId: string; url: string; name?: string; dailyBudgetCents?: number; channels?: string[]; objective?: string; countries?: string[]; forceRefresh?: boolean }) =>
     request<CampaignGenerationJobStatus>("/campaigns/generate", { method: "POST", body: JSON.stringify(input) }),
   getCampaignGenerationStatus: (id: string) => request<CampaignGenerationJobStatus>(`/campaigns/generate/${id}/status`),
   getCampaignGenerationFacts: (id: string) => request<CampaignGenerationFacts>(`/campaigns/generate/${id}/facts`),
   getCampaignGenerationProgress: (id: string) => request<CampaignGenerationProgress>(`/campaigns/generate/${id}/progress`),
   getCampaignGenerationCitations: (id: string) => request<CampaignGenerationCitations>(`/campaigns/generate/${id}/citations`),
+  // Materialize one of the 3 candidate strategies (by id "strategy-a" or label "Strategy A")
+  // into an editable draft campaign — the results page's "pick one of 3 suggestions" action.
+  selectCampaignStrategy: (jobId: string, strategy: string) =>
+    request<Campaign & { campaignId: string; reusedWinner: boolean }>(`/campaigns/generate/${jobId}/select-strategy`, { method: "POST", body: JSON.stringify({ strategy }) }),
+  // adsgo.ai-style flow: objective picker + interactive budget/goal simulator
+  getCampaignObjectives: () => request<{ objectives: CampaignObjectiveOption[] }>("/campaigns/objectives"),
+  simulateCampaign: (input: { objective?: string; dailyBudgetCents: number; platforms?: ("meta" | "google")[]; countries?: string[] }) =>
+    request<BudgetSimulation>("/campaigns/simulate", { method: "POST", body: JSON.stringify(input) }),
 
   // Business
   createBusiness: (input: Omit<BusinessProfile, "id">) =>
     request<BusinessProfile>("/businesses", { method: "POST", body: JSON.stringify(input) }),
+  listBusinesses: (workspaceId: string) => request<BusinessProfile[]>(`/businesses?workspaceId=${workspaceId}`),
   getBusiness: (id: string) => request<BusinessProfile>(`/businesses/${id}`),
   updateBusiness: (id: string, patch: Partial<Omit<BusinessProfile, "id">>) =>
     request<BusinessProfile>(`/businesses/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  getCompanyProfile: (businessId: string) => request<CompanyProfileRecord>(`/businesses/${businessId}/company-profile`),
 
   // Strategy
   generateStrategy: (businessId: string) =>
@@ -431,13 +558,18 @@ export const api = {
     request<Campaign>(`/campaigns/${campaignId}/variants/${variantId}/pause`, { method: "POST" }),
   activateVariant: (campaignId: string, variantId: string) =>
     request<Campaign>(`/campaigns/${campaignId}/variants/${variantId}/activate`, { method: "POST" }),
+  reallocateBudget: (campaignId: string, variantId: string, dailyBudgetCents: number) =>
+    request<Campaign>(`/campaigns/${campaignId}/variants/${variantId}/budget`, { method: "POST", body: JSON.stringify({ dailyBudgetCents }) }),
   applyCreativeMedia: (campaignId: string, media: { imageUrl?: string; videoUrl?: string }) =>
     request<Campaign>(`/campaigns/${campaignId}/apply-creative-media`, { method: "POST", body: JSON.stringify(media) }),
   ingestMetrics: (id: string) => request<unknown[]>(`/campaigns/${id}/ingest`, { method: "POST" }),
   getPerformance: (id: string) => request<NormalizedPerformance[]>(`/campaigns/${id}/performance`),
-  getLiveInsights: (id: string) => request<LiveInsights>(`/campaigns/${id}/live-insights`),
+  getLiveInsights: (id: string, range?: string) =>
+    request<LiveInsights>(`/campaigns/${id}/live-insights${range ? `?range=${encodeURIComponent(range)}` : ""}`),
   getCampaignTrend: (id: string) => request<TrendPoint[]>(`/campaigns/${id}/trend`),
   optimize: (id: string) => request<OptimizationDecision[]>(`/campaigns/${id}/optimize`, { method: "POST" }),
+  setAutoOptimize: (id: string, enabled: boolean) =>
+    request<{ id: string; autoOptimize: boolean }>(`/campaigns/${id}/auto-optimize`, { method: "POST", body: JSON.stringify({ enabled }) }),
 
   // Analytics
   getAnalyticsSummary: (businessId: string, period: "all" | "month" | "week" = "all") =>

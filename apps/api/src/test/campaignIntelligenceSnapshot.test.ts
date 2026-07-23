@@ -56,11 +56,11 @@ test("recordPerformanceSnapshot - writes a real aggregated snapshot from real me
 
   await analyticsStore.recordMetric({
     id: randomUUID(), campaignId, variantId: metaVariant.id, network: "meta",
-    date: new Date().toISOString().slice(0, 10), impressions: 5000, reach: 2500, clicks: 200, conversions: 20, spendCents: 10000,
+    date: new Date().toISOString().slice(0, 10), impressions: 5000, reach: 2500, clicks: 200, conversions: 20, spendCents: 10000, revenueCents: 40000,
   });
   await analyticsStore.recordMetric({
     id: randomUUID(), campaignId, variantId: googleVariant.id, network: "google",
-    date: new Date().toISOString().slice(0, 10), impressions: 3000, reach: 1500, clicks: 100, conversions: 5, spendCents: 8000,
+    date: new Date().toISOString().slice(0, 10), impressions: 3000, reach: 1500, clicks: 100, conversions: 5, spendCents: 8000, revenueCents: 14000,
   });
 
   await recordPerformanceSnapshot(campaignId);
@@ -73,6 +73,8 @@ test("recordPerformanceSnapshot - writes a real aggregated snapshot from real me
   assert.strictEqual(snapshot!.clicks, 300);
   assert.strictEqual(snapshot!.conversions, 25);
   assert.strictEqual(snapshot!.spendCents, 18000);
+  assert.strictEqual(snapshot!.revenueCents, 54000, "40000 + 14000 real reported revenue across both networks");
+  assert.strictEqual(snapshot!.roas, 3, "true ROAS = 54000 revenue / 18000 spend");
   assert.strictEqual(snapshot!.platform, null, "spans two distinct networks, so no single platform is denormalized");
 
   const breakdown = (snapshot!.metadata as any).networkBreakdown as { network: string; conversions: number }[];
@@ -94,7 +96,7 @@ test("recordPerformanceSnapshot - denormalizes a single platform when every vari
 
   await analyticsStore.recordMetric({
     id: randomUUID(), campaignId: campaign.id, variantId: variant.id, network: "meta",
-    date: new Date().toISOString().slice(0, 10), impressions: 1000, reach: 900, clicks: 40, conversions: 6, spendCents: 3000,
+    date: new Date().toISOString().slice(0, 10), impressions: 1000, reach: 900, clicks: 40, conversions: 6, spendCents: 3000, revenueCents: 9000,
   });
 
   await recordPerformanceSnapshot(campaign.id);

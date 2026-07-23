@@ -103,6 +103,92 @@ test("fuseKnowledge - an empty result set produces an empty report, not a crash"
   assert.strictEqual(report.overallFusedConfidence, 0);
 });
 
+// ── identity-vertical-mismatch (Fix #3 Part 1) — pure lexical, no LLM ──
+
+// The 07-16 polluxa shapes: a CRM/PLM/ERP website vs a confabulated "medical device" market.
+const POLLUXA_WEBSITE = {
+  title: "Polluxa — AI-powered Enterprise Operating System",
+  description: "Unify CRM, PLM, ERP, inventory, orders, and sales pipeline in one composable enterprise platform.",
+  excerpt: "Polluxa connects commerce, warehouse fulfillment, and lead rotation across every channel for scaling software companies.",
+  dataSource: "crawl",
+};
+const MEDICAL_MARKET = {
+  tam: "Medical equipment market valued at multi-hundred billion dollar scale globally",
+  marketSize: "Broader medical equipment segment, fastest-growing globally",
+  competitionLevel: "Stringent FDA and CE medical device approval processes; HIPAA compliance for connected diagnostic devices",
+  trends: ["Telemedicine integration", "surgical robotics", "sustainable medical device manufacturing", "healthcare infrastructure investment"],
+  dataSource: "Global Forecast | Market Intelligence Database",
+};
+
+test("fuseKnowledge - flags an identity-vertical-mismatch when website and market verticals are ~disjoint", () => {
+  const report = fuseKnowledge([
+    fakeResult("website", { data: POLLUXA_WEBSITE }),
+    fakeResult("market", { data: MEDICAL_MARKET }),
+  ]);
+  const mismatch = report.conflicts.find((c) => c.kind === "identity-vertical-mismatch");
+  assert.ok(mismatch, "expected an identity-vertical-mismatch for CRM/PLM site vs medical market");
+  assert.strictEqual(mismatch!.severity, "high");
+  assert.deepStrictEqual(mismatch!.sources, ["website", "market"]);
+});
+
+test("fuseKnowledge - does NOT flag identity mismatch when the verticals share vocabulary (false-positive guard)", () => {
+  const report = fuseKnowledge([
+    fakeResult("website", { data: {
+      title: "Polluxa — Enterprise CRM and PLM platform",
+      description: "CRM, PLM, ERP, inventory, and sales pipeline software for enterprise commerce.",
+      excerpt: "Manage CRM pipeline, product lifecycle, inventory, and orders across channels.",
+      dataSource: "crawl",
+    } }),
+    fakeResult("market", { data: {
+      tam: "Enterprise CRM and PLM software market, tens of billions globally",
+      marketSize: "Enterprise software segment covering CRM, ERP, inventory and pipeline tooling",
+      competitionLevel: "Crowded enterprise CRM and PLM software category",
+      trends: ["AI-native CRM", "composable ERP", "inventory automation", "sales pipeline analytics"],
+      dataSource: "Market Intelligence Database",
+    } }),
+  ]);
+  assert.strictEqual(report.conflicts.filter((c) => c.kind === "identity-vertical-mismatch").length, 0);
+});
+
+test("fuseKnowledge - min-evidence gate: a sparse website (<8 significant tokens) never triggers a mismatch", () => {
+  const report = fuseKnowledge([
+    fakeResult("website", { data: { title: "Polluxa", description: "", excerpt: "", dataSource: "crawl-outage" } }),
+    fakeResult("market", { data: MEDICAL_MARKET }),
+  ]);
+  assert.strictEqual(report.conflicts.filter((c) => c.kind === "identity-vertical-mismatch").length, 0, "no evidence is not a conflict");
+});
+
+test("fuseKnowledge - does NOT double-flag when the market result is a labeled AI-estimate fallback", () => {
+  const report = fuseKnowledge([
+    fakeResult("website", { data: POLLUXA_WEBSITE }),
+    fakeResult("market", { data: { ...MEDICAL_MARKET, dataSource: "AI estimate — live web search returned no usable results" } }),
+  ]);
+  assert.strictEqual(report.conflicts.filter((c) => c.kind === "identity-vertical-mismatch").length, 0, "already-labeled low-grounding market isn't re-flagged as an identity mismatch");
+});
+
+test("fuseKnowledge - overlap boundary: at/below 5% flags, just above does not", () => {
+  // Market vocab = 20 distinct medical tokens; sharing exactly 1 with the site = 5% (flags),
+  // sharing 2 = 10% (does not). Kept explicit so the boundary is unambiguous.
+  const medicalTokens = ["medical", "surgical", "clinical", "diagnostic", "telemedicine", "hospital",
+    "patient", "healthcare", "pharma", "device", "imaging", "therapy", "oncology", "cardiac",
+    "radiology", "prosthetic", "implant", "vaccine", "biotech", "genomics"];
+  const websiteBase = { title: "Polluxa enterprise commerce platform", description: "crm plm erp inventory orders pipeline warehouse fulfillment analytics dashboards", excerpt: "software company scaling revenue operations", dataSource: "crawl" };
+
+  // 1 shared / 20 = 0.05 → flags (<=).
+  const atThreshold = fuseKnowledge([
+    fakeResult("website", { data: { ...websiteBase, excerpt: websiteBase.excerpt + " medical" } }),
+    fakeResult("market", { data: { tam: medicalTokens.join(" "), marketSize: "", competitionLevel: "", trends: [], dataSource: "db" } }),
+  ]);
+  assert.ok(atThreshold.conflicts.some((c) => c.kind === "identity-vertical-mismatch"), "overlap exactly 5% must flag");
+
+  // 2 shared / 20 = 0.10 → does not flag (> threshold).
+  const aboveThreshold = fuseKnowledge([
+    fakeResult("website", { data: { ...websiteBase, excerpt: websiteBase.excerpt + " medical surgical" } }),
+    fakeResult("market", { data: { tam: medicalTokens.join(" "), marketSize: "", competitionLevel: "", trends: [], dataSource: "db" } }),
+  ]);
+  assert.strictEqual(aboveThreshold.conflicts.filter((c) => c.kind === "identity-vertical-mismatch").length, 0, "overlap 10% must NOT flag");
+});
+
 test("fuseCompetitorProfiles - corroboration by more independent sources raises fused confidence", () => {
   const report = fuseCompetitorProfiles([
     fakeCompetitorEntry({ name: "Solo Co", mentionedBySourceCount: 1 }),

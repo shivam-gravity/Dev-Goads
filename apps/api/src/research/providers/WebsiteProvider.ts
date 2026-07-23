@@ -1,6 +1,8 @@
 import { normalizeUrl } from "../../modules/onboarding/scraper.js";
-import { firecrawlScrape, outageDataSource } from "../../infra/firecrawlClient.js";
-import { crawlUrlWithFallback, sourceLabel } from "../../infra/scrapeFallback.js";
+import { crawl4aiScrape } from "../../infra/crawl4aiClient.js";
+import { outageDataSource } from "../../infra/scrapeTypes.js";
+import { crawlUrlWithFallback, scrapeUrlWithFallback, sourceLabel } from "../../infra/scrapeFallback.js";
+import { refineContent } from "../../infra/contentRefiner.js";
 import { logger } from "../../modules/logger/logger.js";
 import { createCrawlJob, markCrawlJobFailed, persistCrawlPages } from "../crawl/crawlPersistence.js";
 import type { ResearchProvider } from "../interfaces/ResearchProvider.js";
@@ -56,28 +58,42 @@ export class WebsiteProvider implements ResearchProvider<WebsiteData> {
         }
       }
 
-      const crawled = await crawlUrlWithFallback(url, { limit: CRAWL_PAGE_LIMIT, formats: ["markdown", "links"] });
+      let crawled = await crawlUrlWithFallback(url, { limit: CRAWL_PAGE_LIMIT, formats: ["markdown", "links"] });
       if (crawled.outage) {
         if (crawlJobId) await markCrawlJobFailed(crawlJobId, outageDataSource(crawled.outage)).catch(() => {});
         const outageData: WebsiteData = { title: "", description: "", excerpt: "", images: [], crawledPages: [], pagesDiscovered: 0, dataSource: outageDataSource(crawled.outage), crawlJobId };
         return { status: "partial", data: outageData };
       }
+      // The multi-page deep crawl is more fragile than a single-page scrape (crawl4ai can flake on
+      // the deep-crawl path under load). Rather than hard-fail a CORE provider to zero confidence
+      // when we can plainly reach the site, fall back to a single-page scrape of the entry URL —
+      // the exact path the up-front prefetch uses successfully. One real page beats a total miss.
       if (crawled.pages.length === 0) {
-        if (crawlJobId) await markCrawlJobFailed(crawlJobId, "Crawl returned no pages").catch(() => {});
-        throw new Error("Couldn't crawl that URL — no pages were returned");
+        const single = await scrapeUrlWithFallback(url, ["markdown", "links"]);
+        const md = single.data?.markdown?.trim();
+        if (md) {
+          crawled = {
+            pages: [{ markdown: md, html: single.data?.html ?? "", links: single.data?.links ?? [], metadata: { title: single.data?.metadata?.title, sourceURL: url } }],
+            outage: null,
+            source: single.source,
+          };
+        } else {
+          if (crawlJobId) await markCrawlJobFailed(crawlJobId, "Crawl returned no pages").catch(() => {});
+          throw new Error("Couldn't crawl that URL — no pages were returned");
+        }
       }
 
-      // The in-house crawl already captured a screenshot and a deduped image list of its
-      // own (via scrapeUrl's internal captureScreenshot/extractImages) — reusing those
-      // avoids a second, redundant Firecrawl screenshot call and avoids trying to derive
-      // images from per-page `links`, which in-house crawl pages don't populate.
+      // When the in-house crawl contributed (source "inhouse" or "merged"), it already
+      // captured a screenshot and a deduped image list of its own (via scrapeUrl's internal
+      // captureScreenshot/extractImages) — reuse those. When only crawl4ai served the crawl,
+      // do a dedicated crawl4ai screenshot scrape and derive images from the page links.
       let screenshot: string | undefined;
       let images: string[];
-      if (crawled.source === "inhouse") {
+      if (crawled.source === "inhouse" || crawled.source === "merged") {
         screenshot = crawled.screenshot;
         images = crawled.images ?? [];
       } else {
-        const screenshotResult = await firecrawlScrape(url, ["screenshot"]);
+        const screenshotResult = await crawl4aiScrape(url, ["screenshot"]);
         screenshot = screenshotResult.outage ? undefined : (screenshotResult.data?.screenshot ?? undefined);
         images = (crawled.pages[0].links ?? []).filter((link) => /\.(png|jpe?g|webp|gif|avif)(\?|$)/i.test(link)).slice(0, 8);
       }
@@ -90,7 +106,14 @@ export class WebsiteProvider implements ResearchProvider<WebsiteData> {
           title: page.metadata?.title || pageUrl,
           pageType: classifyPage(pageUrl, index === 0),
           relevanceScore: index === 0 ? 1 : 0.5,
-          cleanedText: (page.markdown ?? "").slice(0, MAX_EXCERPT_LENGTH),
+          // Refine the raw crawl markdown before persisting: crawl4ai's markdown carries inline
+          // CSS/JS (SPAs ship critical CSS like nprogress in the shell) and nav/footer boilerplate.
+          // extractCrawlFacts reads this cleanedText straight from the DB, so storing raw markdown
+          // fed the fact-extractor CSS noise → ~0 facts → un-grounded providers/agents and low
+          // research confidence. refineContent strips that deterministically (relevanceFilter off:
+          // this is the business's own site, keep all real prose). Falls back to the raw slice if
+          // refinement somehow empties it, so a page never persists blank.
+          cleanedText: (refineContent(page.markdown ?? "", "", { maxChars: MAX_EXCERPT_LENGTH, relevanceFilter: false }) || (page.markdown ?? "")).slice(0, MAX_EXCERPT_LENGTH),
           html: page.html ?? "",
         };
       });

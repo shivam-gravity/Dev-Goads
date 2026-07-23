@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import PolluxaHeader from "../components/PolluxaHeader.js";
 import FormattedMessage from "../components/FormattedMessage.js";
 import { api } from "../api/client.js";
+import { useStreamingChat } from "../hooks/useRealtime.js";
 import type { StrategistChatMessage } from "../api/client.js";
 
 const TABS = ["Performance", "Agent activity", "Capabilities", "Decision support"] as const;
@@ -60,9 +61,7 @@ function loadSessions(businessId: string): ChatSession[] {
 function saveSessions(businessId: string, sessions: ChatSession[]) {
   try {
     localStorage.setItem(HISTORY_KEY_PREFIX + businessId, JSON.stringify(sessions.slice(0, MAX_HISTORY_SESSIONS)));
-  } catch {
-    // Storage full/unavailable (e.g. private browsing) — history just won't persist.
-  }
+  } catch {}
 }
 
 function formatRelativeTime(timestamp: number): string {
@@ -80,6 +79,7 @@ function toHistory(messages: ChatMessage[]): StrategistChatMessage[] {
 
 export default function MediaPlan({ businessId }: { businessId: string }) {
   const navigate = useNavigate();
+  const { sendStreaming, isStreaming, streamedText } = useStreamingChat(businessId);
   const [activeTab, setActiveTab] = useState<Tab>("Performance");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
@@ -122,12 +122,40 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
     setError(null);
     setIsSending(true);
     try {
-      const { reply } = await api.chatWithStrategist(businessId, history);
-      setMessages((prev) => [...prev, { id: `msg-${prev.length}-s`, sender: "strategist", text: reply }]);
+      // Try streaming first, fall back to regular request
+      const fullText = await sendStreaming(
+        history,
+        undefined,
+        (text) => {
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.sender === "strategist" && last.id.endsWith("-streaming")) {
+              return [...prev.slice(0, -1), { ...last, text }];
+            }
+            return [...prev, { id: `msg-${prev.length}-streaming`, sender: "strategist", text }];
+          });
+        },
+      );
+      if (fullText) {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.sender === "strategist" && last.id.endsWith("-streaming")) {
+            return [...prev.slice(0, -1), { ...last, id: `msg-${prev.length}-s`, text: fullText }];
+          }
+          return [...prev, { id: `msg-${prev.length}-s`, sender: "strategist", text: fullText }];
+        });
+      }
       setFailedHistory(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong reaching the strategist.");
-      setFailedHistory(history);
+    } catch {
+      // Fallback to non-streaming
+      try {
+        const { reply } = await api.chatWithStrategist(businessId, history);
+        setMessages((prev) => [...prev, { id: `msg-${prev.length}-s`, sender: "strategist", text: reply }]);
+        setFailedHistory(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Something went wrong reaching the strategist.");
+        setFailedHistory(history);
+      }
     } finally {
       setIsSending(false);
     }
@@ -180,108 +208,84 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
   }
 
   return (
-    <div className="page-media-plan">
-      <PolluxaHeader breadcrumb={["Media Plan"]} />
+    <div className="page-strategist-v2">
+      <PolluxaHeader breadcrumb={["Chat Strategist"]} />
 
-      <div className="media-plan-layout">
-        <section className="media-plan-hero-card">
-          <div className="media-plan-hero-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7033f5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
-              <path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
-              <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
-              <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
-            </svg>
-          </div>
-
-          <h2 className="media-plan-hero-title">Launch your first campaign</h2>
-          <p className="media-plan-hero-desc">
-            Your Media Plan will come to life once your ads are running. Create and publish a campaign — CRM Ads will
-            take it from there.
-          </p>
-
-          <button className="media-plan-cta" onClick={() => navigate("/campaigns/new")}>
-            Create Your First Campaign
+      <div className="strat-layout">
+        {/* Sidebar */}
+        <aside className="strat-sidebar">
+          <button className="strat-new-chat-btn" onClick={handleNewChat}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
               <line x1="5" y1="12" x2="19" y2="12" />
-              <polyline points="12 5 19 12 12 19" />
             </svg>
+            New Chat
           </button>
 
-          <div className="media-plan-divider" />
-
-          <span className="media-plan-section-label">WHAT HAPPENS AFTER YOU PUBLISH</span>
-
-          <div className="media-plan-steps">
-            <div className="media-plan-step">
-              <span className="media-plan-step-icon blue">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2 8.82a15 15 0 0 1 20 0" />
-                  <path d="M5 12.859a10 10 0 0 1 14 0" />
-                  <path d="M8.5 16.429a5 5 0 0 1 7 0" />
-                  <line x1="12" y1="20" x2="12.01" y2="20" />
-                </svg>
-              </span>
-              <span>Ads go live on Meta within hours</span>
-            </div>
-
-            <div className="media-plan-step">
-              <span className="media-plan-step-icon orange">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 3l1.9 4.6L18 9l-4.1 1.4L12 15l-1.9-4.6L6 9l4.1-1.4L12 3z" />
-                  <path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8.8-2z" />
-                </svg>
-              </span>
-              <span>CRM Ads starts syncing performance data every hour</span>
-            </div>
-
-            <div className="media-plan-step">
-              <span className="media-plan-step-icon green">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
-                  <polyline points="17 6 23 6 23 12" />
-                </svg>
-              </span>
-              <span>AI optimizes budgets, pauses losers, scales winners</span>
-            </div>
-
-            <div className="media-plan-step">
-              <span className="media-plan-step-icon purple">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="20" x2="18" y2="10" />
-                  <line x1="12" y1="20" x2="12" y2="4" />
-                  <line x1="6" y1="20" x2="6" y2="14" />
-                </svg>
-              </span>
-              <span>Your ad insights populates with real-time</span>
-            </div>
+          <div className="strat-sidebar-section">
+            <span className="strat-sidebar-label">QUICK ACTIONS</span>
+            <button className="strat-sidebar-action" onClick={() => navigate("/campaigns/new")}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3l1.9 4.6L18 9l-4.1 1.4L12 15l-1.9-4.6L6 9l4.1-1.4L12 3z" />
+              </svg>
+              Create Campaign
+            </button>
+            <button className="strat-sidebar-action" onClick={() => navigate("/manager")}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="20" x2="18" y2="10" />
+                <line x1="12" y1="20" x2="12" y2="4" />
+                <line x1="6" y1="20" x2="6" y2="14" />
+              </svg>
+              View Ads Manager
+            </button>
           </div>
-        </section>
 
-        <aside className="media-plan-chat-panel">
-          <div className="media-plan-chat-header">
-            <span className="media-plan-chat-title-group">
-              <span className="media-plan-chat-avatar">🧠</span>
-              <span className="media-plan-chat-title-text">
-                <span className="media-plan-chat-title">Chat with Strategist</span>
-                <span className="media-plan-chat-subtitle">
-                  <span className={`media-plan-status-dot ${isSending ? "busy" : ""}`} aria-hidden="true" />
-                  {isSending ? "Thinking..." : "Grounded in your account data"}
-                </span>
+          {sessions.length > 0 && (
+            <div className="strat-sidebar-section">
+              <span className="strat-sidebar-label">RECENT CHATS</span>
+              <div className="strat-history-list">
+                {sessions.slice(0, 8).map((s) => (
+                  <button key={s.id} className="strat-history-item" onClick={() => handleLoadSession(s)}>
+                    <span className="strat-history-text">{s.preview || "Conversation"}</span>
+                    <span className="strat-history-time">{formatRelativeTime(s.startedAt)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </aside>
+
+        {/* Main chat area */}
+        <main className="strat-chat-main">
+          <div className="strat-chat-header">
+            <div className="strat-chat-title-group">
+              <span className="strat-chat-avatar-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
+                  <path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
+                </svg>
               </span>
-            </span>
-            <div className="media-plan-chat-header-actions" ref={historyRef}>
-              <button className="media-plan-icon-btn" aria-label="New chat" onClick={handleNewChat}>
+              <div className="strat-chat-title-text">
+                <span className="strat-chat-title">AI Strategist</span>
+                <span className="strat-chat-status">
+                  <span className={`strat-status-dot ${isSending ? "busy" : ""}`} />
+                  {isSending ? "Thinking..." : "Online · Grounded in your data"}
+                </span>
+              </div>
+            </div>
+            <div className="strat-chat-header-actions" ref={historyRef}>
+              <button className="strat-icon-btn" aria-label="New chat" onClick={handleNewChat} title="New conversation">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="12" y1="5" x2="12" y2="19" />
                   <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
               </button>
               <button
-                className="media-plan-icon-btn"
+                className="strat-icon-btn"
                 aria-label="Chat history"
                 aria-expanded={showHistory}
                 onClick={() => setShowHistory((v) => !v)}
+                title="Chat history"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="9" />
@@ -290,14 +294,14 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
               </button>
 
               {showHistory && (
-                <div className="media-plan-chat-history-dropdown">
+                <div className="strat-history-dropdown">
                   {sessions.length === 0 ? (
-                    <div className="media-plan-chat-history-empty">No past conversations yet.</div>
+                    <div className="strat-history-dropdown-empty">No past conversations yet.</div>
                   ) : (
                     sessions.map((s) => (
-                      <button key={s.id} className="media-plan-chat-history-item" onClick={() => handleLoadSession(s)}>
-                        <span className="media-plan-chat-history-item-text">{s.preview || "Conversation"}</span>
-                        <span className="media-plan-chat-history-item-time">{formatRelativeTime(s.startedAt)}</span>
+                      <button key={s.id} className="strat-history-dropdown-item" onClick={() => handleLoadSession(s)}>
+                        <span className="strat-history-dropdown-text">{s.preview || "Conversation"}</span>
+                        <span className="strat-history-dropdown-time">{formatRelativeTime(s.startedAt)}</span>
                       </button>
                     ))
                   )}
@@ -306,47 +310,60 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
             </div>
           </div>
 
-          <div className="media-plan-chat-body">
+          <div className="strat-chat-body">
             {messages.length === 0 ? (
-              <div className="media-plan-chat-empty">
-                <span className="media-plan-chat-empty-icon">🧠</span>
-                <p>
-                  Ask the strategist to generate, revise or evaluate a Media Plan, or set long-term brand
-                  preferences.
+              <div className="strat-empty-state">
+                <div className="strat-empty-icon">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#7033f5" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
+                    <path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
+                  </svg>
+                </div>
+                <h2 className="strat-empty-title">What can I help you with?</h2>
+                <p className="strat-empty-desc">
+                  I can analyze your campaign performance, suggest optimizations, build media plans, or help you make data-driven decisions.
                 </p>
-                <div className="media-plan-chat-empty-capabilities">
-                  <span className="media-plan-capability-chip">📊 Evaluate performance</span>
-                  <span className="media-plan-capability-chip">🗺️ Build a media plan</span>
-                  <span className="media-plan-capability-chip">🎯 Set brand preferences</span>
+                <div className="strat-empty-capabilities">
+                  <span className="strat-cap-chip"><span className="strat-cap-dot perf" />Performance Analysis</span>
+                  <span className="strat-cap-chip"><span className="strat-cap-dot plan" />Media Planning</span>
+                  <span className="strat-cap-chip"><span className="strat-cap-dot decide" />Decision Support</span>
                 </div>
               </div>
             ) : (
-              <div className="media-plan-chat-messages">
+              <div className="strat-messages">
                 {messages.map((m) => (
-                  <div key={m.id} className={`media-plan-message-row ${m.sender}`}>
-                    {m.sender === "strategist" && <span className="media-plan-message-avatar" aria-hidden="true">🧠</span>}
-                    <div className={`media-plan-chat-bubble ${m.sender}`}>
+                  <div key={m.id} className={`strat-msg-row ${m.sender}`}>
+                    {m.sender === "strategist" && (
+                      <span className="strat-msg-avatar">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 3l1.9 4.6L18 9l-4.1 1.4L12 15l-1.9-4.6L6 9l4.1-1.4L12 3z" />
+                        </svg>
+                      </span>
+                    )}
+                    <div className={`strat-bubble ${m.sender}`}>
                       {m.sender === "strategist" ? <FormattedMessage text={m.text} /> : m.text}
                     </div>
                   </div>
                 ))}
                 {isSending && (
-                  <div className="media-plan-message-row strategist">
-                    <span className="media-plan-message-avatar" aria-hidden="true">🧠</span>
-                    <div className="media-plan-chat-bubble strategist typing">
-                      <span className="media-plan-typing-dot" />
-                      <span className="media-plan-typing-dot" />
-                      <span className="media-plan-typing-dot" />
+                  <div className="strat-msg-row strategist">
+                    <span className="strat-msg-avatar">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 3l1.9 4.6L18 9l-4.1 1.4L12 15l-1.9-4.6L6 9l4.1-1.4L12 3z" />
+                      </svg>
+                    </span>
+                    <div className="strat-bubble strategist typing">
+                      <span className="strat-typing-dot" />
+                      <span className="strat-typing-dot" />
+                      <span className="strat-typing-dot" />
                     </div>
                   </div>
                 )}
                 {error && (
-                  <div className="media-plan-chat-error">
+                  <div className="strat-error-row">
                     <span>{error}</span>
                     {failedHistory && (
-                      <button className="media-plan-retry-btn" onClick={handleRetry}>
-                        Retry
-                      </button>
+                      <button className="strat-retry-btn" onClick={handleRetry}>Retry</button>
                     )}
                   </div>
                 )}
@@ -355,52 +372,53 @@ export default function MediaPlan({ businessId }: { businessId: string }) {
             )}
           </div>
 
-          <div className="media-plan-chat-tabs">
-            {TABS.map((tab) => (
+          <div className="strat-bottom-area">
+            <div className="strat-tabs-row">
+              {TABS.map((tab) => (
+                <button
+                  key={tab}
+                  className={`strat-tab ${activeTab === tab ? "active" : ""}`}
+                  onClick={() => setActiveTab(tab)}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+
+            <div className="strat-suggestions">
+              {SUGGESTIONS[activeTab].map((s) => (
+                <button key={s} className="strat-suggestion" onClick={() => handleSend(s)} disabled={isSending}>
+                  {s}
+                </button>
+              ))}
+            </div>
+
+            <div className="strat-input-row">
+              <textarea
+                ref={textareaRef}
+                className="strat-input"
+                placeholder="Ask anything about your campaigns..."
+                value={inputValue}
+                onChange={(e) => {
+                  setInputValue(e.target.value);
+                  resizeTextarea();
+                }}
+                onKeyDown={handleKeyDown}
+                disabled={isSending}
+                rows={1}
+              />
               <button
-                key={tab}
-                className={`media-plan-chat-tab ${activeTab === tab ? "active" : ""}`}
-                onClick={() => setActiveTab(tab)}
+                className="strat-send-btn"
+                onClick={() => handleSend(inputValue)}
+                disabled={isSending || !inputValue.trim()}
               >
-                {tab}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M2 21l21-9L2 3v7l15 2-15 2z" />
+                </svg>
               </button>
-            ))}
+            </div>
           </div>
-
-          <div className="media-plan-chat-suggestions">
-            {SUGGESTIONS[activeTab].map((s) => (
-              <button key={s} className="media-plan-suggestion-chip" onClick={() => handleSend(s)} disabled={isSending}>
-                {s}
-              </button>
-            ))}
-          </div>
-
-          <div className="media-plan-chat-input-row">
-            <textarea
-              ref={textareaRef}
-              className="media-plan-chat-input"
-              placeholder="Ask the strategist..."
-              value={inputValue}
-              onChange={(e) => {
-                setInputValue(e.target.value);
-                resizeTextarea();
-              }}
-              onKeyDown={handleKeyDown}
-              disabled={isSending}
-              rows={1}
-            />
-            <button
-              className="media-plan-send-btn"
-              onClick={() => handleSend(inputValue)}
-              disabled={isSending || !inputValue.trim()}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M2 21l21-9L2 3v7l15 2-15 2z" />
-              </svg>
-              Send
-            </button>
-          </div>
-        </aside>
+        </main>
       </div>
     </div>
   );

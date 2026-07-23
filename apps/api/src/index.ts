@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Request } from "express";
 import cors from "cors";
+import helmet from "helmet";
 import { router, authEntryRouter } from "./gateway/router.js";
 import { metaOAuthRoutes } from "./gateway/metaOAuthRoutes.js";
 import { googleOAuthRoutes } from "./gateway/googleOAuthRoutes.js";
@@ -11,10 +12,13 @@ import { shopifyOAuthRoutes } from "./gateway/shopifyOAuthRoutes.js";
 import { shopifyWebhookRoutes } from "./gateway/shopifyWebhookRoutes.js";
 import { metaLeadWebhookRoutes } from "./gateway/metaLeadWebhookRoutes.js";
 import { adsDataRoutes } from "./gateway/adsDataRoutes.js";
+import { sseStreamRoutes } from "./gateway/sseStreamRoutes.js";
 import { crmInternalAuth } from "./gateway/middleware/crmInternalAuth.js";
 import { apiRateLimiter } from "./gateway/middleware/rateLimit.js";
 import { requireAuth } from "./gateway/middleware/auth.js";
 import { registerEventHandlers } from "./infra/eventHandlers.js";
+import { attachWebSocketServer } from "./infra/websocketServer.js";
+import { startRealtimeBridge } from "./infra/realtimeBridge.js";
 import { prisma } from "./db/prisma.js";
 import { redisClient } from "./infra/redisClient.js";
 import { logger } from "./modules/logger/logger.js";
@@ -29,11 +33,18 @@ const PORT = Number(process.env.PORT ?? 4000);
 
 registerEventHandlers();
 
-app.use(cors());
-// Stashes the raw request body before JSON-parsing it, so the Meta leadgen webhook
-// route (below) can verify its X-Hub-Signature-256 HMAC over the exact bytes Meta
-// sent — re-serializing the parsed body would not reliably reproduce the same bytes.
-app.use(express.json({ verify: (req: Request & { rawBody?: Buffer }, _res, buf) => { req.rawBody = buf; } }));
+app.use(helmet());
+
+const IS_PROD = process.env.NODE_ENV === "production";
+const ALLOWED_ORIGINS = IS_PROD
+  ? [process.env.PUBLIC_ORIGIN, process.env.CRM_ORIGIN].filter(Boolean) as string[]
+  : true;
+app.use(cors(IS_PROD ? { origin: ALLOWED_ORIGINS, credentials: true } : { origin: true, credentials: true }));
+
+// 10mb (up from body-parser's 100kb default): the onboarding flow round-trips a full ScrapedSite
+// — crawled page text + a base64 screenshot — back to /onboarding/analyze-product, which for a
+// content-rich site (e.g. polluxa.com ≈ 2.7mb) blew past 100kb and 413'd the whole parse step.
+app.use(express.json({ limit: "10mb", verify: (req: Request & { rawBody?: Buffer }, _res, buf) => { req.rawBody = buf; } }));
 app.use(apiRateLimiter);
 
 // Real connectivity checks, not a static "ok" — a gateway that can't reach Postgres or
@@ -85,6 +96,7 @@ app.use("/api/crm", crmInternalAuth, adsDataRoutes);
 // Register/login/google: no bearer token exists yet when calling these, so they're
 // mounted ahead of requireAuth (falls through to the gated router below if unmatched).
 app.use("/api", authEntryRouter);
+app.use("/api", requireAuth, sseStreamRoutes);
 app.use("/api", requireAuth, router);
 
 app.use((_req, res) => {
@@ -100,6 +112,11 @@ const server = app.listen(PORT, () => {
   console.log(`Polluxa API gateway listening on http://localhost:${PORT}`);
   warnIfRunningEveryAdNetworkInMockMode();
 });
+
+// Real-time layer: WebSocket server on the same HTTP port, plus Redis Pub/Sub
+// bridge that forwards worker-emitted events to connected browsers.
+attachWebSocketServer(server);
+const stopRealtimeBridge = startRealtimeBridge();
 
 /**
  * A workspace "connecting" Meta/Google/TikTok when no app credentials are registered
@@ -150,6 +167,7 @@ function gracefulShutdown(signal: string) {
   }, SHUTDOWN_FORCE_EXIT_MS);
   forceExit.unref();
 
+  stopRealtimeBridge();
   server.close((err) => {
     if (err) logger.error("Error while closing HTTP server", err);
     process.exit(err ? 1 : 0);

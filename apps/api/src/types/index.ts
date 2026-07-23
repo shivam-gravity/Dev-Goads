@@ -151,6 +151,11 @@ export interface AdCreative {
   /** Up to 5 headline/primary-text variants for the campaign builder's Ad Copy panel — `headline`/`body` above stay the first entry for back-compat with callers that don't know about variants. */
   headlines?: string[];
   primaryTexts?: string[];
+  /** Google Responsive Search Ad description assets (≤90 chars each, distinct from Meta's 125-char
+   * `primaryTexts`). Up to 4 per RSA — populated for Google variants so the adapter can publish a
+   * full multi-asset RSA (5 headlines × 4 descriptions) rather than synthesizing from one pair.
+   * Undefined for creatives built without a CreativeAgent result / non-Google flows. */
+  descriptions?: string[];
 }
 
 export interface AdStrategy {
@@ -211,7 +216,7 @@ export interface CampaignSuggestion {
   imagePrompt: string;
 }
 
-export type CampaignStatus = "draft" | "launching" | "active" | "paused" | "completed" | "failed";
+export type CampaignStatus = "draft" | "launching" | "active" | "paused" | "completed" | "failed" | "skipped";
 
 export interface CampaignVariant {
   id: string;
@@ -243,6 +248,15 @@ export interface Campaign {
   networks: AdNetwork[];
   dailyBudgetCents: number;
   variants: CampaignVariant[];
+  /** Meta campaign objective (post-ODAX key, e.g. OUTCOME_TRAFFIC/OUTCOME_LEADS/OUTCOME_SALES),
+   * chosen in the generation flow and threaded through to launchMetaHierarchy so the real Meta
+   * Campaign container uses it instead of the old hardcoded OUTCOME_TRAFFIC default. Optional:
+   * campaigns generated before this existed (or via the manual builder) fall back to the default. */
+  objective?: string;
+  /** Persistent 24/7 auto-optimize switch. When explicitly false, the scheduled metrics worker
+   * still ingests metrics but skips the budget-moving optimization pass for this campaign.
+   * Undefined defaults to enabled (prior always-on behavior). Set via POST /campaigns/:id/auto-optimize. */
+  autoOptimize?: boolean;
   createdAt: string;
   updatedAt: string;
   /** Fields below are only set by the manual campaign builder (CampaignBuilder.tsx) — undefined for campaigns created via the /wizard instant-generate flow, which keeps working off getMetaCredentials' workspace-level default connection. */
@@ -292,7 +306,31 @@ export interface PerformanceMetric {
   clicks: number;
   conversions: number;
   spendCents: number;
+  /** Real purchase/conversion value reported by the ad network (Meta action_values,
+   * Google metrics.conversions_value), in cents. 0 when the network reports no value. */
+  revenueCents: number;
 }
+
+/**
+ * Lower-funnel conversion counts + value, broken out by step. Meta reports these as separate
+ * action_type rows in `actions`/`action_values` (add_to_cart, add_payment_info, purchase); Google
+ * exposes analogous conversion-action segments. Cost-per-step and step CVR are derived downstream
+ * from these counts + spend/clicks rather than stored, so they never drift out of sync.
+ */
+export interface FunnelMetrics {
+  addToCart: number;
+  addPaymentInfo: number;
+  purchases: number;
+  /** Real purchase value (cents) — same figure that feeds revenueCents/ROAS, kept here for the funnel column. */
+  purchaseValueCents: number;
+}
+
+/** What every adapter's fetchInsights returns: the persisted per-day metric fields (minus the
+ * identity/date columns the caller fills in) plus optional funnel breakdown when the network
+ * reports it. Optional so adapters that can't segment the funnel simply omit it. */
+export type AdInsightStats = Omit<PerformanceMetric, "id" | "campaignId" | "variantId" | "network" | "date"> & {
+  funnel?: FunnelMetrics;
+};
 
 export interface NormalizedPerformance {
   campaignId: string;
@@ -303,11 +341,13 @@ export interface NormalizedPerformance {
   clicks: number;
   conversions: number;
   spendCents: number;
+  /** Sum of real reported conversion value (cents) across this variant's metrics. */
+  revenueCents: number;
   ctr: number;
   cpaCents: number | null;
   cpmCents: number | null;
   cpcCents: number | null;
-  /** Estimated — see ESTIMATED_REVENUE_CENTS_PER_CONVERSION in performancePipeline.ts. */
+  /** True ROAS = revenueCents / spendCents, from real network-reported conversion value. */
   roas: number | null;
   conversionRate: number;
 }
@@ -315,7 +355,7 @@ export interface NormalizedPerformance {
 export interface OptimizationDecision {
   campaignId: string;
   chosenVariantId: string;
-  action: "increase_budget" | "decrease_budget" | "pause" | "hold" | "regenerate_creative";
+  action: "increase_budget" | "decrease_budget" | "pause" | "hold" | "regenerate_creative" | "pause_audience";
   reason: string;
   decidedAt: string;
 }
@@ -423,7 +463,7 @@ export interface AdInsightsResponse {
     clicks: number;
     conversions: number;
     cpaCents: number | null;
-    /** Estimated — see ESTIMATED_REVENUE_CENTS_PER_CONVERSION in performancePipeline.ts. */
+    /** True ROAS = real reported revenue / spend. */
     roas: number | null;
   };
   audience: {

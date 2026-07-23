@@ -22,6 +22,7 @@ const {
   reallocateBudget,
   activateVariant,
   applyCreativeMedia,
+  saveCampaign,
 } = await import("../modules/orchestrator/campaignOrchestrator.js");
 
 // launchCampaign publishes "campaign.launched" via infra/eventBus.js, which is Redis
@@ -63,10 +64,27 @@ test("Campaign Orchestrator - buildCampaignFromStrategy drafting", async () => {
   assert.strictEqual(campaign.name, "Test Promo Campaign");
   assert.strictEqual(campaign.status, "draft");
   assert.strictEqual(campaign.dailyBudgetCents, 10000);
-  assert.strictEqual(campaign.variants.length, 6, "Should generate 6 variants (3 networks x 2 creatives)");
+  // The seeded strategy recommends meta+google+tiktok, but TikTok is "coming soon": the builder
+  // drops non-active networks (config/platforms.ts), so only meta+google variants are built.
+  assert.strictEqual(campaign.variants.length, 4, "Should generate 4 variants (2 active networks x 2 creatives — TikTok dropped)");
+  assert.ok(!campaign.variants.some(v => v.network === "tiktok"), "TikTok is coming-soon and must not be built into a variant");
+  assert.deepStrictEqual(campaign.networks, ["meta", "google"], "campaign.networks reflects only launchable networks");
 
   const googleVariants = campaign.variants.filter(v => v.network === "google");
   assert.strictEqual(googleVariants.length, 2, "Should have 2 Google variants");
+});
+
+test("Campaign Orchestrator - buildCampaignFromStrategy threads the chosen objective onto the campaign", async () => {
+  const strategyId = `strat_obj_${Date.now()}`;
+  const businessId = "biz_test_obj";
+  await seedTestStrategy(strategyId, businessId);
+
+  const withObjective = await buildCampaignFromStrategy(strategyId, "Objective Campaign", 10000, "OUTCOME_LEADS");
+  assert.strictEqual(withObjective.objective, "OUTCOME_LEADS", "objective should be stamped onto the campaign");
+
+  // Omitting the objective leaves it undefined (launch falls back to the historical default).
+  const withoutObjective = await buildCampaignFromStrategy(strategyId, "No Objective Campaign", 10000);
+  assert.strictEqual(withoutObjective.objective, undefined, "objective should be undefined when not provided");
 });
 
 test("Campaign Orchestrator - launchCampaign and pauseVariant execution flow", async () => {
@@ -78,15 +96,17 @@ test("Campaign Orchestrator - launchCampaign and pauseVariant execution flow", a
 
   // Launch campaign
   const launched = await launchCampaign(campaignDraft.id);
-  // Meta and Google now launch through their real object-graph hierarchy, paused by
-  // default (safety default — see launchMetaHierarchy/launchGoogleHierarchy); only
-  // TikTok's flat mock path still launches "active" today, so the campaign is "active"
-  // overall because at least one variant is.
-  assert.strictEqual(launched.status, "active", "Campaign status should change to active (TikTok variant still launches active)");
-  assert.ok(launched.variants.every(v => v.externalId), "All variants should be assigned external IDs");
+  // Meta and Google launch through their real object-graph hierarchy, paused by default (safety
+  // default — see launchMetaHierarchy/launchGoogleHierarchy). The builder already dropped the
+  // strategy's TikTok recommendation (coming soon), so only Meta+Google variants exist and the
+  // campaign is "paused" overall.
+  assert.strictEqual(launched.status, "paused", "Campaign is paused overall (Meta/Google launch paused)");
+  const launchedVariants = launched.variants.filter(v => v.network === "meta" || v.network === "google");
+  assert.ok(launchedVariants.every(v => v.externalId), "All launched (Meta/Google) variants should be assigned external IDs");
+  assert.ok(!launched.variants.some(v => v.network === "tiktok"), "No TikTok variant is built (coming soon)");
 
-  // Pause a variant
-  const targetVariant = launched.variants[0];
+  // Pause a launched variant
+  const targetVariant = launchedVariants[0];
   const pausedCampaign = await pauseVariant(launched.id, targetVariant.id);
   const pausedVariant = pausedCampaign.variants.find(v => v.id === targetVariant.id);
 
@@ -112,9 +132,38 @@ test("Campaign Orchestrator - Meta and Google variants launch through their hier
     assert.ok(variant.adSetExternalId, `${variant.network} variant should be attached to a mock ad set/ad group id`);
   }
 
-  const tiktokVariants = launched.variants.filter(v => v.network === "tiktok");
-  assert.ok(tiktokVariants.every(v => v.status === "active"), "TikTok keeps the existing flat mock behavior (active) until it gets the same hierarchy depth");
-  assert.strictEqual(launched.status, "active", "Campaign is active overall since the TikTok variant is active");
+  assert.ok(!launched.variants.some(v => v.network === "tiktok"), "TikTok is coming-soon: the builder must not produce a TikTok variant");
+  assert.strictEqual(launched.status, "paused", "Campaign is paused overall (Meta/Google paused — no active variant)");
+});
+
+test("Campaign Orchestrator - launchCampaign skips a stray non-active variant instead of failing the campaign (direct-launch guard)", async () => {
+  // The builders drop coming-soon networks, but launchCampaign is also reachable via
+  // POST /campaigns/:id/launch on an arbitrary persisted campaign — e.g. an older draft built
+  // before TikTok was gated. This asserts the last-resort skip loop still protects that path:
+  // the TikTok variant is marked "skipped" (no adapter call, no externalId) and does NOT drag the
+  // campaign to "failed"; Meta still launches paused.
+  const strategyId = `strat_stray_${Date.now()}`;
+  const businessId = "biz_test_stray";
+  await seedTestStrategy(strategyId, businessId);
+  const draft = await buildCampaignFromStrategy(strategyId, "Stray Variant Campaign", 20000);
+
+  // Inject a stray TikTok variant directly (bypassing the builder) to simulate a legacy draft.
+  draft.variants.push({
+    id: `stray_tiktok_${Date.now()}`,
+    creative: { headline: "Legacy", body: "Legacy body", callToAction: "Learn More" },
+    network: "tiktok",
+    status: "draft",
+    audienceName: "General Audience",
+    landingPageUrl: "https://example.com/",
+  });
+  await saveCampaign(draft);
+
+  const launched = await launchCampaign(draft.id, "demo");
+  const tiktok = launched.variants.find(v => v.network === "tiktok")!;
+  assert.strictEqual(tiktok.status, "skipped", "stray TikTok variant is skipped, not launched");
+  assert.ok(!tiktok.externalId, "skipped TikTok variant never gets an external id");
+  assert.ok(!launched.networks.includes("tiktok"), "skipped TikTok network is not reported as a live network");
+  assert.notStrictEqual(launched.status, "failed", "a stray coming-soon variant must not fail the whole campaign");
 });
 
 test("Campaign Orchestrator - buildCampaignFromStrategy applies each network's real copy limits to its own variant, not one shared truncation", async () => {
@@ -145,18 +194,18 @@ test("Campaign Orchestrator - buildCampaignFromStrategy applies each network's r
 
   const campaign = await buildCampaignFromStrategy(strategyId, "Copy Limits Test Campaign", 10000);
 
+  // TikTok is "coming soon" and dropped by the builder, so only the two active networks are
+  // present — per-network truncation is verified between Meta and Google.
   const meta = campaign.variants.find((v) => v.network === "meta")!;
   const google = campaign.variants.find((v) => v.network === "google")!;
-  const tiktok = campaign.variants.find((v) => v.network === "tiktok")!;
+  assert.ok(!campaign.variants.some((v) => v.network === "tiktok"), "TikTok variant must not be built (coming soon)");
 
   assert.ok(meta.creative.headline.length <= 40, `meta headline should be <= 40 chars, got ${meta.creative.headline.length}`);
   assert.ok(google.creative.headline.length <= 30, `google headline should be <= 30 chars, got ${google.creative.headline.length}`);
-  assert.ok(tiktok.creative.headline.length <= 100, `tiktok headline should be <= 100 chars, got ${tiktok.creative.headline.length}`);
   assert.notStrictEqual(meta.creative.headline, google.creative.headline, "the same source headline must be truncated differently per network, not shared verbatim");
 
   assert.ok(meta.creative.body.length <= 125);
   assert.ok(google.creative.body.length <= 90);
-  assert.ok(tiktok.creative.body.length <= 100);
 });
 
 test("Campaign Orchestrator - activateVariant flips a launched Meta variant to active", async () => {
