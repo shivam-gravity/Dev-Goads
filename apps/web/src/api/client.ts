@@ -512,7 +512,7 @@ export const api = {
   // Decision Intelligence campaign generation (Research Orchestrator -> Decision Engine
   // + AI Agent Coordinator -> Campaign Builder, all in one pipeline run — see
   // modules/orchestrator/campaignGenerationPipeline.ts)
-  generateCampaign: (input: { workspaceId: string; businessId: string; url: string; name?: string; dailyBudgetCents?: number; channels?: string[]; objective?: string; countries?: string[] }) =>
+  generateCampaign: (input: { workspaceId: string; businessId: string; url: string; name?: string; dailyBudgetCents?: number; channels?: string[]; objective?: string; countries?: string[]; forceRefresh?: boolean }) =>
     request<CampaignGenerationJobStatus>("/campaigns/generate", { method: "POST", body: JSON.stringify(input) }),
   getCampaignGenerationStatus: (id: string) => request<CampaignGenerationJobStatus>(`/campaigns/generate/${id}/status`),
   getCampaignGenerationFacts: (id: string) => request<CampaignGenerationFacts>(`/campaigns/generate/${id}/facts`),

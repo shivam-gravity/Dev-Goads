@@ -1079,15 +1079,18 @@ export default function NewCampaign() {
   }
 
   // Re-runs the exact same generation pipeline against the same URL/business — deliberately
-  // just another POST /campaigns/generate call (same path `handleStart` uses), not a separate
-  // "refresh" endpoint: there's no caching/invalidation to bypass, staleness here just means
-  // "the last run is old," so the fix is running the same real pipeline again.
+  // "Refresh research" must force a genuinely fresh crawl, so it passes forceRefresh:true. Without
+  // it, POST /campaigns/generate re-serves a recent completed job for the same (workspace,business,
+  // url) — AND the pipeline reuses cached research within its TTL — so "refresh" would silently
+  // return the same stale run (and, worse, a job whose campaign may since have been deleted, which
+  // is exactly how the builder ended up on a "Campaign not found" id). forceRefresh bypasses both
+  // the router short-circuit and the pipeline research cache, guaranteeing a real re-crawl.
   async function handleRefresh() {
     if (!job?.url || !businessId) return;
     setRefreshing(true);
     setError(null);
     try {
-      const created = await api.generateCampaign({ workspaceId: wsId, businessId, url: job.url });
+      const created = await api.generateCampaign({ workspaceId: wsId, businessId, url: job.url, forceRefresh: true });
       setJob(created);
       setProgressSteps([]);
       setProgressTotal(null);
