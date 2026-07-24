@@ -176,9 +176,87 @@ async function saveAd(a: Ad): Promise<void> {
   });
 }
 
+/**
+ * Deterministic ad-set/ad IDs for the DRAFT (pre-launch) view. A draft campaign has no
+ * prisma.adSet/prisma.ad rows yet (those are written by syncLaunchedHierarchy AT LAUNCH), but the
+ * Ads Manager should still show the hierarchy it will publish. We derive it from the campaign's
+ * own `variants` JSON: one ad set per distinct (network, audienceName) — the same grouping
+ * launchMetaHierarchy uses — and one ad per variant. IDs are stable (derived from campaign + group
+ * + variant id) so the ad-set→ad linkage is consistent across the two list calls.
+ */
+function draftAdSetId(campaignId: string, network: string, audienceName: string): string {
+  return `draft-${campaignId}-${network}-${Buffer.from(audienceName).toString("base64url").slice(0, 24)}`;
+}
+
+interface CampaignVariantLike {
+  id: string;
+  network: string;
+  status?: string;
+  audienceName?: string;
+  creative?: { headline?: string; body?: string; callToAction?: string; imageUrl?: string; videoUrl?: string };
+}
+
+async function loadCampaignForDerivation(campaignId: string): Promise<{ workspaceId?: string; dailyBudgetCents: number; variants: CampaignVariantLike[] } | null> {
+  const row = await prisma.campaign.findUnique({ where: { id: campaignId } });
+  if (!row) return null;
+  const d = row.data as any;
+  return { workspaceId: row.workspaceId ?? undefined, dailyBudgetCents: Number(d?.dailyBudgetCents ?? 0), variants: Array.isArray(d?.variants) ? d.variants : [] };
+}
+
+function deriveAdSetsFromCampaign(campaignId: string, campaign: { workspaceId?: string; dailyBudgetCents: number; variants: CampaignVariantLike[] }): AdSet[] {
+  const now = new Date().toISOString();
+  const seen = new Map<string, AdSet>();
+  for (const v of campaign.variants) {
+    const audience = v.audienceName?.trim() || "General Audience";
+    const id = draftAdSetId(campaignId, v.network, audience);
+    if (seen.has(id)) continue;
+    const groupSize = campaign.variants.filter((x) => x.network === v.network && (x.audienceName?.trim() || "General Audience") === audience).length;
+    seen.set(id, {
+      id,
+      campaignId,
+      workspaceId: campaign.workspaceId,
+      name: audience,
+      status: v.status === "active" ? "active" : v.status === "paused" ? "paused" : "draft",
+      // Draft ad sets share the campaign's daily budget split across the distinct ad sets they'll become.
+      dailyBudgetCents: groupSize > 0 && campaign.dailyBudgetCents > 0 ? Math.round(campaign.dailyBudgetCents / Math.max(1, new Set(campaign.variants.map((x) => draftAdSetId(campaignId, x.network, x.audienceName?.trim() || "General Audience"))).size)) : campaign.dailyBudgetCents,
+      targeting: {},
+      placements: [],
+      bidStrategy: "LOWEST_COST_WITHOUT_CAP",
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  return [...seen.values()];
+}
+
+function deriveAdsFromCampaign(campaignId: string, adSetId: string, campaign: { variants: CampaignVariantLike[] }): Ad[] {
+  const now = new Date().toISOString();
+  return campaign.variants
+    .filter((v) => draftAdSetId(campaignId, v.network, v.audienceName?.trim() || "General Audience") === adSetId)
+    .map((v) => ({
+      id: `draft-ad-${campaignId}-${v.id}`,
+      adSetId,
+      name: v.creative?.headline?.trim() || "Untitled ad",
+      status: (v.status === "active" ? "active" : v.status === "paused" ? "paused" : "draft") as Ad["status"],
+      creative: {
+        headline: v.creative?.headline ?? "",
+        body: v.creative?.body ?? "",
+        callToAction: v.creative?.callToAction ?? "Learn More",
+        ...(v.creative?.imageUrl ? { imageUrl: v.creative.imageUrl } : {}),
+      },
+      format: (v.creative?.videoUrl ? "video" : "single_image") as Ad["format"],
+      createdAt: now,
+      updatedAt: now,
+    }));
+}
+
 export async function listAdSets(campaignId: string): Promise<AdSet[]> {
   const rows = await prisma.adSet.findMany({ where: { campaignId }, orderBy: { createdAt: "desc" } });
-  return rows.map((r) => r.data as unknown as AdSet);
+  if (rows.length > 0) return rows.map((r) => r.data as unknown as AdSet);
+  // No persisted ad sets (a draft campaign, not yet launched) — derive the hierarchy it WILL
+  // publish from its variants so the Ads Manager isn't empty. Best-effort: no campaign → [].
+  const campaign = await loadCampaignForDerivation(campaignId);
+  return campaign ? deriveAdSetsFromCampaign(campaignId, campaign) : [];
 }
 
 export async function createAdSet(campaignId: string, input: Omit<AdSet, "id" | "campaignId" | "createdAt" | "updatedAt">): Promise<AdSet> {
@@ -189,7 +267,17 @@ export async function createAdSet(campaignId: string, input: Omit<AdSet, "id" | 
 
 export async function listAds(adSetId: string): Promise<Ad[]> {
   const rows = await prisma.ad.findMany({ where: { adSetId }, orderBy: { createdAt: "desc" } });
-  return rows.map((r) => r.data as unknown as Ad);
+  if (rows.length > 0) return rows.map((r) => r.data as unknown as Ad);
+  // Derived draft ad-set id shape is `draft-<campaignId>-<network>-<hash>` — recover the campaign
+  // id (a UUID has 5 dash-separated parts) and derive this ad set's ads from the campaign variants.
+  if (adSetId.startsWith("draft-")) {
+    const rest = adSetId.slice("draft-".length);
+    const parts = rest.split("-");
+    const campaignId = parts.slice(0, 5).join("-"); // UUID = 8-4-4-4-12
+    const campaign = await loadCampaignForDerivation(campaignId);
+    if (campaign) return deriveAdsFromCampaign(campaignId, adSetId, campaign);
+  }
+  return [];
 }
 
 export async function createAd(adSetId: string, input: Omit<Ad, "id" | "adSetId" | "createdAt" | "updatedAt">): Promise<Ad> {

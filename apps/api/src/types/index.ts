@@ -270,6 +270,11 @@ export interface Campaign {
   endDate?: string;
   locations?: string[];
   advantagePlus?: boolean;
+  /** Meta budget placement. Undefined/"ABO" (default) = each ad set carries its own daily budget;
+   * "CBO" = Campaign Budget Optimization (Advantage Campaign Budget), a single daily budget on the
+   * campaign that Meta distributes across ad sets. Only meaningful for multi-ad-set (multi-audience)
+   * Meta campaigns; threaded through launchMetaHierarchy. */
+  budgetMode?: "ABO" | "CBO";
   metaAdAccountId?: string;
   pageId?: string;
   instagramAccountId?: string;

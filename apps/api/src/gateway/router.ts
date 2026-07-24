@@ -82,6 +82,7 @@ import {
   getSavedAudience,
 } from "../modules/audience/savedAudienceService.js";
 import { buildMetaTargetingSpec, fetchMetaReachEstimate, estimateReachHeuristic } from "../modules/adapters/metaTargetingMapper.js";
+import { createCustomAudience, createLookalikeAudience, addUsersToCustomAudience } from "../modules/adapters/metaAudienceSync.js";
 import {
   listDrafts, createDraft, updateDraft, publishDraft, deleteDraft, scheduleDraft,
   listAdSets, createAdSet, listAds, createAd, updateAd,
@@ -461,6 +462,7 @@ const savedAudienceFields = z.object({
   type: z.enum(["saved", "custom", "lookalike", "interest_group"]).default("saved"),
   platform: z.enum(["meta", "google"]).nullable().optional(),
   lookalikeSourceId: z.string().nullable().optional(),
+  metaCustomAudienceId: z.string().nullable().optional(),
   ageMin: z.number().int().min(13).max(65),
   ageMax: z.number().int().min(13).max(65),
   gender: z.enum(["all", "male", "female"]).default("all"),
@@ -485,6 +487,77 @@ router.post("/workspaces/:id/audiences", requireWorkspaceMember("params", "id"),
     res.status(201).json(await createSavedAudience(req.params.id, parsed.data));
   } catch (err) {
     sendError(res, err, 409, "Failed to create audience");
+  }
+}));
+
+// Create a real Meta Custom Audience (optionally seeding it with a hashed customer list) and save
+// it locally with its Meta id so it can be targeted on a launched ad set (see buildMetaTargetingSpec
+// custom_audiences injection). Degrades to a mock audience id when no Meta account is connected.
+const customAudienceSchema = z.object({
+  name: z.string().trim().min(1),
+  subtype: z.enum(["CUSTOM", "WEBSITE", "APP", "OFFLINE", "ENGAGEMENT"]).default("CUSTOM"),
+  description: z.string().trim().optional(),
+  emails: z.array(z.string()).optional(),
+  phones: z.array(z.string()).optional(),
+  ageMin: z.number().int().min(13).max(65).default(18),
+  ageMax: z.number().int().min(13).max(65).default(65),
+  gender: z.enum(["all", "male", "female"]).default("all"),
+  locations: z.array(z.string()).default([]),
+});
+router.post("/workspaces/:id/audiences/custom", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
+  const parsed = customAudienceSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const creds = await getMetaCredentials(req.params.id);
+    const created = await createCustomAudience(
+      { adAccountId: creds?.adAccountId ?? "", name: parsed.data.name, subtype: parsed.data.subtype, description: parsed.data.description, customerFileSource: "USER_PROVIDED_ONLY" },
+      creds ?? undefined,
+    );
+    if ((parsed.data.emails?.length || parsed.data.phones?.length) && creds) {
+      await addUsersToCustomAudience(created.externalId, { emails: parsed.data.emails, phones: parsed.data.phones }, creds).catch(() => { /* best-effort seed */ });
+    }
+    const saved = await createSavedAudience(req.params.id, {
+      name: parsed.data.name, type: "custom", platform: "meta", metaCustomAudienceId: created.externalId,
+      ageMin: parsed.data.ageMin, ageMax: parsed.data.ageMax, gender: parsed.data.gender,
+      locations: parsed.data.locations, interests: [], exclusions: [],
+    });
+    res.status(201).json(saved);
+  } catch (err) {
+    sendError(res, err, 502, "Failed to create Meta Custom Audience");
+  }
+}));
+
+// Create a Meta Lookalike from an existing source Custom Audience (must already have a Meta id —
+// a lookalike needs a real seed audience). Saves it locally with its own Meta id.
+const lookalikeSchema = z.object({
+  name: z.string().trim().min(1),
+  sourceAudienceId: z.string().min(1),
+  ratio: z.number().min(0.01).max(0.20).default(0.01),
+  targetCountries: z.array(z.string()).default(["US"]),
+});
+router.post("/workspaces/:id/audiences/lookalike", requireWorkspaceMember("params", "id"), asyncHandler(async (req, res) => {
+  const parsed = lookalikeSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const source = await getSavedAudience(parsed.data.sourceAudienceId);
+  if (!source || source.workspaceId !== req.params.id) return res.status(404).json({ error: "Source audience not found" });
+  if (!source.metaCustomAudienceId) {
+    return res.status(400).json({ error: "The source audience has no Meta Custom Audience — upload a seed customer list to create one first." });
+  }
+  try {
+    const creds = await getMetaCredentials(req.params.id);
+    const created = await createLookalikeAudience(
+      { adAccountId: creds?.adAccountId ?? "", name: parsed.data.name, originAudienceId: source.metaCustomAudienceId, targetCountries: parsed.data.targetCountries, ratio: parsed.data.ratio },
+      creds ?? undefined,
+    );
+    const saved = await createSavedAudience(req.params.id, {
+      name: parsed.data.name, type: "lookalike", platform: "meta",
+      lookalikeSourceId: source.id, metaCustomAudienceId: created.externalId,
+      ageMin: source.ageMin, ageMax: source.ageMax, gender: source.gender,
+      locations: parsed.data.targetCountries, interests: [], exclusions: [],
+    });
+    res.status(201).json(saved);
+  } catch (err) {
+    sendError(res, err, 502, "Failed to create Meta Lookalike Audience");
   }
 }));
 

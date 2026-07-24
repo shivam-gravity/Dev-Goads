@@ -109,7 +109,7 @@ export interface Campaign {
   objective?: string; autoOptimize?: boolean;
   createdAt: string; updatedAt: string;
   conversionEvent?: string; finalUrl?: string; startDate?: string; endDate?: string;
-  locations?: string[]; advantagePlus?: boolean;
+  locations?: string[]; advantagePlus?: boolean; budgetMode?: "ABO" | "CBO";
   metaAdAccountId?: string; pageId?: string; instagramAccountId?: string; pixelId?: string;
   googleCustomerId?: string; googleConversionActionId?: string;
   creativeAssets?: CreativeAssetRef[];
@@ -117,7 +117,7 @@ export interface Campaign {
 }
 export interface CampaignBuilderPatch {
   name?: string; dailyBudgetCents?: number; conversionEvent?: string; finalUrl?: string;
-  startDate?: string; endDate?: string; locations?: string[]; advantagePlus?: boolean;
+  startDate?: string; endDate?: string; locations?: string[]; advantagePlus?: boolean; budgetMode?: "ABO" | "CBO";
   metaAdAccountId?: string; pageId?: string; instagramAccountId?: string; pixelId?: string;
   googleCustomerId?: string; googleConversionActionId?: string;
   variants?: CampaignVariant[]; creativeAssets?: CreativeAssetRef[];
@@ -365,7 +365,7 @@ export interface Notification { id: string; workspaceId: string; type: string; t
 export interface Asset { id: string; workspaceId: string; name: string; type: "image" | "video" | "logo" | "font" | "template"; url: string; thumbnailUrl?: string; size: number; mimeType: string; tags: string[]; usageCount: number; width?: number; height?: number; createdAt: string; }
 export interface Insight { id: string; workspaceId: string; type: "anomaly" | "recommendation" | "trend" | "opportunity"; category: "budget" | "audience" | "creative" | "placement"; title: string; description: string; metric?: string; change?: number; severity: "low" | "medium" | "high"; actionLabel?: string; actionUrl?: string; dismissed: boolean; createdAt: string; }
 export interface Integration { id: string; workspaceId: string; platform: "meta" | "google" | "tiktok" | "shopify" | "pixel"; status: "connected" | "disconnected" | "error" | "pending"; accountName?: string; accountId?: string; permissions: string[]; settings: Record<string, unknown>; connectedAt?: string; errorMessage?: string; updatedAt: string; }
-export interface SavedAudience { id: string; workspaceId: string; name: string; ageMin: number; ageMax: number; gender: "all" | "male" | "female"; locations: string[]; interests: string[]; exclusions: string[]; estimatedReach?: string; createdAt: string; }
+export interface SavedAudience { id: string; workspaceId: string; name: string; type?: "saved" | "custom" | "lookalike" | "interest_group"; platform?: "meta" | "google" | null; lookalikeSourceId?: string | null; metaCustomAudienceId?: string | null; ageMin: number; ageMax: number; gender: "all" | "male" | "female"; locations: string[]; interests: string[]; exclusions: string[]; estimatedReach?: string; createdAt: string; }
 export interface ReachEstimate { usersLowerBound: number; usersUpperBound: number; source: "meta" | "heuristic"; }
 export type ImageAspectRatio = "square" | "portrait" | "landscape";
 export type ImageQuality = "standard" | "high";
@@ -479,6 +479,13 @@ export const api = {
   createAudience: (workspaceId: string, input: Omit<SavedAudience, "id" | "workspaceId" | "createdAt" | "estimatedReach">) =>
     request<SavedAudience>(`/workspaces/${workspaceId}/audiences`, { method: "POST", body: JSON.stringify(input) }),
   deleteAudience: (id: string) => request<void>(`/audiences/${id}`, { method: "DELETE" }),
+  // Create a real Meta Custom Audience (optionally seeded with a hashed customer list) — returned
+  // SavedAudience carries metaCustomAudienceId, which lets a launched ad set target it.
+  createCustomAudience: (workspaceId: string, input: { name: string; subtype?: "CUSTOM" | "WEBSITE" | "APP" | "OFFLINE" | "ENGAGEMENT"; description?: string; emails?: string[]; phones?: string[]; ageMin?: number; ageMax?: number; gender?: "all" | "male" | "female"; locations?: string[] }) =>
+    request<SavedAudience>(`/workspaces/${workspaceId}/audiences/custom`, { method: "POST", body: JSON.stringify(input) }),
+  // Create a Meta Lookalike from an existing source Custom Audience (must have a metaCustomAudienceId).
+  createLookalike: (workspaceId: string, input: { name: string; sourceAudienceId: string; ratio?: number; targetCountries?: string[] }) =>
+    request<SavedAudience>(`/workspaces/${workspaceId}/audiences/lookalike`, { method: "POST", body: JSON.stringify(input) }),
   getReachEstimate: (workspaceId: string, audienceId: string) =>
     request<ReachEstimate>(`/workspaces/${workspaceId}/audiences/${audienceId}/reach-estimate`, { method: "POST" }),
   getEphemeralReachEstimate: (workspaceId: string, input: { locations: string[]; interests?: string[]; ageMin?: number; ageMax?: number; gender?: "all" | "male" | "female" }) =>

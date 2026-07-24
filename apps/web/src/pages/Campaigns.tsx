@@ -18,6 +18,7 @@ export default function Campaigns({ businessId }: { businessId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [launching, setLaunching] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const navigate = useNavigate();
 
   async function refresh() {
@@ -59,6 +60,23 @@ export default function Campaigns({ businessId }: { businessId: string }) {
       setError(err instanceof Error ? err.message : "Launch failed");
     } finally {
       setLaunching(null);
+    }
+  }
+
+  async function handleDelete(campaign: Campaign) {
+    if (!confirm(`Delete "${campaign.name}"? This can't be undone.`)) return;
+    setDeleting(campaign.id);
+    setError(null);
+    try {
+      await api.deleteCampaign(campaign.id);
+      // Drop it from the list without a full refetch.
+      setCampaigns((prev) => prev.filter((c) => c.id !== campaign.id));
+    } catch (err) {
+      // A launched (paused/active) campaign is refused by the backend (409) so its live Meta/Google
+      // objects aren't orphaned — surface that message rather than a generic failure.
+      setError(err instanceof Error ? err.message : "Failed to delete campaign");
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -162,7 +180,7 @@ export default function Campaigns({ businessId }: { businessId: string }) {
                 {filtered.map((c) => (
                   <tr key={c.id} className="campaign-table-row">
                     <td>
-                      <Link to={`/campaigns/${c.id}`} className="campaign-table-name">
+                      <Link to={`/manager?campaign=${c.id}&mode=adsets`} className="campaign-table-name">
                         {c.name}
                       </Link>
                       <span className="campaign-table-date">
@@ -187,7 +205,7 @@ export default function Campaigns({ businessId }: { businessId: string }) {
                     <td>{totalConversions(c)}</td>
                     <td>
                       <div className="campaign-table-actions">
-                        <Link to={`/campaigns/${c.id}`} className="btn btn-sm btn-secondary">
+                        <Link to={`/manager?campaign=${c.id}&mode=adsets`} className="btn btn-sm btn-secondary">
                           View
                         </Link>
                         {(c.status === "draft") && (
@@ -204,6 +222,13 @@ export default function Campaigns({ businessId }: { businessId: string }) {
                             </button>
                           </>
                         )}
+                        <button
+                          className="btn btn-sm btn-danger"
+                          onClick={() => handleDelete(c)}
+                          disabled={deleting === c.id}
+                        >
+                          {deleting === c.id ? "Deleting…" : "Delete"}
+                        </button>
                       </div>
                     </td>
                   </tr>

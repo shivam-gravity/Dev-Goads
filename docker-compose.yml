@@ -4,6 +4,10 @@
 # .env.example to .env and fill in JWT_SECRET / INTERNAL_SERVICE_KEY / TOKEN_ENCRYPTION_KEY
 # (compose refuses to start without them — see .env.example for how to generate them).
 #
+# A `traefik` reverse proxy fronts the stack so each service has a memorable *.localhost
+# hostname on port 80 instead of a port number (see the traefik service below for the map).
+# The raw published ports are kept too, so anything still pointing at localhost:PORT works.
+#
 # Local per-service dev without Docker is untouched — `npm run dev:api` etc. still work
 # exactly as before; this file is the containerized/production-shaped path.
 
@@ -65,6 +69,43 @@ x-depends-on-datastores: &depends-on-datastores
     condition: service_healthy
 
 services:
+  # Reverse proxy giving every service a memorable hostname instead of a port number.
+  # *.localhost resolves to 127.0.0.1 automatically in all major browsers (RFC 6761), so
+  # no hosts-file editing is needed. The raw published ports below stay in place too, so
+  # existing tooling / OAuth redirects / dev scripts that hit localhost:PORT keep working.
+  #
+  #   http://app.localhost      -> web (the SPA; also proxies /api and /objects itself)
+  #   http://api.localhost      -> api  (direct backend access, e.g. OAuth callbacks / CRM)
+  #   http://scraper.localhost  -> scraper-service
+  #   http://search.localhost   -> searxng
+  #   http://crawl.localhost    -> crawl4ai
+  #   http://traefik.localhost  -> Traefik dashboard (routing/health at a glance)
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    command:
+      # Auto-discover containers by their labels; nothing is exposed unless it opts in.
+      - --providers.docker=true
+      - --providers.docker.exposedByDefault=false
+      - --entrypoints.web.address=:80
+      - --api.dashboard=true
+      - --ping=true
+    ports:
+      - "80:80"
+    volumes:
+      # Read-only socket so Traefik can watch container start/stop and read routing labels.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.dashboard.entrypoints=web"
+      - "traefik.http.routers.dashboard.service=api@internal"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -127,6 +168,11 @@ services:
       - "8888:8080"
     volumes:
       - ./searxng:/etc/searxng:rw
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.searxng.rule=Host(`search.localhost`)"
+      - "traefik.http.routers.searxng.entrypoints=web"
+      - "traefik.http.services.searxng.loadbalancer.server.port=8080"
     environment:
       - SEARXNG_BASE_URL=http://localhost:8888/
     healthcheck:
@@ -154,6 +200,11 @@ services:
     volumes:
       # Override the stock config, which binds 127.0.0.1 (unreachable via the published port).
       - ./crawl4ai/config.yml:/app/config.yml:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.crawl4ai.rule=Host(`crawl.localhost`)"
+      - "traefik.http.routers.crawl4ai.entrypoints=web"
+      - "traefik.http.services.crawl4ai.loadbalancer.server.port=11235"
     # Headless-Chromium crawls are shared-memory hungry. 1GB was too small for the pool's page
     # count and caused 500s under the research pipeline's parallel fan-out; 2GB + the config's
     # lowered pool.max_pages (6) keeps crawls reliable. mem_limit bounds total container RAM so a
@@ -179,6 +230,11 @@ services:
       - "4000:4000"
     volumes:
       - api-objects:/repo/service/apps/api/data/objects
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.localhost`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=4000"
     depends_on: *depends-on-datastores
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -196,6 +252,11 @@ services:
       - "8080:80"
     depends_on:
       - api
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.web.rule=Host(`app.localhost`) || Host(`localhost`)"
+      - "traefik.http.routers.web.entrypoints=web"
+      - "traefik.http.services.web.loadbalancer.server.port=80"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/"]
       interval: 10s
@@ -211,6 +272,11 @@ services:
     environment: *app-env
     ports:
       - "4003:4003"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.scraper.rule=Host(`scraper.localhost`)"
+      - "traefik.http.routers.scraper.entrypoints=web"
+      - "traefik.http.services.scraper.loadbalancer.server.port=4003"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:4003/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s

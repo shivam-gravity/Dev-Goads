@@ -68,7 +68,11 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  overflow-x: hidden;
+  /* `overflow-x: clip` (not `hidden`): `hidden` forces overflow-y to compute to `auto`, turning
+     <body> into a scroll container that breaks `position: sticky` on descendants (the sticky
+     resubmit header scrolled away instead of pinning). `clip` still prevents horizontal scroll
+     but leaves overflow-y `visible`, so the window is the scroller and sticky works. */
+  overflow-x: clip;
   max-width: 100vw;
 }
 
@@ -6734,6 +6738,40 @@ td {
   gap: 20px;
 }
 
+/* ─── Ads Manager campaign-scope banner (deep-linked from Campaigns "View") ─── */
+.polluxa-scope-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: var(--surface-tint);
+  border: 1px solid var(--accent-light);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--ink);
+}
+.polluxa-scope-banner-text strong {
+  color: var(--accent-dark);
+}
+.polluxa-scope-banner-clear {
+  flex-shrink: 0;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent-dark);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.polluxa-scope-banner-clear:hover {
+  border-color: var(--accent);
+}
+
 /* ─── Manage Funds (header wallet chip + panel; mirrors the CRM WalletWidget) ─── */
 .manage-funds {
   position: relative;
@@ -6780,11 +6818,16 @@ td {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.manage-funds-panel-title {
+  font-size: 15px;
   font-weight: 700;
   color: var(--ink);
-  margin-bottom: 12px;
 }
 .manage-funds-add-btn {
+  flex-shrink: 0;
   font-size: 12.5px;
   font-weight: 700;
   color: #fff;
@@ -6792,38 +6835,79 @@ td {
   padding: 6px 12px;
   border-radius: 999px;
   text-decoration: none;
+  transition: background 0.15s ease;
 }
 .manage-funds-add-btn:hover {
   background: var(--accent-dark);
 }
-.manage-funds-stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px 14px;
-}
-.manage-funds-stat {
+.manage-funds-section {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 12px;
 }
-.manage-funds-stat-label {
+/* Balance hero — the primary figure, given its own tinted card. */
+.manage-funds-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  background: var(--surface-tint);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.manage-funds-hero-label {
   font-size: 11px;
-  color: var(--muted-2);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
-.manage-funds-stat-value {
-  font-size: 15px;
-  font-weight: 700;
+.manage-funds-hero-value {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.1;
   color: var(--ink);
 }
+/* Secondary figures as spaced label → value rows. */
+.manage-funds-rows {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+.manage-funds-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.manage-funds-row:last-child {
+  border-bottom: none;
+}
+.manage-funds-row dt {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.manage-funds-row dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  text-align: right;
+}
 .manage-funds-source-note {
-  grid-column: 1 / -1;
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   font-size: 11px;
+  line-height: 1.5;
   color: var(--muted);
 }
 .manage-funds-source-note code {
   font-size: 10.5px;
   color: var(--accent-dark);
+  background: var(--surface-tint);
+  padding: 1px 5px;
+  border-radius: 5px;
 }
 .manage-funds-muted {
   font-size: 12.5px;
@@ -8762,9 +8846,11 @@ td {
 }
 
 /* Results state: no large top padding, so the sticky resubmit-bar header sits at the very top and
-   the results scroll under it. */
+   the results scroll under it; and a small bottom padding instead of the pre-search hero's 96px,
+   which otherwise left a big empty gap below the last card (the Promotion Objective card). */
 .new-campaign-hero--results {
   padding-top: 0;
+  padding-bottom: 24px;
 }
 
 .new-campaign-avatars {
@@ -12977,10 +13063,14 @@ td {
 }
 
 .ad-preview-post {
+  /* Cap to a realistic Meta feed-post width and center it — without this the post filled the whole
+     card, blowing a 1:1 creative up to ~900px. Meta's own ad-preview panels render the feed card
+     ~360px wide, so a 1:1 creative shows ~340px, not half the screen. */
+  max-width: 360px;
+  margin: 10px auto 0;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   padding: 12px;
-  margin-top: 10px;
   background: #ffffff;
   font-family: Helvetica, Arial, sans-serif;
 }
@@ -13066,8 +13156,12 @@ td {
 .ad-preview-media img,
 .ad-preview-media video {
   width: 100%;
-  max-height: 320px;
-  object-fit: cover;
+  /* Show the WHOLE creative at its natural aspect ratio (height follows width) — the old
+     `object-fit: cover` + `max-height: 320px` cropped the headline and CTA off a square/portrait
+     creative forced into a short wide box. No height clamp: a 1:1 creative renders square and a
+     portrait renders tall, exactly like a real Meta feed ad, with nothing cut off. */
+  height: auto;
+  object-fit: contain;
   display: block;
 }
 

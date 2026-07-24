@@ -94,6 +94,33 @@ function clampName(name: string): string {
   return trimmed.length <= META_MAX_NAME_LENGTH ? trimmed : trimmed.slice(0, META_MAX_NAME_LENGTH - 1).trimEnd() + "…";
 }
 
+// Meta's call_to_action.type is a fixed enum — a free-text CTA (e.g. "Book Live Demo") 400s the
+// Graph API. Map the creative's CTA text to the closest valid enum, defaulting to LEARN_MORE.
+const META_CTA_TYPES = new Set([
+  "LEARN_MORE", "SHOP_NOW", "SIGN_UP", "SUBSCRIBE", "BOOK_TRAVEL", "BOOK_NOW", "DOWNLOAD",
+  "GET_QUOTE", "CONTACT_US", "APPLY_NOW", "GET_OFFER", "ORDER_NOW", "DONATE_NOW", "SEE_MENU",
+  "WATCH_MORE", "LISTEN_NOW", "PLAY_GAME", "GET_SHOWTIMES", "REQUEST_TIME", "SEND_MESSAGE",
+  "CALL_NOW", "WHATSAPP_MESSAGE", "NO_BUTTON",
+]);
+// Common label/free-text → enum aliases (keys normalized: uppercased, spaces→underscore).
+const META_CTA_ALIASES: Record<string, string> = {
+  SHOP: "SHOP_NOW", BUY_NOW: "SHOP_NOW", BUY: "SHOP_NOW", ORDER: "ORDER_NOW",
+  REGISTER: "SIGN_UP", JOIN_NOW: "SIGN_UP", GET_STARTED: "SIGN_UP", START_NOW: "SIGN_UP",
+  START_FREE_TRIAL: "SIGN_UP", TRY_FREE: "SIGN_UP", FREE_TRIAL: "SIGN_UP",
+  BOOK: "BOOK_NOW", BOOK_A_DEMO: "BOOK_NOW", BOOK_DEMO: "BOOK_NOW", BOOK_LIVE_DEMO: "BOOK_NOW",
+  REQUEST_A_DEMO: "REQUEST_TIME", REQUEST_DEMO: "REQUEST_TIME", GET_A_QUOTE: "GET_QUOTE",
+  GET_DEMO: "BOOK_NOW", CONTACT: "CONTACT_US", CALL: "CALL_NOW", MESSAGE_US: "SEND_MESSAGE",
+  DONATE: "DONATE_NOW", INSTALL_NOW: "DOWNLOAD", INSTALL: "DOWNLOAD", GET_APP: "DOWNLOAD",
+  WATCH: "WATCH_MORE", LISTEN: "LISTEN_NOW", SEE_MORE: "LEARN_MORE", READ_MORE: "LEARN_MORE",
+  APPLY: "APPLY_NOW", SUBSCRIBE_NOW: "SUBSCRIBE",
+};
+export function toMetaCtaType(cta?: string): string {
+  if (!cta) return "LEARN_MORE";
+  const key = cta.trim().toUpperCase().replace(/\s+/g, "_").replace(/[^A-Z_]/g, "");
+  if (META_CTA_TYPES.has(key)) return key;
+  return META_CTA_ALIASES[key] ?? "LEARN_MORE";
+}
+
 /**
  * A classified Graph API failure. Carries Meta's own error taxonomy (code / error_subcode /
  * error_user_msg / fbtrace_id) so callers can branch on it — the orchestrator refreshes the
@@ -418,16 +445,25 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     const credentials = resolveCredentials(explicit);
     if (!credentials) return { externalId: mockId("meta_campaign") };
 
-    const json = await graphPost(`/act_${credentials.adAccountId}/campaigns`, credentials.accessToken, {
+    // CBO (Campaign Budget Optimization / "Advantage Campaign Budget"): the daily budget + bid
+    // strategy live on the CAMPAIGN and Meta distributes spend across ad sets. Default ABO keeps
+    // budgets on each ad set (see createAdSetContainer.daily_budget) and campaign budget sharing off.
+    const cbo = input.budgetMode === "CBO" && !!input.dailyBudgetCents;
+    const campaignBody: Record<string, unknown> = {
       name: clampName(input.name),
       objective: input.objective,
       status: "PAUSED",
       special_ad_categories: [],
-      // Budgets live at the ad-set level (ABO — see createAdSetContainer.daily_budget), so there is no
-      // campaign-level budget. Meta now REQUIRES this flag be set explicitly for that case (Graph API
-      // error subcode 4834011 otherwise). false = don't let ad sets share 20% of budget to optimize.
-      is_adset_budget_sharing_enabled: false,
-    });
+      // Meta REQUIRES this flag be set explicitly (Graph API error subcode 4834011 otherwise).
+      // CBO true = a single campaign budget shared across ad sets; ABO false = each ad set owns its budget.
+      is_adset_budget_sharing_enabled: cbo,
+    };
+    if (cbo) {
+      campaignBody.daily_budget = toMetaMinorUnits(floorAdSetBudgetCents(input.dailyBudgetCents!, credentials.currency), credentials.currency);
+      // Same "Lowest Cost, no bid cap" default the ad-set path uses — required at campaign level for CBO.
+      campaignBody.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
+    }
+    const json = await graphPost(`/act_${credentials.adAccountId}/campaigns`, credentials.accessToken, campaignBody);
     if (!json?.id) throw new Error(`Meta campaign creation failed: ${JSON.stringify(json)}`);
     return { externalId: json.id };
   },
@@ -436,21 +472,26 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     const credentials = resolveCredentials(explicit);
     if (!credentials) return { externalId: mockId("meta_adset") };
 
+    // Under CBO the budget + bid strategy live on the campaign, so the ad set must OMIT both —
+    // sending daily_budget/bid_strategy on an ad set of a CBO campaign is rejected by Meta.
+    const cbo = input.budgetMode === "CBO";
     const body: Record<string, unknown> = {
       name: clampName(input.name),
       campaign_id: input.campaignExternalId,
-      daily_budget: toMetaMinorUnits(floorAdSetBudgetCents(input.dailyBudgetCents, credentials.currency), credentials.currency),
       billing_event: "IMPRESSIONS",
       // Meta requires OFFSITE_CONVERSIONS (not LINK_CLICKS) whenever a promoted_object/pixel is set.
       optimization_goal: input.promotedObject ? "OFFSITE_CONVERSIONS" : (input.objective ? resolveOptimizationGoal(input.objective as any, false) : "LINK_CLICKS"),
+      targeting: input.targeting,
+      status: "PAUSED",
+    };
+    if (!cbo) {
+      body.daily_budget = toMetaMinorUnits(floorAdSetBudgetCents(input.dailyBudgetCents, credentials.currency), credentials.currency);
       // With ABO (ad-set budgets) and no campaign bid_strategy, Meta otherwise defaults to a
       // strategy that demands a bid cap / ROAS floor and rejects the ad set (subcode 2490487).
       // LOWEST_COST_WITHOUT_CAP is the "Lowest Cost" strategy that needs no bid amount — the same
       // default the native Meta wizard uses. A caller-supplied cap could switch this later.
-      bid_strategy: "LOWEST_COST_WITHOUT_CAP",
-      targeting: input.targeting,
-      status: "PAUSED",
-    };
+      body.bid_strategy = "LOWEST_COST_WITHOUT_CAP";
+    }
     if (input.promotedObject) body.promoted_object = { pixel_id: input.promotedObject.pixelId, custom_event_type: input.promotedObject.customEventType };
     if (input.startTime) body.start_time = input.startTime;
     if (input.endTime) body.end_time = input.endTime;
@@ -481,10 +522,12 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
       return { videoId: json.id };
     }
 
-    if (input.imageUrl) {
-      const json = await graphPost(`/act_${credentials.adAccountId}/adimages`, credentials.accessToken, {
-        url: input.imageUrl,
-      });
+    // Prefer raw bytes when provided (an SVG/local creative the launch path rasterized to PNG):
+    // Meta can't fetch a localhost/relative URL and rejects SVG, so we POST the PNG bytes to
+    // /adimages via the `bytes` field instead of a `url`.
+    if (input.imageBytesBase64 || input.imageUrl) {
+      const body = input.imageBytesBase64 ? { bytes: input.imageBytesBase64 } : { url: input.imageUrl };
+      const json = await graphPost(`/act_${credentials.adAccountId}/adimages`, credentials.accessToken, body);
       const firstImage = json?.images ? Object.values(json.images)[0] as { hash?: string } | undefined : undefined;
       if (!firstImage?.hash) throw new Error(`Meta image upload failed: ${JSON.stringify(json)}`);
       return { imageHash: firstImage.hash };
@@ -499,32 +542,54 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
   async createHierarchyAd(input: HierarchyAdInput, explicit?: MetaCredentials): Promise<LaunchVariantResult> {
     const credentials = resolveCredentials(explicit);
     if (!credentials) return { externalId: mockId("meta_ad"), status: "paused" };
+    // Non-null local so the nested createCreative closure keeps the narrowing (TS widens `credentials`
+    // back to nullable inside a closure).
+    const creds = credentials;
 
+    const ctaType = toMetaCtaType(input.creative.callToAction);
     const linkData: Record<string, unknown> = {
       message: input.creative.body,
       link: input.landingPageUrl,
       name: input.creative.headline,
-      call_to_action: { type: "LEARN_MORE", value: { link: input.landingPageUrl } },
+      call_to_action: { type: ctaType, value: { link: input.landingPageUrl } },
     };
     if (input.imageHash) linkData.image_hash = input.imageHash;
 
-    const objectStorySpec: Record<string, unknown> = { page_id: credentials.pageId };
-    if (input.instagramActorId) objectStorySpec.instagram_actor_id = input.instagramActorId;
+    const baseStorySpec: Record<string, unknown> = { page_id: credentials.pageId };
     if (input.videoId) {
-      objectStorySpec.video_data = {
+      baseStorySpec.video_data = {
         video_id: input.videoId,
         message: input.creative.body,
-        call_to_action: { type: "LEARN_MORE", value: { link: input.landingPageUrl } },
+        call_to_action: { type: ctaType, value: { link: input.landingPageUrl } },
       };
     } else {
-      objectStorySpec.link_data = linkData;
+      baseStorySpec.link_data = linkData;
     }
 
-    const creativeJson = await graphPost(`/act_${credentials.adAccountId}/adcreatives`, credentials.accessToken, {
-      name: clampName(`${input.name}-creative`),
-      object_story_spec: objectStorySpec,
-    });
-    if (!creativeJson?.id) throw new Error(`Meta ad creative creation failed: ${JSON.stringify(creativeJson)}`);
+    // Attach the Instagram actor when provided, but don't let a STALE/invalid IG id hard-fail the
+    // whole ad ("(#100) Param instagram_actor_id must be a valid Instagram account id"): if the
+    // creative call fails specifically on instagram_actor_id, retry Page-only (the ad still ships to
+    // the Facebook Page placement, just not the IG account). A valid IG id publishes to both.
+    async function createCreative(withIg: boolean): Promise<any> {
+      const spec = withIg && input.instagramActorId ? { ...baseStorySpec, instagram_actor_id: input.instagramActorId } : baseStorySpec;
+      return graphPost(`/act_${creds.adAccountId}/adcreatives`, creds.accessToken, {
+        name: clampName(`${input.name}-creative`),
+        object_story_spec: spec,
+      });
+    }
+    let creativeJson;
+    try {
+      creativeJson = await createCreative(true);
+      if (!creativeJson?.id) throw new Error(`Meta ad creative creation failed: ${JSON.stringify(creativeJson)}`);
+    } catch (err) {
+      if (input.instagramActorId && /instagram_actor_id/i.test(err instanceof Error ? err.message : String(err))) {
+        logger.warn(`createHierarchyAd: instagram_actor_id ${input.instagramActorId} rejected by Meta — retrying Page-only`);
+        creativeJson = await createCreative(false);
+        if (!creativeJson?.id) throw new Error(`Meta ad creative creation failed: ${JSON.stringify(creativeJson)}`);
+      } else {
+        throw err;
+      }
+    }
 
     const adJson = await graphPost(`/act_${credentials.adAccountId}/ads`, credentials.accessToken, {
       name: clampName(input.name),
