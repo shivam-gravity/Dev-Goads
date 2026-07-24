@@ -6818,11 +6818,16 @@ td {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.manage-funds-panel-title {
+  font-size: 15px;
   font-weight: 700;
   color: var(--ink);
-  margin-bottom: 12px;
 }
 .manage-funds-add-btn {
+  flex-shrink: 0;
   font-size: 12.5px;
   font-weight: 700;
   color: #fff;
@@ -6830,38 +6835,79 @@ td {
   padding: 6px 12px;
   border-radius: 999px;
   text-decoration: none;
+  transition: background 0.15s ease;
 }
 .manage-funds-add-btn:hover {
   background: var(--accent-dark);
 }
-.manage-funds-stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px 14px;
-}
-.manage-funds-stat {
+.manage-funds-section {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 12px;
 }
-.manage-funds-stat-label {
+/* Balance hero — the primary figure, given its own tinted card. */
+.manage-funds-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  background: var(--surface-tint);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.manage-funds-hero-label {
   font-size: 11px;
-  color: var(--muted-2);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
-.manage-funds-stat-value {
-  font-size: 15px;
-  font-weight: 700;
+.manage-funds-hero-value {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.1;
   color: var(--ink);
 }
+/* Secondary figures as spaced label → value rows. */
+.manage-funds-rows {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+.manage-funds-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.manage-funds-row:last-child {
+  border-bottom: none;
+}
+.manage-funds-row dt {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.manage-funds-row dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  text-align: right;
+}
 .manage-funds-source-note {
-  grid-column: 1 / -1;
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   font-size: 11px;
+  line-height: 1.5;
   color: var(--muted);
 }
 .manage-funds-source-note code {
   font-size: 10.5px;
   color: var(--accent-dark);
+  background: var(--surface-tint);
+  padding: 1px 5px;
+  border-radius: 5px;
 }
 .manage-funds-muted {
   font-size: 12.5px;

@@ -86,7 +86,7 @@ export default function ManageFunds({ workspaceId }: { workspaceId: string }) {
       {open && (
         <div className="manage-funds-panel">
           <div className="manage-funds-panel-head">
-            <span>Manage Funds</span>
+            <span className="manage-funds-panel-title">Manage Funds</span>
             {meta?.billingUrl && (
               <a href={meta.billingUrl} target="_blank" rel="noreferrer" className="manage-funds-add-btn">+ Add Funds</a>
             )}
@@ -95,25 +95,31 @@ export default function ManageFunds({ workspaceId }: { workspaceId: string }) {
           {loading && !data && <p className="manage-funds-muted">Loading…</p>}
 
           {meta ? (
-            <div className="manage-funds-stats">
-              <div className="manage-funds-stat">
-                <span className="manage-funds-stat-label">Balance</span>
-                <span className="manage-funds-stat-value">{formatMinor(meta.balanceMinor, meta.currency)}</span>
+            <div className="manage-funds-section">
+              {/* Balance hero — the number that matters most, given prominence. */}
+              <div className="manage-funds-hero">
+                <span className="manage-funds-hero-label">Available balance</span>
+                <span className="manage-funds-hero-value">{formatMinor(meta.balanceMinor, meta.currency)}</span>
               </div>
-              <div className="manage-funds-stat">
-                <span className="manage-funds-stat-label">Lifetime spend</span>
-                <span className="manage-funds-stat-value">{formatMinor(meta.amountSpentMinor, meta.currency)}</span>
-              </div>
-              {meta.spendCapMinor != null && (
-                <div className="manage-funds-stat">
-                  <span className="manage-funds-stat-label">Spend cap</span>
-                  <span className="manage-funds-stat-value">{formatMinor(meta.spendCapMinor, meta.currency)}</span>
+
+              {/* Secondary figures as clean label → value rows (no cramped grid). */}
+              <dl className="manage-funds-rows">
+                <div className="manage-funds-row">
+                  <dt>Lifetime spend</dt>
+                  <dd>{formatMinor(meta.amountSpentMinor, meta.currency)}</dd>
                 </div>
-              )}
-              <div className="manage-funds-stat">
-                <span className="manage-funds-stat-label">Payment method</span>
-                <span className="manage-funds-stat-value">{meta.fundingSource ?? "—"}</span>
-              </div>
+                {meta.spendCapMinor != null && (
+                  <div className="manage-funds-row">
+                    <dt>Spend cap</dt>
+                    <dd>{formatMinor(meta.spendCapMinor, meta.currency)}</dd>
+                  </div>
+                )}
+                <div className="manage-funds-row">
+                  <dt>Payment method</dt>
+                  <dd>{meta.fundingSource ?? "—"}</dd>
+                </div>
+              </dl>
+
               <p className="manage-funds-source-note">
                 Meta ad account <code>act_{meta.adAccountId}</code>{meta.accountStatus ? ` · ${meta.accountStatus}` : ""} — billed directly by Meta.
               </p>
