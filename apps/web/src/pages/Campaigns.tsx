@@ -18,6 +18,7 @@ export default function Campaigns({ businessId }: { businessId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [launching, setLaunching] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const navigate = useNavigate();
 
   async function refresh() {
@@ -59,6 +60,23 @@ export default function Campaigns({ businessId }: { businessId: string }) {
       setError(err instanceof Error ? err.message : "Launch failed");
     } finally {
       setLaunching(null);
+    }
+  }
+
+  async function handleDelete(campaign: Campaign) {
+    if (!confirm(`Delete "${campaign.name}"? This can't be undone.`)) return;
+    setDeleting(campaign.id);
+    setError(null);
+    try {
+      await api.deleteCampaign(campaign.id);
+      // Drop it from the list without a full refetch.
+      setCampaigns((prev) => prev.filter((c) => c.id !== campaign.id));
+    } catch (err) {
+      // A launched (paused/active) campaign is refused by the backend (409) so its live Meta/Google
+      // objects aren't orphaned — surface that message rather than a generic failure.
+      setError(err instanceof Error ? err.message : "Failed to delete campaign");
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -204,6 +222,13 @@ export default function Campaigns({ businessId }: { businessId: string }) {
                             </button>
                           </>
                         )}
+                        <button
+                          className="btn btn-sm btn-danger"
+                          onClick={() => handleDelete(c)}
+                          disabled={deleting === c.id}
+                        >
+                          {deleting === c.id ? "Deleting…" : "Delete"}
+                        </button>
                       </div>
                     </td>
                   </tr>
