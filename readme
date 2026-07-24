@@ -72,6 +72,30 @@ npm run dev:scraper-service   # http://localhost:4003
 On Windows, `npm run dev` (root) does not run both apps in parallel — start `dev:api` and
 `dev:web` in separate terminals instead.
 
+### Running the whole stack in Docker
+
+```bash
+cp .env.example .env   # fill in JWT_SECRET / INTERNAL_SERVICE_KEY / TOKEN_ENCRYPTION_KEY / CRAWL4AI_API_TOKEN
+docker compose up -d --build
+```
+
+A Traefik reverse proxy fronts the stack, so each service is reachable at a clean
+`*.localhost` hostname on port 80 — no port numbers. `*.localhost` resolves to 127.0.0.1
+automatically in every major browser (RFC 6761), so there's no hosts-file editing:
+
+| URL | Service |
+| --- | --- |
+| http://app.localhost | Web app (SPA) |
+| http://api.localhost | API / gateway (OAuth callbacks, CRM) |
+| http://scraper.localhost | Scraper service |
+| http://search.localhost | SearXNG |
+| http://crawl.localhost | crawl4ai |
+| http://traefik.localhost | Traefik dashboard |
+
+The original per-service ports (`:8080`, `:4000`, `:4003`, `:8888`, `:11235`) are still
+published as well, so existing scripts and OAuth redirects that use `localhost:PORT` keep
+working unchanged.
+
 Open the web app, complete onboarding, generate a strategy, and launch a campaign. Use
 "Pull latest metrics" and "Run optimization pass" on a campaign's detail page to exercise
 the performance/optimization feedback loop, and generate an invoice from the Billing page.
