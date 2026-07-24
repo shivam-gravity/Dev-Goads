@@ -23,6 +23,26 @@ test("metaTargetingMapper - estimateReachHeuristic returns a labeled, bounded es
   assert.ok(estimate.usersLowerBound > 0);
 });
 
+test("metaTargetingMapper - geo: full country NAMES map to ISO codes (not just the old 12)", async () => {
+  // accessToken null skips the interest-search fetch, so this is pure geo mapping.
+  const spec = await buildMetaTargetingSpec(null, { ...baseAudience, locations: ["Spain", "Nigeria", "United Arab Emirates", "japan"] });
+  assert.deepStrictEqual(spec.geo_locations.countries, ["ES", "NG", "AE", "JP"]);
+});
+
+test("metaTargetingMapper - geo: already-ISO codes pass through; unknown values default to US", async () => {
+  const codes = await buildMetaTargetingSpec(null, { ...baseAudience, locations: ["gb", "Atlantis"] });
+  assert.deepStrictEqual(codes.geo_locations.countries, ["GB"]); // gb→GB, Atlantis dropped
+  const allUnknown = await buildMetaTargetingSpec(null, { ...baseAudience, locations: ["Nowhereland"] });
+  assert.deepStrictEqual(allUnknown.geo_locations.countries, ["US"]); // default when nothing resolves
+});
+
+test("metaTargetingMapper - custom_audiences injected when the SavedAudience has a Meta id", async () => {
+  const withCa = await buildMetaTargetingSpec(null, { ...baseAudience, metaCustomAudienceId: "act_ca_123" });
+  assert.deepStrictEqual(withCa.custom_audiences, [{ id: "act_ca_123" }]);
+  const withoutCa = await buildMetaTargetingSpec(null, { ...baseAudience, metaCustomAudienceId: null });
+  assert.strictEqual(withoutCa.custom_audiences, undefined);
+});
+
 test("metaTargetingMapper - buildMetaTargetingSpec resolves interests and maps demographics", async () => {
   const original = global.fetch;
   global.fetch = (async (url: string) => {

@@ -49,7 +49,11 @@ export interface CampaignContainerInput {
   name: string;
   /** Meta: campaign objective enum (e.g. OUTCOME_TRAFFIC). Google: ignored, channel type is fixed. */
   objective: string;
-  /** Google only: budget is campaign-level there (shared across ad groups), unlike Meta's ad-set budgets. */
+  /** Meta budget placement. "ABO" (default) = each ad set carries its own daily_budget; "CBO" =
+   *  Campaign Budget Optimization, budget + bid_strategy live on the campaign and Meta distributes
+   *  spend across ad sets. Google is always campaign-level regardless. */
+  budgetMode?: "ABO" | "CBO";
+  /** Campaign-level daily budget. Google: always used. Meta: used ONLY when budgetMode==="CBO". */
   dailyBudgetCents?: number;
   /** Google only: campaign-level geo/language criteria (from the first audience group — see googleTargetingMapper). */
   targeting?: Record<string, unknown>;
@@ -60,8 +64,12 @@ export interface CampaignContainerInput {
 export interface AdSetContainerInput {
   campaignExternalId: string;
   name: string;
-  /** Meta: this ad set's daily budget. Google: informational only — budget already set on the campaign. */
+  /** Meta: this ad set's daily budget (ABO). Google: informational only — budget already set on the
+   *  campaign. Ignored by Meta when budgetMode==="CBO" (budget lives on the campaign then). */
   dailyBudgetCents: number;
+  /** Meta budget placement, threaded from the campaign. When "CBO" the ad set omits its own
+   *  daily_budget + bid_strategy so Meta's campaign-level budget governs distribution. */
+  budgetMode?: "ABO" | "CBO";
   targeting: Record<string, unknown>;
   /** Meta only, set by the campaign builder — conversion event tied to a Pixel. Switches optimization_goal to OFFSITE_CONVERSIONS when present. */
   promotedObject?: { pixelId: string; customEventType: string };

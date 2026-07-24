@@ -133,7 +133,9 @@ export async function createCustomAudience(
     return { externalId: mockId("meta_audience"), approximateCount: 0 };
   }
 
-  const accountId = input.adAccountId || creds.adAccountId;
+  // Strip any existing "act_" prefix — the URL template re-adds it, so a stored "act_773…" must not
+  // become "act_act_773…" (Graph 400, subcode 33). Mirrors metaAdapter's bare-id handling.
+  const accountId = String(input.adAccountId || creds.adAccountId).replace(/^act_/, "");
 
   const body: Record<string, unknown> = {
     name: input.name,
@@ -166,7 +168,9 @@ export async function createLookalikeAudience(
     return { externalId: mockId("meta_audience"), approximateCount: 0 };
   }
 
-  const accountId = input.adAccountId || creds.adAccountId;
+  // Strip any existing "act_" prefix — the URL template re-adds it, so a stored "act_773…" must not
+  // become "act_act_773…" (Graph 400, subcode 33). Mirrors metaAdapter's bare-id handling.
+  const accountId = String(input.adAccountId || creds.adAccountId).replace(/^act_/, "");
 
   // Clamp ratio to Meta's accepted range
   const ratio = Math.max(0.01, Math.min(0.20, input.ratio));
@@ -174,8 +178,13 @@ export async function createLookalikeAudience(
   const body: Record<string, unknown> = {
     name: input.name,
     subtype: "LOOKALIKE",
+    // The source Custom Audience id goes in the top-level origin_audience_id param — NOT inside
+    // lookalike_spec (Graph errors #2654 "No custom_audience ID given" otherwise). lookalike_spec
+    // then only carries the ratio + target country/countries.
+    origin_audience_id: input.originAudienceId,
     lookalike_spec: JSON.stringify({
-      origin: [{ id: input.originAudienceId, type: "custom_audience" }],
+      type: "similarity",
+      country: input.targetCountries[0] ?? "US",
       target_countries: input.targetCountries,
       ratio,
     }),

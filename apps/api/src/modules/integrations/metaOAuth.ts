@@ -275,6 +275,10 @@ export async function listInstagramAccounts(workspaceId: string, pageId: string)
 export async function listPixels(workspaceId: string): Promise<{ id: string; name: string }[]> {
   const credentials = await getMetaCredentials(workspaceId);
   if (!credentials) return [];
-  const json = await graphGet(`/act_${credentials.adAccountId}/adspixels`, { fields: "id,name", access_token: credentials.accessToken });
+  // The stored adAccountId already carries the "act_" prefix (e.g. "act_773958358563901"), so strip
+  // any existing prefix before re-prepending — otherwise the path becomes /act_act_.../adspixels and
+  // Meta 400s (which the route surfaces as a 502). Mirrors the bare-id handling used above.
+  const bare = String(credentials.adAccountId).replace(/^act_/, "");
+  const json = await graphGet(`/act_${bare}/adspixels`, { fields: "id,name", access_token: credentials.accessToken });
   return (json.data ?? []).map((p: any) => ({ id: p.id, name: p.name }));
 }

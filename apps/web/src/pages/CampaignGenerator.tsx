@@ -3,86 +3,16 @@ import { useNavigate } from "react-router-dom";
 import { api, CatalogSourceResult, Draft, ProductAnalysis, ProductCatalogItem } from "../api/client.js";
 import {
   ClockIcon as HistoryIcon,
-  LightningIcon,
   LinkIcon,
   PlusIcon,
   ShoppingBagIcon,
-  TargetIcon,
-  PinIcon,
-  MetaInfinityIcon,
   CubeIcon,
   FacebookIcon,
   GoogleGmcIcon,
   XIcon,
   SearchIcon,
 } from "../components/icons.js";
-import { GoogleIcon } from "../components/icons.js";
-import { DropdownField, type Option } from "../components/DropdownField.js";
-import { SUPPORTED_PLATFORMS, ACTIVE_PLATFORM_VALUES, CATALOG_COMING_SOON_LABEL } from "../constants/platforms.js";
-
-const COUNTRY_OPTIONS: Option[] = [
-  { value: "US", label: "United States" },
-  { value: "GB", label: "United Kingdom" },
-  { value: "CA", label: "Canada" },
-  { value: "AU", label: "Australia" },
-  { value: "IN", label: "India" },
-  { value: "DE", label: "Germany" },
-  { value: "FR", label: "France" },
-  { value: "BR", label: "Brazil" },
-  { value: "JP", label: "Japan" },
-  { value: "AE", label: "United Arab Emirates" },
-  { value: "SG", label: "Singapore" },
-  { value: "MX", label: "Mexico" },
-];
-
-// Per-platform icons live in the UI (the shared platform catalog is icon-free). Anything not
-// listed here simply renders without an icon.
-const PLATFORM_ICONS: Record<string, React.ReactNode> = {
-  meta: <MetaInfinityIcon />,
-  google: <GoogleIcon />,
-};
-
-// Derived from the central platform catalog (constants/platforms.ts): "active" platforms are
-// selectable; "coming_soon" ones render greyed with a "Coming soon" badge and can't be selected
-// (DropdownField ignores clicks on disabled options). Add/flip a platform there, not here.
-const CHANNEL_OPTIONS: Option[] = SUPPORTED_PLATFORMS.map((p) => ({
-  value: p.value,
-  label: p.label,
-  icon: PLATFORM_ICONS[p.value],
-  disabled: p.status !== "active",
-}));
-
-// AdsGo-style "Your Business Goal" — Sales is the recommended default (matches the reference UI).
-const OBJECTIVE_OPTIONS: Option[] = [
-  { value: "sales", label: "Sales", description: "Find people who take desired actions within your website." },
-  { value: "leads", label: "Leads", description: "Collect leads for your business." },
-  { value: "awareness", label: "Awareness & Engagement", description: "Find people interested in your product or business." },
-  { value: "traffic", label: "Traffic", description: "Increase traffic to your website." },
-];
-
-// AdsGo-style "Business Type" — presentation-only context for the strategy; does not change the
-// generate payload (the pipeline infers business type from the crawled site), but mirrors the
-// reference UI so the demo reads identically.
-const BUSINESS_TYPE_OPTIONS: Option[] = [
-  { value: "online_shopping", label: "Online Shopping" },
-  { value: "solution_service", label: "Solution & Online Service" },
-  { value: "local_store", label: "Local Store & Service" },
-  { value: "app", label: "App" },
-];
-
-// AdsGo-style "Promotion Type" — presentation-only (long-term vs short-term campaign framing).
-const PROMOTION_TYPE_OPTIONS: Option[] = [
-  { value: "long_term", label: "Long-term" },
-  { value: "short_term", label: "Short-term" },
-];
-
-const CONVERSION_EVENT_OPTIONS: Option[] = [
-  { value: "purchase", label: "Purchase" },
-  { value: "add_to_cart", label: "Add to Cart" },
-  { value: "lead", label: "Lead" },
-  { value: "complete_registration", label: "Complete Registration" },
-  { value: "landing_page_view", label: "Landing Page View" },
-];
+import { ACTIVE_PLATFORM_VALUES, CATALOG_COMING_SOON_LABEL } from "../constants/platforms.js";
 
 const PRODUCT_SOURCE_TABS: { value: "all" | "shopify" | "facebook" | "google"; label: string; icon: React.ReactNode }[] = [
   { value: "all", label: "All", icon: <CubeIcon /> },
@@ -103,15 +33,13 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
   const navigate = useNavigate();
   const workspaceId = localStorage.getItem("polluxa_workspace_id") ?? "demo-workspace";
 
-  const [countries, setCountries] = useState<string[]>(["US"]);
-  const [channels, setChannels] = useState<string[]>([...ACTIVE_PLATFORM_VALUES]);
-  const [objective, setObjective] = useState<string[]>(["sales"]);
-  const [conversionEvent, setConversionEvent] = useState<string[]>([]);
-  // Presentation-only fields mirroring the AdsGo reference form (Business Type / Promotion Type).
-  // They contextualize the strategy visually but aren't part of the generate payload — the pipeline
-  // derives business type from the crawled site.
-  const [businessType, setBusinessType] = useState<string[]>(["solution_service"]);
-  const [promotionType, setPromotionType] = useState<string[]>(["long_term"]);
+  // The Promotion Objective review card moved to the Deep Research flow
+  // (components/PromotionObjectiveCard.tsx). These values still parameterize this page's own
+  // generate call, using the same defaults the card used to show; the pipeline derives the real
+  // objective/business type from the crawled site regardless.
+  const [countries] = useState<string[]>(["US"]);
+  const [channels] = useState<string[]>([...ACTIVE_PLATFORM_VALUES]);
+  const [objective] = useState<string[]>(["sales"]);
 
   const [productUrl, setProductUrl] = useState("");
   const [parsing, setParsing] = useState(false);
@@ -405,74 +333,9 @@ export default function CampaignGenerator({ businessId }: { businessId: string }
         <span><strong>All set! Your best ad strategy is ready.</strong> Review your goals below and start your campaign with one click!</span>
       </div>
 
-      <section className="gen-card">
-        <div className="gen-card-header">
-          <span className="gen-card-icon gen-card-icon-purple">
-            <TargetIcon />
-          </span>
-          <h2>Promotion Objective</h2>
-        </div>
-        <div className="gen-fields-grid">
-          <DropdownField
-            label="Business Type"
-            options={BUSINESS_TYPE_OPTIONS}
-            selected={businessType}
-            onChange={setBusinessType}
-          />
-          <DropdownField
-            label="Your Business Goal"
-            options={OBJECTIVE_OPTIONS}
-            selected={objective}
-            onChange={setObjective}
-            recommendedValue="sales"
-          />
-          <DropdownField
-            label="Your Ad Performance Goal"
-            icon={<LightningIcon />}
-            options={CONVERSION_EVENT_OPTIONS}
-            selected={conversionEvent}
-            onChange={setConversionEvent}
-            placeholder="In-web actions"
-          />
-          <DropdownField
-            label="Ad Platform"
-            icon={<MetaInfinityIcon />}
-            options={CHANNEL_OPTIONS}
-            selected={channels}
-            onChange={setChannels}
-            multi
-            testId="channel-select"
-            recommendedValue="meta"
-          />
-          <DropdownField
-            label="Target Locations"
-            icon={<PinIcon />}
-            options={COUNTRY_OPTIONS}
-            selected={countries}
-            onChange={setCountries}
-            multi
-          />
-          <div className="gen-field">
-            <span className="gen-field-label">Suggested Daily Limit</span>
-            <div className="gen-field-control gen-field-budget">
-              <input
-                type="number"
-                min="1"
-                step="1"
-                value={dailyBudget}
-                onChange={(e) => setDailyBudget(e.target.value)}
-              />
-              <span className="gen-field-budget-unit">USD</span>
-            </div>
-          </div>
-          <DropdownField
-            label="Promotion Type"
-            options={PROMOTION_TYPE_OPTIONS}
-            selected={promotionType}
-            onChange={setPromotionType}
-          />
-        </div>
-      </section>
+      {/* The "Promotion Objective" review card now lives in the Deep Research flow
+          (components/PromotionObjectiveCard.tsx, rendered on /campaigns/new after each URL search).
+          The generate below still uses these defaults (objective/channels/countries/budget). */}
 
       <section className="gen-card">
         <div className="gen-card-header">

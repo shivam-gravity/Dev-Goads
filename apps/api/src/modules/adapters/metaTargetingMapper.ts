@@ -1,5 +1,6 @@
 import type { SavedAudience } from "../audience/savedAudienceService.js";
 import { listSavedAudiences } from "../audience/savedAudienceService.js";
+import { COUNTRY_NAME_TO_CODE } from "./geo/countryCodes.js";
 import { logger } from "../logger/logger.js";
 
 const GRAPH_VERSION = "v22.0";
@@ -12,6 +13,8 @@ export interface MetaTargetingSpec {
   geo_locations: { countries: string[] };
   flexible_spec?: { interests: { id: string }[] }[];
   exclusions?: { interests: { id: string }[] };
+  // Custom/Lookalike Audiences to target (Meta Graph: targeting.custom_audiences: [{id}]).
+  custom_audiences?: { id: string }[];
   // Passed as opaque JSON into AdAdapter's Record<string, unknown> targeting param.
   [key: string]: unknown;
 }
@@ -21,6 +24,22 @@ const GENDER_CODES: Record<SavedAudience["gender"], number[] | undefined> = {
   male: [1],
   female: [2],
 };
+
+// Meta's geo_locations.countries expects ISO 3166-1 alpha-2 CODES ("US"), but the UI stores
+// human-readable country NAMES ("United States") — sending a name triggers "Invalid country code"
+// (#100). Normalize names → codes via the shared full ISO map (geo/countryCodes.ts, ~all countries
+// + aliases). Anything that already looks like a 2-letter code passes through uppercased; an
+// unknown value is dropped so one bad entry can't fail the whole reach estimate / targeting spec.
+function toCountryCodes(locations: string[]): string[] {
+  const codes = locations
+    .map((loc) => {
+      const trimmed = String(loc).trim();
+      if (/^[A-Za-z]{2}$/.test(trimmed)) return trimmed.toUpperCase(); // already an ISO code
+      return COUNTRY_NAME_TO_CODE[trimmed.toLowerCase()];
+    })
+    .filter((c): c is string => Boolean(c));
+  return codes.length ? Array.from(new Set(codes)) : ["US"]; // default to US if nothing resolved
+}
 
 /**
  * The Graph API rejects free-text interests — targeting requires Meta's own numeric
@@ -65,12 +84,16 @@ export async function buildMetaTargetingSpec(accessToken: string | null, audienc
     age_min: audience.ageMin,
     age_max: audience.ageMax,
     genders: GENDER_CODES[audience.gender],
-    geo_locations: { countries: audience.locations.length ? audience.locations : ["US"] },
+    geo_locations: { countries: toCountryCodes(audience.locations) },
   };
   // flexible_spec/exclusions only accept {"id": "..."} — Meta rejects extra fields like
   // `name` on an interest object, so the search result's name is dropped here.
   if (includeInterests.length) spec.flexible_spec = [{ interests: includeInterests.map((i) => ({ id: i.id })) }];
   if (excludeInterests.length) spec.exclusions = { interests: excludeInterests.map((i) => ({ id: i.id })) };
+  // Custom/Lookalike Audience: when this SavedAudience was created on Meta (metaAudienceSync), its
+  // real Graph id targets that audience directly. Meta merges custom_audiences with the demographic
+  // spec (AND within the audience, OR across multiple), so age/gender/geo still narrow it.
+  if (audience.metaCustomAudienceId) spec.custom_audiences = [{ id: audience.metaCustomAudienceId }];
   return spec;
 }
 
@@ -82,7 +105,15 @@ export interface ReachEstimate {
 
 /** Real reach estimate via Meta's delivery_estimate endpoint, once the workspace has a connected ad account. */
 export async function fetchMetaReachEstimate(accessToken: string, adAccountId: string, targeting: MetaTargetingSpec): Promise<ReachEstimate> {
-  const url = `${GRAPH_BASE}/act_${adAccountId}/delivery_estimate?${new URLSearchParams({
+  // Accept either a bare id ("123") or an already-prefixed one ("act_123"): strip any existing
+  // "act_" before re-prepending, so a stored "act_773…" doesn't become "act_act_773…" (which Meta
+  // 400s, surfaced to the builder's audience gauge as a 502).
+  const bare = String(adAccountId).replace(/^act_/, "");
+  // Meta requires optimization_goal on delivery_estimate — omitting it 400s with "parameter
+  // optimization_goal is required". REACH gives a broad audience-size estimate independent of any
+  // specific conversion optimization, which matches what the builder's audience gauge wants.
+  const url = `${GRAPH_BASE}/act_${bare}/delivery_estimate?${new URLSearchParams({
+    optimization_goal: "REACH",
     targeting_spec: JSON.stringify(targeting),
     access_token: accessToken,
   }).toString()}`;

@@ -1,4 +1,5 @@
 import type { MetaCredentials } from "./AdAdapter.js";
+import { toMetaCtaType } from "./metaAdapter.js";
 import { logger } from "../logger/logger.js";
 
 const GRAPH_VERSION = "v22.0";
@@ -163,7 +164,7 @@ export async function generateCreativePreview(
     message: input.body,
     link: input.linkUrl,
     name: input.headline,
-    call_to_action: { type: input.callToAction || "LEARN_MORE", value: { link: input.linkUrl } },
+    call_to_action: { type: toMetaCtaType(input.callToAction), value: { link: input.linkUrl } },
   };
   if (input.imageHash) linkData.image_hash = input.imageHash;
 
@@ -174,7 +175,7 @@ export async function generateCreativePreview(
     objectStorySpec.video_data = {
       video_id: input.videoId,
       message: input.body,
-      call_to_action: { type: input.callToAction || "LEARN_MORE", value: { link: input.linkUrl } },
+      call_to_action: { type: toMetaCtaType(input.callToAction), value: { link: input.linkUrl } },
     };
   } else {
     objectStorySpec.link_data = linkData;

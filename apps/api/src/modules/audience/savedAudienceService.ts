@@ -15,6 +15,11 @@ export interface SavedAudience {
   // Only meaningful when type === "lookalike" — references another SavedAudience.id used
   // as the seed. This is Polluxa's own bookkeeping only, not a real Meta/Google seed linkage.
   lookalikeSourceId?: string | null;
+  // The real Meta Custom/Lookalike Audience id returned by the Graph API when this audience was
+  // created there (metaAudienceSync.createCustomAudience/createLookalikeAudience). Present for
+  // type "custom"/"lookalike"; it's what gets injected into ad-set targeting.custom_audiences so a
+  // launched Meta ad set actually targets this audience. Null for plain interest/geo "saved" audiences.
+  metaCustomAudienceId?: string | null;
   ageMin: number;
   ageMax: number;
   gender: "all" | "male" | "female";
@@ -37,7 +42,7 @@ async function save(a: SavedAudience): Promise<void> {
 // their stored JSON — default them here on read rather than backfilling, so old audiences keep
 // working as plain "saved" audiences instead of surfacing `undefined`.
 function normalizeAudience(raw: unknown): SavedAudience {
-  return { type: "saved", platform: null, lookalikeSourceId: null, ...(raw as Partial<SavedAudience>) } as SavedAudience;
+  return { type: "saved", platform: null, lookalikeSourceId: null, metaCustomAudienceId: null, ...(raw as Partial<SavedAudience>) } as SavedAudience;
 }
 
 export async function listSavedAudiences(workspaceId: string): Promise<SavedAudience[]> {

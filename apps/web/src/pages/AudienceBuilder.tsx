@@ -30,6 +30,14 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
   // Lookalikes
   const [lookalikeSource, setLookalikeSource] = useState("");
   const [lookalikePercentage, setLookalikePercentage] = useState("1");
+  const [lookalikeName, setLookalikeName] = useState("");
+  const [creatingLookalike, setCreatingLookalike] = useState(false);
+
+  // Meta Custom Audience (seed list) creation
+  const [customName, setCustomName] = useState("");
+  const [customSeed, setCustomSeed] = useState(""); // newline/comma-separated emails or phones
+  const [creatingCustom, setCreatingCustom] = useState(false);
+  const [audienceMsg, setAudienceMsg] = useState<string | null>(null);
 
   // Saved segments
   const [savedAudiences, setSavedAudiences] = useState<SavedAudience[]>([]);
@@ -105,6 +113,55 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
   async function handleDeleteAudience(id: string) {
     await api.deleteAudience(id).catch(() => {});
     setSavedAudiences((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  // Custom Audiences created on Meta (have a metaCustomAudienceId) are the only valid lookalike sources.
+  const customSources = savedAudiences.filter((a) => a.type === "custom" && a.metaCustomAudienceId);
+
+  async function handleCreateCustomAudience() {
+    if (!customName.trim()) { setAudienceMsg("Name your custom audience first."); return; }
+    setAudienceMsg(null);
+    setCreatingCustom(true);
+    try {
+      // Split the seed list into emails vs phones (a value with '@' is an email, else a phone).
+      const tokens = customSeed.split(/[\n,]+/).map((t) => t.trim()).filter(Boolean);
+      const emails = tokens.filter((t) => t.includes("@"));
+      const phones = tokens.filter((t) => !t.includes("@"));
+      const saved = await api.createCustomAudience(wsId, {
+        name: customName.trim(), subtype: "CUSTOM",
+        emails: emails.length ? emails : undefined, phones: phones.length ? phones : undefined,
+        ageMin, ageMax, gender: gender as "all" | "male" | "female", locations,
+      });
+      setSavedAudiences((prev) => [saved, ...prev]);
+      setCustomName(""); setCustomSeed("");
+      setAudienceMsg(`Custom Audience "${saved.name}" created${saved.metaCustomAudienceId ? "" : " (mock — connect Meta for a real audience)"}.`);
+    } catch (err) {
+      setAudienceMsg(err instanceof Error ? err.message : "Failed to create custom audience.");
+    } finally {
+      setCreatingCustom(false);
+    }
+  }
+
+  async function handleCreateLookalike() {
+    if (!lookalikeSource) { setAudienceMsg("Pick a source custom audience."); return; }
+    setAudienceMsg(null);
+    setCreatingLookalike(true);
+    try {
+      const src = savedAudiences.find((a) => a.id === lookalikeSource);
+      const saved = await api.createLookalike(wsId, {
+        name: lookalikeName.trim() || `Lookalike of ${src?.name ?? "source"}`,
+        sourceAudienceId: lookalikeSource,
+        ratio: (parseInt(lookalikePercentage) || 1) / 100,
+        targetCountries: locations,
+      });
+      setSavedAudiences((prev) => [saved, ...prev]);
+      setLookalikeName(""); setLookalikeSource("");
+      setAudienceMsg(`Lookalike "${saved.name}" created.`);
+    } catch (err) {
+      setAudienceMsg(err instanceof Error ? err.message : "Failed to create lookalike.");
+    } finally {
+      setCreatingLookalike(false);
+    }
   }
 
   // Calculate reach estimation meter
@@ -246,32 +303,62 @@ export default function AudienceBuilder({ businessId }: { businessId: string }) 
           </section>
 
           <section className="card">
+            <h2>Custom Audience (Meta)</h2>
+            <p className="field-hint">Upload a customer list to build a Meta Custom Audience. It becomes targetable on launched ads and can seed a Lookalike below.</p>
+            <div className="wizard-form mt-3">
+              <label>
+                Custom Audience Name
+                <input type="text" value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="e.g. Existing Customers" />
+              </label>
+              <label className="mt-3">
+                Seed list — emails or phone numbers (one per line or comma-separated)
+                <textarea rows={4} value={customSeed} onChange={(e) => setCustomSeed(e.target.value)} placeholder={"jane@acme.com\n+15551234567"} />
+                <span className="field-hint">Hashed (SHA-256) before upload — raw values never leave the server unhashed. Uses the demographics/locations above for size estimates.</span>
+              </label>
+              <button type="button" className="btn btn-secondary mt-2" onClick={handleCreateCustomAudience} disabled={creatingCustom}>
+                {creatingCustom ? "Creating…" : "Create Custom Audience"}
+              </button>
+            </div>
+          </section>
+
+          <section className="card">
             <h2>Lookalike Audiences</h2>
             <div className="wizard-form mt-3">
               <label>
                 Source Custom Audience
                 <select value={lookalikeSource} onChange={(e) => setLookalikeSource(e.target.value)}>
-                  <option value="">Select source custom segment...</option>
-                  <option value="purchasers">All Website Purchasers (Last 180 Days)</option>
-                  <option value="visitors">All Website Visitors (Last 30 Days)</option>
-                  <option value="leads">Captured Lead Leads Form (All Time)</option>
+                  <option value="">Select source custom audience…</option>
+                  {customSources.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
+                {customSources.length === 0 && (
+                  <span className="field-hint">No source yet — create a Custom Audience above first (a lookalike needs a real seed audience).</span>
+                )}
               </label>
 
               {lookalikeSource && (
-                <label className="mt-3">
-                  Lookalike Percentage: {lookalikePercentage}%
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    value={lookalikePercentage}
-                    onChange={(e) => setLookalikePercentage(e.target.value)}
-                    className="calculator-slider"
-                  />
-                  <span className="field-hint">Smaller percentage focuses on maximum similarity. Larger focuses on maximum reach.</span>
-                </label>
+                <>
+                  <label className="mt-3">
+                    Lookalike Name
+                    <input type="text" value={lookalikeName} onChange={(e) => setLookalikeName(e.target.value)} placeholder="e.g. Lookalike — Existing Customers 1%" />
+                  </label>
+                  <label className="mt-3">
+                    Lookalike Percentage: {lookalikePercentage}%
+                    <input
+                      type="range"
+                      min="1"
+                      max="10"
+                      value={lookalikePercentage}
+                      onChange={(e) => setLookalikePercentage(e.target.value)}
+                      className="calculator-slider"
+                    />
+                    <span className="field-hint">Smaller percentage focuses on maximum similarity. Larger focuses on maximum reach. Target countries use the locations above.</span>
+                  </label>
+                  <button type="button" className="btn btn-secondary mt-2" onClick={handleCreateLookalike} disabled={creatingLookalike}>
+                    {creatingLookalike ? "Creating…" : "Create Lookalike"}
+                  </button>
+                </>
               )}
+              {audienceMsg && <p className="field-hint mt-2">{audienceMsg}</p>}
             </div>
           </section>
         </div>

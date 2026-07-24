@@ -3,16 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.js";
 import { useRealtimeContext } from "../providers/RealtimeProvider.js";
-import { TargetIcon, UserIcon, LightningIcon, GlobeIcon, SparkleIcon, SearchIcon } from "../components/icons.js";
+import { TargetIcon, UserIcon, LightningIcon, GlobeIcon, SparkleIcon } from "../components/icons.js";
+import { PromotionObjectiveCard, type PromotionObjectiveValues } from "../components/PromotionObjectiveCard.js";
 import type {
   AudiencePersonaCard,
-  BudgetSimulation,
   Campaign,
   CampaignGenerationCitations,
-  CampaignGenerationFacts,
   CampaignGenerationJobStatus,
   CampaignGenerationPipelineStatus,
-  CampaignObjectiveOption,
   CampaignStrategyOption,
   CompetitorAdsData,
   DecisionContext,
@@ -23,33 +21,9 @@ import type {
 
 const AVATAR_EMOJIS = ["🤖", "👨", "👩", "👩‍🦰", "🧑", "👩🏾"];
 const POLL_INTERVAL_MS = 1500;
-const SIMULATE_DEBOUNCE_MS = 400;
 
-// Networks the adsgo.ai-style setup exposes as one-click toggles. Both default on to match the
-// "publish to Meta and Google" promise; the launch pre-flight prompts to connect whichever isn't.
-const NETWORK_OPTIONS: { value: "meta" | "google"; label: string }[] = [
-  { value: "meta", label: "Meta" },
-  { value: "google", label: "Google" },
-];
-
-// Fallback objective list if GET /campaigns/objectives hasn't resolved yet — replaced by the
-// engine-driven list (metaObjectives.ts) as soon as it loads, so this is only ever a brief default.
-const FALLBACK_OBJECTIVES: CampaignObjectiveOption[] = [
-  { value: "OUTCOME_TRAFFIC", label: "Traffic", description: "Send people to your site" },
-  { value: "OUTCOME_LEADS", label: "Leads", description: "Collect leads via forms or calls" },
-  { value: "OUTCOME_SALES", label: "Sales", description: "Find people likely to purchase" },
-  { value: "OUTCOME_AWARENESS", label: "Awareness", description: "Maximize reach and recall" },
-];
-
+// Default budget for the generate call now that the pre-search budget slider was removed.
 const DEFAULT_BUDGET_CENTS = 2000;
-
-function formatMoney(cents: number): string {
-  return `$${(cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-}
-
-function formatCompact(n: number): string {
-  return Number(n || 0).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
-}
 
 /**
  * Mirrors the pipeline's real phases (modules/orchestrator/campaignGenerationPipeline.ts) —
@@ -701,107 +675,6 @@ function ResearchOutputPreview({ researchJobId, streaming }: { researchJobId: st
   );
 }
 
-// Maps a fact's dot-path `field` (e.g. "pricing.starterPlan.price", "metrics.customerCount",
-// "product.name") to a human-readable category + display label for the grouped Research Findings
-// view. Keeps the AdsGo-style "labeled sections with bold values" layout without needing the
-// backend to change the fact shape. Order here is the display order of the category cards.
-const FACT_CATEGORIES: { key: string; label: string; match: RegExp }[] = [
-  { key: "brand", label: "Brand & Positioning", match: /^(brand|company|positioning|mission|tagline|about|usp|differentiat|value)/i },
-  { key: "product", label: "Product & Offering", match: /^(product|offering|feature|service|platform|software|solution|capabilit|integration)/i },
-  { key: "pricing", label: "Pricing & Plans", match: /^(pricing|price|plan|tier|cost|subscription|billing|free)/i },
-  { key: "proof", label: "Proof & Traction", match: /^(metric|proof|customer|client|traction|retention|uptime|growth|revenue|guarantee|award|certification|notable|casestudy|case_study)/i },
-  { key: "audience", label: "Audience & Use Cases", match: /^(audience|segment|usecase|use_case|persona|industry|vertical|market)/i },
-];
-function categorizeFact(field: string): { key: string; label: string } {
-  const hit = FACT_CATEGORIES.find((c) => c.match.test(field));
-  return hit ? { key: hit.key, label: hit.label } : { key: "other", label: "Other Findings" };
-}
-// Turn a dot-path field into a readable label: "pricing.starterPlan.price" → "Starter Plan Price".
-function humanizeField(field: string): string {
-  const tail = field.split(".").slice(-2).join(" ");
-  return tail
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (c) => c.toUpperCase())
-    .trim();
-}
-
-/** The verified-facts trust panel, presented AdsGo-style: concrete claims the AI extracted from
- * the site (prices, named customers, guarantees, metrics) grouped into labeled categories with the
- * key in muted text and the value bold, each linked to its source page. First-party pages only
- * (homepage/about/product/pricing/features) — case-study/blog ("other") pages are excluded so one
- * business's page can't surface another company's details as if they were this one's. Renders
- * nothing while loading or when no first-party facts were found. */
-function VerifiedFactsSection({ jobId, streaming }: { jobId: string; streaming?: boolean }) {
-  const [data, setData] = useState<CampaignGenerationFacts | null>(null);
-  const [expanded, setExpanded] = useState(false);
-
-  // Fetch once on mount, then — while the run is still in progress (`streaming`) — re-poll so newly
-  // extracted facts appear progressively instead of only at completion. The interval clears the
-  // moment `streaming` goes false (job done/failed), so a finished run fetches exactly once.
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => api.getCampaignGenerationFacts(jobId).then((d) => { if (!cancelled) setData(d); }).catch(() => {});
-    load();
-    if (!streaming) return () => { cancelled = true; };
-    const timer = window.setInterval(load, 4000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [jobId, streaming]);
-
-  if (!data || data.facts.length === 0) return null;
-
-  // First-party only: keep homepage/about/product/pricing/features; drop "other" (case studies,
-  // blog posts) whose facts are often ABOUT a different company mentioned on the page.
-  const firstParty = data.facts.filter((f) => f.sourcePageType == null || f.sourcePageType !== "other");
-  const usable = firstParty.length > 0 ? firstParty : data.facts;
-  // Highest-confidence first within each group; cap per group so no single category floods the view.
-  const sorted = [...usable].sort((a, b) => b.confidence - a.confidence);
-
-  const groups = new Map<string, { label: string; facts: typeof sorted }>();
-  for (const f of sorted) {
-    const { key, label } = categorizeFact(f.field);
-    if (!groups.has(key)) groups.set(key, { label, facts: [] });
-    groups.get(key)!.facts.push(f);
-  }
-  // Display in FACT_CATEGORIES order, "other" last.
-  const orderedKeys = [...FACT_CATEGORIES.map((c) => c.key), "other"].filter((k) => groups.has(k));
-  const PER_GROUP_PREVIEW = 4;
-
-  return (
-    <div className="research-findings">
-      {orderedKeys.map((key) => {
-        const group = groups.get(key)!;
-        const shown = expanded ? group.facts : group.facts.slice(0, PER_GROUP_PREVIEW);
-        return (
-          <div key={key} className="research-findings-group">
-            <p className="research-findings-group-title">{group.label}</p>
-            <dl className="research-findings-list">
-              {shown.map((f, i) => (
-                <div key={`${f.field}-${i}`} className="research-findings-row">
-                  <dt>{humanizeField(f.field)}</dt>
-                  <dd>
-                    {f.value}
-                    {f.sourceUrl && (
-                      <a href={f.sourceUrl} target="_blank" rel="noreferrer" className="research-findings-source" title={f.sourceUrl}>
-                        {f.sourcePageType && f.sourcePageType !== "other" ? f.sourcePageType : "source"}
-                      </a>
-                    )}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        );
-      })}
-      {usable.some((_, i) => i >= PER_GROUP_PREVIEW) && (
-        <button type="button" className="verified-facts-toggle" onClick={() => setExpanded((e) => !e)}>
-          {expanded ? "Show fewer" : `Show all ${usable.length} findings`}
-        </button>
-      )}
-    </div>
-  );
-}
-
 /** Real competitor ad creative (Meta Ad Library API + Google Ads Transparency Center) — the one
  * new field that doesn't fit the generic evidence-link display, since each entry is a
  * headline/body/preview object rather than a narrative string. */
@@ -858,13 +731,12 @@ export default function NewCampaign() {
   const pollRef = useRef<number | null>(null);
 
   // ── adsgo.ai-style setup controls ──
-  const [objectives, setObjectives] = useState<CampaignObjectiveOption[]>(FALLBACK_OBJECTIVES);
-  const [objective, setObjective] = useState<string>("OUTCOME_TRAFFIC");
-  const [networks, setNetworks] = useState<("meta" | "google")[]>(["meta", "google"]);
-  const [dailyBudgetCents, setDailyBudgetCents] = useState<number>(DEFAULT_BUDGET_CENTS);
-  const [simulation, setSimulation] = useState<BudgetSimulation | null>(null);
-  const [connections, setConnections] = useState<{ meta: boolean; google: boolean }>({ meta: false, google: false });
-  const simulateTimerRef = useRef<number | null>(null);
+  // The pre-search setup UI (objective chips / platforms / budget slider / ballpark projection) was
+  // removed — these still parameterize the generate call (handleStart) with sensible defaults; the
+  // Deep Research pipeline derives the real objective/budget from the crawled site regardless.
+  const [objective] = useState<string>("OUTCOME_TRAFFIC");
+  const [networks] = useState<("meta" | "google")[]>(["meta", "google"]);
+  const [dailyBudgetCents] = useState<number>(DEFAULT_BUDGET_CENTS);
 
   // ── publish / go-live / auto-optimize (post-generation) ──
   const [publishedCampaign, setPublishedCampaign] = useState<Campaign | null>(null);
@@ -904,34 +776,6 @@ export default function NewCampaign() {
       .catch(clearPointer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Load engine-driven objective list + current platform connection status once, for the setup UI.
-  useEffect(() => {
-    let cancelled = false;
-    api.getCampaignObjectives().then((r) => { if (!cancelled && r.objectives?.length) setObjectives(r.objectives); }).catch(() => {});
-    api.listIntegrations(wsId).then((list) => {
-      if (cancelled) return;
-      const isConnected = (p: string) => list.some((i) => i.platform === p && i.status === "connected");
-      setConnections({ meta: isConnected("meta"), google: isConnected("google") });
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [wsId]);
-
-  // Live budget/goal simulator — debounced so dragging the slider doesn't spam the API. Only
-  // meaningful before generation (the setup screen); skipped once a job exists.
-  useEffect(() => {
-    if (job) return;
-    if (simulateTimerRef.current) window.clearTimeout(simulateTimerRef.current);
-    simulateTimerRef.current = window.setTimeout(async () => {
-      try {
-        const sim = await api.simulateCampaign({ objective, dailyBudgetCents, platforms: networks });
-        setSimulation(sim);
-      } catch {
-        // simulator is best-effort — a failure just hides the preview
-      }
-    }, SIMULATE_DEBOUNCE_MS);
-    return () => { if (simulateTimerRef.current) window.clearTimeout(simulateTimerRef.current); };
-  }, [objective, dailyBudgetCents, networks, job]);
 
   // Verified facts are persisted in Phase 1 (crawl fact-extraction), long before the run finishes,
   // so reveal them as soon as we're PAST research — they stream in progressively via the status
@@ -997,10 +841,6 @@ export default function NewCampaign() {
       setError("No business selected yet — try again in a moment.");
       return;
     }
-    if (networks.length === 0) {
-      setError("Select at least one platform (Meta or Google).");
-      return;
-    }
     setError(null);
     setStarting(true);
     try {
@@ -1020,11 +860,23 @@ export default function NewCampaign() {
   // One-click publish: builds the real Meta/Google hierarchy (all PAUSED) via launchCampaign,
   // using the workspace's default ad-account connection — no builder round-trip. A 422 means a
   // needed platform isn't connected; surface it with a link to the connection settings.
-  async function handlePublish() {
+  async function handlePublish(values?: PromotionObjectiveValues) {
     if (!job?.campaignId) return;
     setPublishing(true);
     setError(null);
     try {
+      // Apply the Promotion Objective card's selections to the generated campaign before launch, so
+      // the user's real-time choices (budget / conversion event / target locations) take effect —
+      // best-effort: a patch failure shouldn't block publishing the campaign that was generated.
+      if (values) {
+        const patch: Parameters<typeof api.updateCampaign>[1] = {};
+        if (values.dailyBudgetCents > 0) patch.dailyBudgetCents = values.dailyBudgetCents;
+        if (values.conversionEvent) patch.conversionEvent = values.conversionEvent;
+        if (values.locations.length) patch.locations = values.locations;
+        if (Object.keys(patch).length) {
+          await api.updateCampaign(job.campaignId, patch).catch(() => {});
+        }
+      }
       const launched = await api.launchCampaign(job.campaignId, wsId);
       setPublishedCampaign(launched);
     } catch (err) {
@@ -1037,6 +889,32 @@ export default function NewCampaign() {
         setError(msg);
       }
     } finally {
+      setPublishing(false);
+    }
+  }
+
+  // "Generate Campaign" (the Promotion Objective card's CTA) — applies the card's real-time
+  // selections (budget / conversion event / target locations) to the generated campaign, then
+  // OPENS IT IN THE BUILDER so the user can review/fine-tune before publishing (they publish from
+  // the builder). This is the "open the campaign builder" behavior the button is expected to have,
+  // as opposed to handlePublish (which launches PAUSED directly).
+  async function handleGenerateToBuilder(values?: PromotionObjectiveValues) {
+    if (!job?.campaignId) return;
+    setPublishing(true);
+    setError(null);
+    try {
+      if (values) {
+        const patch: Parameters<typeof api.updateCampaign>[1] = {};
+        if (values.dailyBudgetCents > 0) patch.dailyBudgetCents = values.dailyBudgetCents;
+        if (values.conversionEvent) patch.conversionEvent = values.conversionEvent;
+        if (values.locations.length) patch.locations = values.locations;
+        if (Object.keys(patch).length) {
+          await api.updateCampaign(job.campaignId, patch).catch(() => {});
+        }
+      }
+      navigate(`/campaigns/${job.campaignId}/builder`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't open the campaign builder — try again.");
       setPublishing(false);
     }
   }
@@ -1163,70 +1041,6 @@ export default function NewCampaign() {
             </button>
           </div>
 
-          {/* adsgo.ai-style setup: objective + networks + budget slider with a live outcome preview */}
-          <div className="new-campaign-setup">
-            <div className="ncs-field">
-              <label className="ncs-label">Objective</label>
-              <div className="ncs-objective-row">
-                {objectives.map((o) => (
-                  <button
-                    key={o.value}
-                    type="button"
-                    className={`ncs-chip${objective === o.value ? " ncs-chip-active" : ""}`}
-                    onClick={() => setObjective(o.value)}
-                    title={o.description}
-                  >
-                    {o.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="ncs-field">
-              <label className="ncs-label">Platforms</label>
-              <div className="ncs-objective-row">
-                {NETWORK_OPTIONS.map((n) => {
-                  const on = networks.includes(n.value);
-                  const connected = connections[n.value];
-                  return (
-                    <button
-                      key={n.value}
-                      type="button"
-                      className={`ncs-chip${on ? " ncs-chip-active" : ""}`}
-                      onClick={() => setNetworks((prev) => prev.includes(n.value) ? prev.filter((x) => x !== n.value) : [...prev, n.value])}
-                    >
-                      {n.label}
-                      <span className={`ncs-conn-dot${connected ? " ncs-conn-ok" : ""}`} title={connected ? `${n.label} connected` : `${n.label} not connected — you can still generate, but you'll be asked to connect before publishing`} />
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="ncs-field">
-              <label className="ncs-label">Daily budget: <strong>{formatMoney(dailyBudgetCents)}</strong></label>
-              <input
-                type="range"
-                className="ncs-slider"
-                min={500}
-                max={50000}
-                step={500}
-                value={dailyBudgetCents}
-                onChange={(e) => setDailyBudgetCents(Number(e.target.value))}
-              />
-            </div>
-
-            {simulation && (
-              <div className="ncs-sim">
-                <span className="ncs-sim-title">Ballpark projection — from your objective, budget &amp; platforms</span>
-                <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estImpressionsPerDay)}</span><span className="ncs-sim-key">impressions/day</span></div>
-                <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estClicks)}</span><span className="ncs-sim-key">clicks/day</span></div>
-                <div className="ncs-sim-item"><span className="ncs-sim-val">{formatCompact(simulation.estConversions)}</span><span className="ncs-sim-key">conv./day</span></div>
-                <div className="ncs-sim-item"><span className="ncs-sim-val">{simulation.estRoas.toFixed(1)}×</span><span className="ncs-sim-key">est. ROAS</span></div>
-                <span className="ncs-sim-note">Industry-average estimate, not a forecast for your business yet — it moves with the objective, budget, and platform mix above. You'll get real numbers for {pageUrl ? "this site" : "your site"} after Deep Research runs.</span>
-              </div>
-            )}
-          </div>
 
           <div className="new-campaign-value-row">
             <div className="new-campaign-value-item">
@@ -1250,7 +1064,7 @@ export default function NewCampaign() {
       )}
 
       {job && (
-        <div className="new-campaign-hero">
+        <div className="new-campaign-hero new-campaign-hero--results">
           <div className="new-campaign-resubmit-bar">
             <div className="new-campaign-resubmit-row">
               <span className="new-campaign-resubmit-input">{pageUrl || "Your campaign"}</span>
@@ -1326,16 +1140,6 @@ export default function NewCampaign() {
             />
           )}
 
-          {/* Research Findings — the concrete facts extracted from the site, grouped into labeled
-              categories (Brand, Product, Pricing, Proof, Audience) with bold values. Scoped to
-              first-party pages inside the component, which resolves the earlier case-study-leak
-              concern that had this hidden. Shows once the run is done and the decision view is up. */}
-          {isDone && job.decisionContext && (
-            <CollapsibleSection title="Research Findings" icon={<SearchIcon />} defaultOpen>
-              <VerifiedFactsSection jobId={job.id} streaming={isActive} />
-            </CollapsibleSection>
-          )}
-
           {factsVisible && <CompetitorAdsSection jobId={job.id} />}
 
           {isDone && !publishedCampaign && (
@@ -1345,17 +1149,12 @@ export default function NewCampaign() {
             </div>
           )}
 
-          {/* One-click publish (pre-publish) */}
-          {isDone && job.campaignId && !publishedCampaign && (
-            <div className="crawler-result-actions">
-              <button className="btn btn-primary" onClick={handlePublish} disabled={publishing}>
-                {publishing ? "Publishing…" : `Publish to ${networks.map((n) => n === "meta" ? "Meta" : "Google").join(" & ")}`}
-              </button>
-              <button className="btn btn-secondary" onClick={() => navigate(`/campaigns/${job.campaignId}/builder`)}>
-                Customize in Builder
-              </button>
-              <button className="btn btn-secondary" onClick={handleReset}>Try a different page</button>
-            </div>
+          {/* Promotion Objective review card — directly below the "campaign is ready" banner (moved
+              here from /campaigns/generator). Presentation-only: the pipeline derives the real
+              objective from the crawled site. The single "Generate Campaign" CTA inside the card
+              publishes the generated campaign (launch PAUSED), replacing the old 3-button row. */}
+          {isDone && !publishedCampaign && (
+            <PromotionObjectiveCard onGenerate={handleGenerateToBuilder} generating={publishing} />
           )}
 
           {/* Published (PAUSED) — go live + auto-optimize */}

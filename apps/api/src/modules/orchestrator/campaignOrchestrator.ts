@@ -286,6 +286,12 @@ async function launchMetaHierarchy(
   // stale/free-text value reaching the Graph API.
   const metaObjective = campaign.objective && isValidObjective(campaign.objective) ? campaign.objective : DEFAULT_META_OBJECTIVE;
 
+  // Budget placement (default ABO). Under CBO the whole campaign daily budget lives on the campaign
+  // container and Meta distributes it across the per-audience ad sets; ad sets then omit their own
+  // budgets. Only meaningful with multiple ad sets, which the per-audience grouping below produces.
+  const budgetMode: "ABO" | "CBO" = campaign.budgetMode === "CBO" ? "CBO" : "ABO";
+  const containerBudget = budgetMode === "CBO" ? { budgetMode, dailyBudgetCents: campaign.dailyBudgetCents } : { budgetMode };
+
   // ── Idempotency: never create a second campaign container for a campaign that already has one.
   // launchCampaign is synchronous and blocks 30s–2min, so a retry or double-clicked "Launch" would
   // otherwise build a DUPLICATE Meta campaign/ad-set/ad graph and spend twice. If we already minted
@@ -297,10 +303,10 @@ async function launchMetaHierarchy(
     try {
       let container;
       try {
-        container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: metaObjective }, credentials);
+        container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: metaObjective, ...containerBudget }, credentials);
       } catch (err) {
         if (!isMetaAuthError(err) || !(await refreshMetaCredentialsOnAuthError())) throw err;
-        container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: metaObjective }, credentials);
+        container = await metaAdapter.createCampaignContainer!({ name: campaign.name, objective: metaObjective, ...containerBudget }, credentials);
       }
       campaignExternalId = container.externalId;
       campaign.externalIds = { ...campaign.externalIds, meta: campaignExternalId };
@@ -331,6 +337,7 @@ async function launchMetaHierarchy(
           campaignExternalId,
           name: `${campaign.name} — ${audienceName}`,
           dailyBudgetCents: perVariantBudgetCents * groupVariants.length,
+          budgetMode,
           objective: metaObjective,
           targeting,
           promotedObject: campaign.pixelId && campaign.conversionEvent ? { pixelId: campaign.pixelId, customEventType: campaign.conversionEvent } : undefined,
@@ -685,6 +692,7 @@ export interface CampaignBuilderPatch {
   endDate?: string;
   locations?: string[];
   advantagePlus?: boolean;
+  budgetMode?: "ABO" | "CBO";
   metaAdAccountId?: string;
   pageId?: string;
   instagramAccountId?: string;
@@ -706,6 +714,7 @@ export async function updateCampaign(campaignId: string, patch: CampaignBuilderP
   if (patch.endDate !== undefined) campaign.endDate = patch.endDate;
   if (patch.locations !== undefined) campaign.locations = patch.locations;
   if (patch.advantagePlus !== undefined) campaign.advantagePlus = patch.advantagePlus;
+  if (patch.budgetMode !== undefined) campaign.budgetMode = patch.budgetMode;
   if (patch.metaAdAccountId !== undefined) campaign.metaAdAccountId = patch.metaAdAccountId;
   if (patch.pageId !== undefined) campaign.pageId = patch.pageId;
   if (patch.instagramAccountId !== undefined) campaign.instagramAccountId = patch.instagramAccountId;

@@ -8800,9 +8800,11 @@ td {
 }
 
 /* Results state: no large top padding, so the sticky resubmit-bar header sits at the very top and
-   the results scroll under it. */
+   the results scroll under it; and a small bottom padding instead of the pre-search hero's 96px,
+   which otherwise left a big empty gap below the last card (the Promotion Objective card). */
 .new-campaign-hero--results {
   padding-top: 0;
+  padding-bottom: 24px;
 }
 
 .new-campaign-avatars {
@@ -13015,10 +13017,14 @@ td {
 }
 
 .ad-preview-post {
+  /* Cap to a realistic Meta feed-post width and center it — without this the post filled the whole
+     card, blowing a 1:1 creative up to ~900px. Meta's own ad-preview panels render the feed card
+     ~360px wide, so a 1:1 creative shows ~340px, not half the screen. */
+  max-width: 360px;
+  margin: 10px auto 0;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   padding: 12px;
-  margin-top: 10px;
   background: #ffffff;
   font-family: Helvetica, Arial, sans-serif;
 }
@@ -13104,8 +13110,12 @@ td {
 .ad-preview-media img,
 .ad-preview-media video {
   width: 100%;
-  max-height: 320px;
-  object-fit: cover;
+  /* Show the WHOLE creative at its natural aspect ratio (height follows width) — the old
+     `object-fit: cover` + `max-height: 320px` cropped the headline and CTA off a square/portrait
+     creative forced into a short wide box. No height clamp: a 1:1 creative renders square and a
+     portrait renders tall, exactly like a real Meta feed ad, with nothing cut off. */
+  height: auto;
+  object-fit: contain;
   display: block;
 }
 

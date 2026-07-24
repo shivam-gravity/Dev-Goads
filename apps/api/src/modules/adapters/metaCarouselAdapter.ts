@@ -1,4 +1,5 @@
 import type { MetaCredentials } from "./AdAdapter.js";
+import { toMetaCtaType } from "./metaAdapter.js";
 import { logger } from "../logger/logger.js";
 
 const GRAPH_VERSION = "v22.0";
@@ -239,7 +240,7 @@ export async function createCarouselAd(
     if (card.imageHash) attachment.image_hash = card.imageHash;
     if (card.videoId) attachment.video_id = card.videoId;
     if (card.callToAction) {
-      attachment.call_to_action = { type: card.callToAction, value: { link: card.linkUrl } };
+      attachment.call_to_action = { type: toMetaCtaType(card.callToAction), value: { link: card.linkUrl } };
     }
 
     return attachment;

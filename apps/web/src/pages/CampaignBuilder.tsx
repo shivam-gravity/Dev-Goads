@@ -93,6 +93,7 @@ export default function CampaignBuilder() {
   const [locations, setLocations] = useState<string[]>(["United States"]);
   const [locationInput, setLocationInput] = useState("");
   const [advantagePlus, setAdvantagePlus] = useState(true);
+  const [budgetMode, setBudgetMode] = useState<"ABO" | "CBO">("ABO");
   const [reach, setReach] = useState<ReachEstimate | null>(null);
 
   // Ads (variants) within this campaign
@@ -161,6 +162,7 @@ export default function CampaignBuilder() {
       setFinalUrl(c.finalUrl ?? c.variants[0]?.landingPageUrl ?? "");
       setLocations(c.locations?.length ? c.locations : ["United States"]);
       setAdvantagePlus(c.advantagePlus ?? true);
+      setBudgetMode(c.budgetMode ?? "ABO");
       const startingVariants = c.variants.length ? c.variants : [emptyVariant(0)];
       setVariants(startingVariants);
       setIncludedVariantIds(new Set(startingVariants.map((v) => v.id)));
@@ -434,6 +436,7 @@ export default function CampaignBuilder() {
     const selected = forPublish ? included.filter((v) => networkReady(v.network)) : included;
     return {
       dailyBudgetCents: Math.max(1, Math.round((parseFloat(dailyBudget) || 0) * 100)),
+      budgetMode,
       conversionEvent,
       finalUrl: finalUrl.trim() || undefined,
       startDate: startDate || undefined,
@@ -722,6 +725,10 @@ export default function CampaignBuilder() {
                   <label className="ai-generate-checkbox-field">
                     <input type="checkbox" checked={advantagePlus} onChange={(e) => setAdvantagePlus(e.target.checked)} />
                     <span>Advantage+ (auto-optimize)</span>
+                  </label>
+                  <label className="ai-generate-checkbox-field" title="Campaign Budget Optimization: one budget on the campaign, distributed across audiences by Meta (instead of a fixed budget per audience).">
+                    <input type="checkbox" checked={budgetMode === "CBO"} onChange={(e) => setBudgetMode(e.target.checked ? "CBO" : "ABO")} />
+                    <span>Campaign Budget Optimization (Advantage Campaign Budget)</span>
                   </label>
                   <div className="reach-estimation-inline mt-2">
                     <div className="reach-estimation-inline-header">
