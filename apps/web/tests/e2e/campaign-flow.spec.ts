@@ -134,9 +134,10 @@ test.describe("URL-to-Campaign core flow", () => {
     // The generator screen is up.
     await expect(page.getByRole("heading", { name: "Campaign Generator" })).toBeVisible();
 
-    // Meta + Google are the default active channels — confirm the control reflects that before we go.
-    await expect(page.getByTestId("channel-select")).toContainText("Meta");
-    await expect(page.getByTestId("channel-select")).toContainText("Google");
+    // Meta + Google are the default active channels for this page. The visible channel picker
+    // now lives in the Deep Research flow (PromotionObjectiveCard on /campaigns/new); on the
+    // generator the channels are internal defaults with no control, so we assert the default
+    // directly on the outgoing /campaigns/generate payload (see that route handler above).
 
     // Add a product: paste the URL and parse it into a product card.
     await page.getByTestId("product-url-input").fill(PRODUCT_URL);
