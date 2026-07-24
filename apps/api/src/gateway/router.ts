@@ -42,7 +42,7 @@ import { getAnalyticsSummary, getAudienceSuggestions } from "../modules/analytic
 import { getAdInsights } from "../modules/adInsights/adInsightsService.js";
 import { chatWithStrategist } from "../modules/strategist/strategistService.js";
 import { chatWithCopilot } from "../modules/copilot/copilotService.js";
-import { launchCampaign, pauseVariant, activateVariant, reallocateBudget, applyCreativeMedia } from "../modules/orchestrator/campaignOrchestrator.js";
+import { launchCampaign, pauseVariant, activateVariant, reallocateBudget, applyCreativeMedia, deleteCampaign, CampaignLaunchedDeleteError } from "../modules/orchestrator/campaignOrchestrator.js";
 import { ingestCampaignMetrics } from "../modules/pipeline/performancePipeline.js";
 import { runOptimizationPass } from "../modules/optimization/optimizationEngine.js";
 import { metaAdapter } from "../modules/adapters/metaAdapter.js";
@@ -997,6 +997,17 @@ router.patch("/campaigns/:id", asyncHandler(async (req, res) => {
   if (!existing) return res.status(404).json({ error: "Campaign not found" });
   const updated = await prisma.campaign.update({ where: { id: req.params.id }, data: { data: { ...(existing.data as object), ...req.body } } });
   res.json({ id: updated.id, ...updated.data as object });
+}));
+router.delete("/campaigns/:id", requireCampaignAccess, asyncHandler(async (req, res) => {
+  try {
+    const deleted = await deleteCampaign(req.params.id);
+    if (!deleted) return res.status(404).json({ error: "Campaign not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    // A launched campaign can't be deleted (its live/paused Meta/Google objects would be orphaned).
+    if (err instanceof CampaignLaunchedDeleteError) return res.status(409).json({ error: err.message, code: "CAMPAIGN_LAUNCHED" });
+    throw err;
+  }
 }));
 // The mutating campaign routes below (launch/activate/pause/budget) can spend real money, so each
 // takes TWO ownership checks: requireCampaignAccess (can this user touch this campaign?) as route

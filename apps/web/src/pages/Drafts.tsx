@@ -385,19 +385,21 @@ export default function Drafts({ businessId }: { businessId: string }) {
   }
 
   async function handleDelete(draft: Draft) {
-    // Campaign-origin drafts live in the Campaign table (no delete endpoint) — offer "open" instead
-    // of a delete that would 404. Only Draft-table rows are deletable here.
-    if (draft.origin === "campaign") {
-      const campaignId = (draft.data as Record<string, unknown>)?.campaignId as string | undefined;
-      if (campaignId) navigate(`/campaigns/${campaignId}`);
-      return;
-    }
     if (!confirm("Are you sure you want to delete this draft?")) return;
+    setError(null);
     try {
-      await api.deleteDraft(draft.id);
+      if (draft.origin === "campaign") {
+        // A draft-status Campaign lives in the Campaign table — delete it there. The backend
+        // refuses (409) if it was ever launched, so live/paused Meta/Google objects aren't orphaned.
+        const campaignId = (draft.data as Record<string, unknown>)?.campaignId as string | undefined;
+        if (!campaignId) { setError("This campaign draft has no linked campaign id."); return; }
+        await api.deleteCampaign(campaignId);
+      } else {
+        await api.deleteDraft(draft.id);
+      }
       setDrafts(prev => prev.filter(d => d.id !== draft.id));
     } catch (err) {
-      setError("Failed to delete draft.");
+      setError(err instanceof Error ? err.message : "Failed to delete draft.");
     }
   }
 
@@ -530,9 +532,7 @@ export default function Drafts({ businessId }: { businessId: string }) {
                           <td className="dap-row-actions" onClick={(e) => e.stopPropagation()}>
                             <button type="button" className="dap-row-btn" onClick={() => handleEdit(d)}>Edit</button>
                             <button type="button" className="dap-row-btn" onClick={() => handlePublish(d)}>Publish</button>
-                            <button type="button" className="dap-row-btn dap-row-btn-danger" onClick={() => handleDelete(d)}>
-                              {d.origin === "campaign" ? "Open" : "Delete"}
-                            </button>
+                            <button type="button" className="dap-row-btn dap-row-btn-danger" onClick={() => handleDelete(d)}>Delete</button>
                           </td>
                         </tr>
                         {isExpanded && (

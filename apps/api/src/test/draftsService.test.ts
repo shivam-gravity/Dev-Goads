@@ -3,6 +3,7 @@ import { test, after } from "node:test";
 import assert from "node:assert";
 import { prisma } from "../db/prisma.js";
 import { createDraft, listDrafts } from "../modules/drafts/draftsService.js";
+import { deleteCampaign, CampaignLaunchedDeleteError } from "../modules/orchestrator/campaignOrchestrator.js";
 import { disconnectTestInfra } from "./testUtils/disconnectInfra.js";
 
 // createDraft may call the LLM for an AI recommendation when one isn't supplied — pass an explicit
@@ -56,4 +57,37 @@ test("listDrafts returns an empty array for a workspace with no drafts or draft 
   const workspaceId = `ws-empty-${Date.now()}`;
   const drafts = await listDrafts(workspaceId);
   assert.deepStrictEqual(drafts, []);
+});
+
+test("deleteCampaign removes a draft campaign (and it disappears from /drafts)", async () => {
+  const workspaceId = `ws-del-${Date.now()}`;
+  const businessId = `biz-del-${Date.now()}`;
+  const campaignId = `camp-del-${Date.now()}`;
+  await prisma.business.create({ data: { id: businessId, workspaceId, data: {} } });
+  await prisma.campaign.create({ data: { id: campaignId, businessId, workspaceId, data: { name: "Deletable Draft", status: "draft", variants: [] } } });
+
+  assert.ok((await listDrafts(workspaceId)).some((d) => d.id === `campaign:${campaignId}`), "seeded draft campaign should be listed first");
+
+  const deleted = await deleteCampaign(campaignId);
+  assert.strictEqual(deleted, true);
+  assert.strictEqual(await prisma.campaign.findUnique({ where: { id: campaignId } }), null, "campaign row must be gone");
+  assert.ok(!(await listDrafts(workspaceId)).some((d) => d.id === `campaign:${campaignId}`), "deleted campaign must no longer appear on /drafts");
+
+  await prisma.business.deleteMany({ where: { id: businessId } });
+});
+
+test("deleteCampaign refuses a launched campaign so live/paused ad objects aren't orphaned", async () => {
+  const businessId = `biz-launched-${Date.now()}`;
+  const campaignId = `camp-launched-${Date.now()}`;
+  // A launched campaign: non-draft status + a Meta externalId.
+  await prisma.campaign.create({ data: { id: campaignId, businessId, workspaceId: `ws-launched-${Date.now()}`, data: { name: "Launched", status: "paused", externalIds: { meta: "120000000000000000" }, variants: [] } } });
+
+  await assert.rejects(() => deleteCampaign(campaignId), (err) => err instanceof CampaignLaunchedDeleteError, "must reject a launched campaign");
+  assert.notStrictEqual(await prisma.campaign.findUnique({ where: { id: campaignId } }), null, "the campaign row must survive the refused delete");
+
+  await prisma.campaign.deleteMany({ where: { id: campaignId } });
+});
+
+test("deleteCampaign returns false for a campaign that doesn't exist", async () => {
+  assert.strictEqual(await deleteCampaign(`nope-${Date.now()}`), false);
 });
