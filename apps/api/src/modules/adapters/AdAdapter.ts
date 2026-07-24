@@ -90,6 +90,10 @@ export interface AdSetContainerInput {
 export interface CreativeUploadInput {
   imageUrl?: string;
   videoUrl?: string;
+  /** Meta only — base64 PNG/JPEG bytes to upload directly (POST /adimages `bytes`) instead of a
+   *  URL. Used when the creative is a locally-stored / SVG image Meta can't fetch by URL: the
+   *  launch path rasterizes the SVG and passes the PNG bytes here. Takes precedence over imageUrl. */
+  imageBytesBase64?: string;
 }
 
 export interface CreativeUploadResult {

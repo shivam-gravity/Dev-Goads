@@ -6,6 +6,7 @@ import { asyncHandler } from "./asyncHandler.js";
 import { internalServiceAuth } from "./internalAuth.js";
 import { sendError } from "./errorResponse.js";
 import { closeBrowser } from "./scraping/browser.js";
+import { renderSvgToPng } from "./scraping/svgRender.js";
 import { scrapeProductUrl } from "./pipeline/scrapeWorker.js";
 import { productFromJsonLd } from "./pipeline/researchProductShape.js";
 import { initErrorTracking, registerCrashReporting, captureError } from "../../api/src/infra/errorTracking.js";
@@ -53,6 +54,24 @@ app.post("/research/scrape", asyncHandler(async (req, res) => {
     });
   } catch (err) {
     sendError(res, err, 422, "Failed to scrape URL");
+  }
+}));
+
+// Rasterize an SVG ad creative to PNG (Meta /adimages rejects SVG and can't fetch a local URL).
+// Returns { pngBase64 }. Uses the shared Chromium — no new native image dependency.
+const renderSvgSchema = z.object({
+  svg: z.string().min(1).max(2_000_000),
+  width: z.number().int().positive().max(4096).optional(),
+  height: z.number().int().positive().max(4096).optional(),
+});
+app.post("/render/svg", asyncHandler(async (req, res) => {
+  const parsed = renderSvgSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const png = await renderSvgToPng(parsed.data.svg, parsed.data.width, parsed.data.height);
+    res.json({ pngBase64: png.toString("base64") });
+  } catch (err) {
+    sendError(res, err, 422, "Failed to render SVG");
   }
 }));
 

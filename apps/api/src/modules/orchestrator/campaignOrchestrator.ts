@@ -8,6 +8,8 @@ import { resolveAudienceTargetingForWorkspace, withAgentInterests } from "../ada
 import { isValidObjective } from "../adapters/metaObjectives.js";
 import { resolveGoogleTargetingForWorkspace, buildGoogleCampaignTargetingFromLocations, withAgentKeywords } from "../adapters/googleTargetingMapper.js";
 import { getMetaCredentials, markMetaConnectionError } from "../integrations/integrationService.js";
+import { objectStorage } from "../../infra/objectStorage.js";
+import { rasterizeSvgToPng } from "../../infra/svgRasterizer.js";
 import { refreshMetaToken } from "../integrations/metaTokenRefresh.js";
 import { MetaGraphError } from "../adapters/metaAdapter.js";
 import { getGoogleAdsCredentials, type GoogleAdsCredentials } from "../integrations/googleOAuth.js";
@@ -38,6 +40,40 @@ const LANDING_PAGE_SLUGS = ["", "offer", "checkout", "pricing"];
 // focused, editable set. 4 = enough distinct angles to A/B without noise. Env-tunable.
 const MAX_CREATIVES_PER_CAMPAIGN = Math.max(1, Number(process.env.MAX_CREATIVES_PER_CAMPAIGN ?? 4));
 const DEFAULT_META_OBJECTIVE = "OUTCOME_TRAFFIC";
+
+/**
+ * Build the image upload input for a Meta ad creative. Meta's /adimages can't fetch a locally-
+ * stored/relative URL and rejects SVG, so a creative stored as a local `.svg` under /objects is
+ * read from object storage, rasterized to PNG (via scraper-service), and passed as raw bytes.
+ * A remote raster URL (http/https, non-svg) is passed through as a url for Meta to fetch.
+ * Falls back to the original imageUrl if rasterization fails, so the ad still attempts to publish.
+ */
+async function resolveMetaImageUpload(imageUrl: string | undefined, videoUrl: string | undefined): Promise<{ imageUrl?: string; videoUrl?: string; imageBytesBase64?: string }> {
+  if (videoUrl) return { videoUrl };
+  if (!imageUrl) return {};
+  const isSvg = imageUrl.toLowerCase().endsWith(".svg");
+  const isLocalObject = imageUrl.startsWith("/objects/");
+  if (isSvg || isLocalObject) {
+    try {
+      // Local object key is the path after "/objects/". Read the stored file (SVG markup or raster).
+      const key = imageUrl.replace(/^\/objects\//, "");
+      const buf = await objectStorage.get(key);
+      if (buf) {
+        if (isSvg) {
+          const png = await rasterizeSvgToPng(buf.toString("utf8"));
+          if (png) return { imageBytesBase64: png.toString("base64") };
+        } else {
+          // Already-raster local file — upload its bytes directly (Meta still can't fetch a local URL).
+          return { imageBytesBase64: buf.toString("base64") };
+        }
+      }
+    } catch (err) {
+      logger.warn(`resolveMetaImageUpload: could not rasterize/read ${imageUrl} — falling back to URL`, err);
+    }
+  }
+  // Remote, fetchable raster URL — let Meta pull it.
+  return { imageUrl };
+}
 
 const adapters: Record<AdNetwork, AdAdapter & Partial<HierarchyCapableAdapter>> = {
   meta: metaAdapter,
@@ -356,10 +392,10 @@ async function launchMetaHierarchy(
           continue;
         }
         try {
-          const upload = await metaAdapter.uploadCreativeAsset!(
-            { imageUrl: variant.creative.imageUrl, videoUrl: variant.creative.videoUrl },
-            credentials
-          );
+          // SVG/local creatives must be rasterized to PNG bytes — Meta can't fetch a localhost/
+          // relative URL and rejects SVG (the "#100 url should represent a valid URL" launch failure).
+          const uploadInput = await resolveMetaImageUpload(variant.creative.imageUrl, variant.creative.videoUrl);
+          const upload = await metaAdapter.uploadCreativeAsset!(uploadInput, credentials);
           const result = await metaAdapter.createHierarchyAd!(
             {
               adSetExternalId: adSet.externalId,

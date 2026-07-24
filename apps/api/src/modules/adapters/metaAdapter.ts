@@ -522,10 +522,12 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
       return { videoId: json.id };
     }
 
-    if (input.imageUrl) {
-      const json = await graphPost(`/act_${credentials.adAccountId}/adimages`, credentials.accessToken, {
-        url: input.imageUrl,
-      });
+    // Prefer raw bytes when provided (an SVG/local creative the launch path rasterized to PNG):
+    // Meta can't fetch a localhost/relative URL and rejects SVG, so we POST the PNG bytes to
+    // /adimages via the `bytes` field instead of a `url`.
+    if (input.imageBytesBase64 || input.imageUrl) {
+      const body = input.imageBytesBase64 ? { bytes: input.imageBytesBase64 } : { url: input.imageUrl };
+      const json = await graphPost(`/act_${credentials.adAccountId}/adimages`, credentials.accessToken, body);
       const firstImage = json?.images ? Object.values(json.images)[0] as { hash?: string } | undefined : undefined;
       if (!firstImage?.hash) throw new Error(`Meta image upload failed: ${JSON.stringify(json)}`);
       return { imageHash: firstImage.hash };
@@ -540,6 +542,9 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
   async createHierarchyAd(input: HierarchyAdInput, explicit?: MetaCredentials): Promise<LaunchVariantResult> {
     const credentials = resolveCredentials(explicit);
     if (!credentials) return { externalId: mockId("meta_ad"), status: "paused" };
+    // Non-null local so the nested createCreative closure keeps the narrowing (TS widens `credentials`
+    // back to nullable inside a closure).
+    const creds = credentials;
 
     const ctaType = toMetaCtaType(input.creative.callToAction);
     const linkData: Record<string, unknown> = {
@@ -550,23 +555,41 @@ export const metaAdapter: AdAdapter & HierarchyCapableAdapter = {
     };
     if (input.imageHash) linkData.image_hash = input.imageHash;
 
-    const objectStorySpec: Record<string, unknown> = { page_id: credentials.pageId };
-    if (input.instagramActorId) objectStorySpec.instagram_actor_id = input.instagramActorId;
+    const baseStorySpec: Record<string, unknown> = { page_id: credentials.pageId };
     if (input.videoId) {
-      objectStorySpec.video_data = {
+      baseStorySpec.video_data = {
         video_id: input.videoId,
         message: input.creative.body,
         call_to_action: { type: ctaType, value: { link: input.landingPageUrl } },
       };
     } else {
-      objectStorySpec.link_data = linkData;
+      baseStorySpec.link_data = linkData;
     }
 
-    const creativeJson = await graphPost(`/act_${credentials.adAccountId}/adcreatives`, credentials.accessToken, {
-      name: clampName(`${input.name}-creative`),
-      object_story_spec: objectStorySpec,
-    });
-    if (!creativeJson?.id) throw new Error(`Meta ad creative creation failed: ${JSON.stringify(creativeJson)}`);
+    // Attach the Instagram actor when provided, but don't let a STALE/invalid IG id hard-fail the
+    // whole ad ("(#100) Param instagram_actor_id must be a valid Instagram account id"): if the
+    // creative call fails specifically on instagram_actor_id, retry Page-only (the ad still ships to
+    // the Facebook Page placement, just not the IG account). A valid IG id publishes to both.
+    async function createCreative(withIg: boolean): Promise<any> {
+      const spec = withIg && input.instagramActorId ? { ...baseStorySpec, instagram_actor_id: input.instagramActorId } : baseStorySpec;
+      return graphPost(`/act_${creds.adAccountId}/adcreatives`, creds.accessToken, {
+        name: clampName(`${input.name}-creative`),
+        object_story_spec: spec,
+      });
+    }
+    let creativeJson;
+    try {
+      creativeJson = await createCreative(true);
+      if (!creativeJson?.id) throw new Error(`Meta ad creative creation failed: ${JSON.stringify(creativeJson)}`);
+    } catch (err) {
+      if (input.instagramActorId && /instagram_actor_id/i.test(err instanceof Error ? err.message : String(err))) {
+        logger.warn(`createHierarchyAd: instagram_actor_id ${input.instagramActorId} rejected by Meta — retrying Page-only`);
+        creativeJson = await createCreative(false);
+        if (!creativeJson?.id) throw new Error(`Meta ad creative creation failed: ${JSON.stringify(creativeJson)}`);
+      } else {
+        throw err;
+      }
+    }
 
     const adJson = await graphPost(`/act_${credentials.adAccountId}/ads`, credentials.accessToken, {
       name: clampName(input.name),
